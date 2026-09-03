@@ -230,17 +230,25 @@ impl GameData {
         Some(parts.into_iter().flatten().collect::<Vec<_>>().join(" "))
     }
 
+    /// The `.tex` image of a bitmap, from the topmost archive that has
+    /// it — the same bytes [`Self::footprint`] measures, for a shell
+    /// that decodes the icon itself. `None` when no archive has the
+    /// entry.
+    #[must_use]
+    pub fn bitmap(&self, bitmap: &BitmapPath) -> Option<Result<Vec<u8>, GameDataError>> {
+        let entry = bitmap.archive_entry();
+        self.item_archives
+            .iter()
+            .rev()
+            .find_map(|archive| archive.file(entry))
+            .map(|bytes| bytes.map_err(GameDataError::from))
+    }
+
     /// Footprint of a bitmap from its pixel size, from the topmost
     /// archive that has it. `None` when no archive has the entry.
     #[must_use]
     pub fn footprint(&self, bitmap: &BitmapPath) -> Option<Result<Footprint, GameDataError>> {
-        let entry = bitmap.archive_entry();
-        let bytes = self
-            .item_archives
-            .iter()
-            .rev()
-            .find_map(|archive| archive.file(entry))?;
-        Some(bytes.map_err(GameDataError::from).and_then(|bytes| {
+        Some(self.bitmap(bitmap)?.and_then(|bytes| {
             let (width_px, height_px) = tex::dimensions(&bytes)?;
             let (width, height) = tex::cells(width_px, height_px);
             Ok(Footprint { width, height })

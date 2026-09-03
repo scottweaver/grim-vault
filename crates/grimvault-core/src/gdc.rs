@@ -6,18 +6,39 @@
 //! Layout: raw seed; `"GDCX"`; header version 2; character name (wide),
 //! sex, class tag, level, hardcore flag, expansion status byte; a static
 //! zero marker; data version; 16-byte uid; then an ordered sequence of
-//! framed blocks to end of file. Blocks 1 (character info, v5), 3
-//! (inventory) and 4 (per-character stash) are typed; everything else —
-//! and any of those at a version this crate does not lay out — is
-//! carried as an [`OpaqueBlock`] (see `block` for what that promises).
+//! framed blocks to end of file. Every block the game writes is typed —
+//! 1 (character info, v5), 3 (inventory) and 4 (per-character stash)
+//! here, the rest in [`crate::blocks`] — so the whole file re-encodes
+//! from the model and an edit anywhere can be written. A block id this
+//! crate does not model, or a modeled id at a version it does not lay
+//! out, is carried as an [`OpaqueBlock`]; see `block` for what that
+//! promises and what it forbids (no edit before it can be written).
 //!
 //! [`PlayerFile::encode`] reproduces the loaded bytes exactly when the
 //! model is unmodified; `tests/` gates that against the vendored fixture.
+
+use std::borrow::{Borrow, BorrowMut};
 
 use thiserror::Error;
 
 use crate::block::{
     Dispatch, OpaqueBlock, OpaqueReason, SaveEncodeError, StashTab, length_word, read_block,
+};
+use crate::blocks::bio::Bio;
+use crate::blocks::factions::Factions;
+use crate::blocks::markers::Markers;
+use crate::blocks::notes::LoreNotes;
+use crate::blocks::respawns::Respawns;
+use crate::blocks::shrines::Shrines;
+use crate::blocks::skills::{Skills, SkillsVersion};
+use crate::blocks::stats::{Stats, StatsVersion};
+use crate::blocks::teleports::Teleports;
+use crate::blocks::tokens::Tokens;
+use crate::blocks::tutorials::Tutorials;
+use crate::blocks::ui::{Ui, UiVersion};
+use crate::blocks::{
+    bio, factions, markers, notes, read_array, respawns, shrines, skills, stats, teleports, tokens,
+    tutorials, ui,
 };
 use crate::crypto::{BlockId, DecodeError, Decoder, Encoder};
 use crate::item::{ContainerVersion, Item, ItemEncodeError, SackItem};
@@ -323,15 +344,6 @@ fn write_slots(
     slots.iter().try_for_each(|slot| slot.write(enc, version))
 }
 
-fn read_array<T, const N: usize>(
-    mut read: impl FnMut() -> Result<T, DecodeError>,
-) -> Result<[T; N], DecodeError> {
-    let items = (0..N).map(|_| read()).collect::<Result<Vec<_>, _>>()?;
-    Ok(items
-        .try_into()
-        .unwrap_or_else(|_| unreachable!("collected exactly N elements")))
-}
-
 /// What block 3 holds beyond its version and flag.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InventoryState {
@@ -388,6 +400,15 @@ impl Inventory {
         }
     }
 
+    /// The sacks, mutably; empty for a character that never entered
+    /// the game.
+    pub fn sacks_mut(&mut self) -> &mut [Sack] {
+        match &mut self.state {
+            InventoryState::NeverEntered => &mut [],
+            InventoryState::Entered(contents) => &mut contents.sacks,
+        }
+    }
+
     /// Every occupied equipment slot.
     pub fn equipped(&self) -> impl Iterator<Item = &EquippedItem> {
         match &self.state {
@@ -428,15 +449,41 @@ impl PlayerStash {
     }
 }
 
-/// One top-level block of the file, in file order.
+/// One top-level block of the file, in file order. The game writes them
+/// as `1 2 3 4 5 6 7 17 8 12 13 14 15 16 10`; the model keeps whatever
+/// order and set it finds.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Block {
     /// Block 1 at version 5.
     CharacterInfo(CharacterInfo),
+    /// Block 2 at version 8.
+    Bio(Bio),
     /// Block 3 at a supported version.
     Inventory(Inventory),
     /// Block 4 at a supported version.
     Stash(PlayerStash),
+    /// Block 5 at version 1.
+    Respawns(Respawns),
+    /// Block 6 at version 1.
+    Teleports(Teleports),
+    /// Block 7 at version 1.
+    Markers(Markers),
+    /// Block 17 at version 2.
+    Shrines(Shrines),
+    /// Block 8 at a supported version.
+    Skills(Skills),
+    /// Block 12 at version 1.
+    LoreNotes(LoreNotes),
+    /// Block 13 at version 5.
+    Factions(Factions),
+    /// Block 14 at a supported version.
+    Ui(Box<Ui>),
+    /// Block 15 at version 1.
+    Tutorials(Tutorials),
+    /// Block 16 at a supported version.
+    Stats(Box<Stats>),
+    /// Block 10 at version 2.
+    Tokens(Tokens),
     /// Anything else, preserved verbatim.
     Opaque(OpaqueBlock),
 }
@@ -447,10 +494,28 @@ impl Block {
     pub fn id(&self) -> BlockId {
         match self {
             Self::CharacterInfo(_) => BlockId::CHARACTER_INFO,
+            Self::Bio(_) => bio::BLOCK_ID,
             Self::Inventory(_) => BlockId::INVENTORY,
             Self::Stash(_) => BlockId::PLAYER_STASH,
+            Self::Respawns(_) => respawns::BLOCK_ID,
+            Self::Teleports(_) => teleports::BLOCK_ID,
+            Self::Markers(_) => markers::BLOCK_ID,
+            Self::Shrines(_) => shrines::BLOCK_ID,
+            Self::Skills(_) => skills::BLOCK_ID,
+            Self::LoreNotes(_) => notes::BLOCK_ID,
+            Self::Factions(_) => factions::BLOCK_ID,
+            Self::Ui(_) => ui::BLOCK_ID,
+            Self::Tutorials(_) => tutorials::BLOCK_ID,
+            Self::Stats(_) => stats::BLOCK_ID,
+            Self::Tokens(_) => tokens::BLOCK_ID,
             Self::Opaque(block) => block.id(),
         }
+    }
+
+    /// Whether the block is carried opaquely.
+    #[must_use]
+    pub fn is_opaque(&self) -> bool {
+        matches!(self, Self::Opaque(_))
     }
 
     fn read(dec: &mut Decoder<'_>) -> Result<Self, GdcError> {
@@ -460,23 +525,78 @@ impl Block {
                 let unsupported = OpaqueReason::UnsupportedVersion {
                     version: header.version,
                 };
+                let version = header.version;
                 Ok::<_, GdcError>(match header.id {
-                    BlockId::CHARACTER_INFO if header.version == CHARACTER_INFO_VERSION => {
+                    BlockId::CHARACTER_INFO if version == CHARACTER_INFO_VERSION => {
                         Dispatch::Typed(Self::CharacterInfo(CharacterInfo::read_body(dec)?))
                     }
-                    BlockId::INVENTORY => match ContainerVersion::new(header.version) {
+                    bio::BLOCK_ID if version == bio::VERSION => {
+                        Dispatch::Typed(Self::Bio(Bio::read_body(dec)?))
+                    }
+                    BlockId::INVENTORY => match ContainerVersion::new(version) {
                         Ok(version) => {
                             Dispatch::Typed(Self::Inventory(Inventory::read_body(dec, version)?))
                         }
                         Err(_) => Dispatch::Opaque(unsupported),
                     },
-                    BlockId::PLAYER_STASH => match ContainerVersion::new(header.version) {
+                    BlockId::PLAYER_STASH => match ContainerVersion::new(version) {
                         Ok(version) if version.raw() >= PLAYER_STASH_MIN_VERSION => {
                             Dispatch::Typed(Self::Stash(PlayerStash::read_body(dec, version)?))
                         }
                         Ok(_) | Err(_) => Dispatch::Opaque(unsupported),
                     },
-                    BlockId::CHARACTER_INFO => Dispatch::Opaque(unsupported),
+                    respawns::BLOCK_ID if version == respawns::VERSION => {
+                        Dispatch::Typed(Self::Respawns(Respawns::read_body(dec)?))
+                    }
+                    teleports::BLOCK_ID if version == teleports::VERSION => {
+                        Dispatch::Typed(Self::Teleports(Teleports::read_body(dec)?))
+                    }
+                    markers::BLOCK_ID if version == markers::VERSION => {
+                        Dispatch::Typed(Self::Markers(Markers::read_body(dec)?))
+                    }
+                    shrines::BLOCK_ID if version == shrines::VERSION => {
+                        Dispatch::Typed(Self::Shrines(Shrines::read_body(dec)?))
+                    }
+                    skills::BLOCK_ID => match SkillsVersion::new(version) {
+                        Some(version) => {
+                            Dispatch::Typed(Self::Skills(Skills::read_body(dec, version)?))
+                        }
+                        None => Dispatch::Opaque(unsupported),
+                    },
+                    notes::BLOCK_ID if version == notes::VERSION => {
+                        Dispatch::Typed(Self::LoreNotes(LoreNotes::read_body(dec)?))
+                    }
+                    factions::BLOCK_ID if version == factions::VERSION => {
+                        Dispatch::Typed(Self::Factions(Factions::read_body(dec)?))
+                    }
+                    ui::BLOCK_ID => match UiVersion::new(version) {
+                        Some(version) => {
+                            Dispatch::Typed(Self::Ui(Box::new(Ui::read_body(dec, version)?)))
+                        }
+                        None => Dispatch::Opaque(unsupported),
+                    },
+                    tutorials::BLOCK_ID if version == tutorials::VERSION => {
+                        Dispatch::Typed(Self::Tutorials(Tutorials::read_body(dec)?))
+                    }
+                    stats::BLOCK_ID => match StatsVersion::new(version) {
+                        Some(version) => {
+                            Dispatch::Typed(Self::Stats(Box::new(Stats::read_body(dec, version)?)))
+                        }
+                        None => Dispatch::Opaque(unsupported),
+                    },
+                    tokens::BLOCK_ID if version == tokens::VERSION => {
+                        Dispatch::Typed(Self::Tokens(Tokens::read_body(dec)?))
+                    }
+                    BlockId::CHARACTER_INFO
+                    | bio::BLOCK_ID
+                    | respawns::BLOCK_ID
+                    | teleports::BLOCK_ID
+                    | markers::BLOCK_ID
+                    | shrines::BLOCK_ID
+                    | notes::BLOCK_ID
+                    | factions::BLOCK_ID
+                    | tutorials::BLOCK_ID
+                    | tokens::BLOCK_ID => Dispatch::Opaque(unsupported),
                     _ => Dispatch::Opaque(OpaqueReason::Unmodeled),
                 })
             },
@@ -487,11 +607,56 @@ impl Block {
     fn write(&self, enc: &mut Encoder) -> Result<(), SaveEncodeError> {
         match self {
             Self::CharacterInfo(info) => info.write(enc),
+            Self::Bio(bio) => bio.write(enc),
             Self::Inventory(inventory) => inventory.write(enc),
             Self::Stash(stash) => stash.write(enc),
+            Self::Respawns(respawns) => respawns.write(enc),
+            Self::Teleports(teleports) => teleports.write(enc),
+            Self::Markers(markers) => markers.write(enc),
+            Self::Shrines(shrines) => shrines.write(enc),
+            Self::Skills(skills) => skills.write(enc),
+            Self::LoreNotes(notes) => notes.write(enc),
+            Self::Factions(factions) => factions.write(enc),
+            Self::Ui(ui) => ui.write(enc),
+            Self::Tutorials(tutorials) => tutorials.write(enc),
+            Self::Stats(stats) => stats.write(enc),
+            Self::Tokens(tokens) => tokens.write(enc),
             Self::Opaque(block) => block.write(enc),
         }
     }
+}
+
+/// Projects the first block of one variant. A variant added later is
+/// correctly *not* that block, so the `else` branch is the
+/// specification rather than a sink.
+macro_rules! block_accessor {
+    ($(#[$doc:meta])* $name:ident: $variant:ident($ty:ty)) => {
+        $(#[$doc])*
+        #[must_use]
+        pub fn $name(&self) -> Option<&$ty> {
+            self.blocks.iter().find_map(|block| {
+                if let Block::$variant(value) = block {
+                    Some(Borrow::<$ty>::borrow(value))
+                } else {
+                    None
+                }
+            })
+        }
+    };
+    ($(#[$doc:meta])* $name:ident, $name_mut:ident: $variant:ident($ty:ty)) => {
+        block_accessor!($(#[$doc])* $name: $variant($ty));
+
+        $(#[$doc])*
+        pub fn $name_mut(&mut self) -> Option<&mut $ty> {
+            self.blocks.iter_mut().find_map(|block| {
+                if let Block::$variant(value) = block {
+                    Some(BorrowMut::<$ty>::borrow_mut(value))
+                } else {
+                    None
+                }
+            })
+        }
+    };
 }
 
 /// A parsed `player.gdc`: header plus the ordered block sequence.
@@ -503,6 +668,17 @@ pub struct PlayerFile {
 }
 
 impl PlayerFile {
+    /// Assembles a file from its parts; [`encode`](Self::encode) writes
+    /// exactly what it is given. Parsing bytes is [`parse`](Self::parse).
+    #[must_use]
+    pub fn from_parts(seed: u32, header: PlayerHeader, blocks: Vec<Block>) -> Self {
+        Self {
+            seed,
+            header,
+            blocks,
+        }
+    }
+
     /// Parses a whole file image.
     ///
     /// # Errors
@@ -605,32 +781,72 @@ impl PlayerFile {
         &self.blocks
     }
 
-    /// Block 1, when typed.
+    /// Whether every block is typed, so any edit can be written.
     #[must_use]
-    pub fn character_info(&self) -> Option<&CharacterInfo> {
-        self.blocks.iter().find_map(|block| match block {
-            Block::CharacterInfo(info) => Some(info),
-            Block::Inventory(_) | Block::Stash(_) | Block::Opaque(_) => None,
-        })
+    pub fn is_fully_typed(&self) -> bool {
+        !self.blocks.iter().any(Block::is_opaque)
     }
 
-    /// Block 3, when typed.
-    #[must_use]
-    pub fn inventory(&self) -> Option<&Inventory> {
-        self.blocks.iter().find_map(|block| match block {
-            Block::Inventory(inventory) => Some(inventory),
-            Block::CharacterInfo(_) | Block::Stash(_) | Block::Opaque(_) => None,
-        })
-    }
-
-    /// Block 4, when typed.
-    #[must_use]
-    pub fn stash(&self) -> Option<&PlayerStash> {
-        self.blocks.iter().find_map(|block| match block {
-            Block::Stash(stash) => Some(stash),
-            Block::CharacterInfo(_) | Block::Inventory(_) | Block::Opaque(_) => None,
-        })
-    }
+    block_accessor!(
+        /// Block 1, when typed.
+        character_info: CharacterInfo(CharacterInfo)
+    );
+    block_accessor!(
+        /// Block 2, when typed.
+        bio: Bio(Bio)
+    );
+    block_accessor!(
+        /// Block 3, when typed.
+        inventory, inventory_mut: Inventory(Inventory)
+    );
+    block_accessor!(
+        /// Block 4, when typed.
+        stash, stash_mut: Stash(PlayerStash)
+    );
+    block_accessor!(
+        /// Block 5, when typed.
+        respawns: Respawns(Respawns)
+    );
+    block_accessor!(
+        /// Block 6, when typed.
+        teleports: Teleports(Teleports)
+    );
+    block_accessor!(
+        /// Block 7, when typed.
+        markers: Markers(Markers)
+    );
+    block_accessor!(
+        /// Block 17, when typed.
+        shrines: Shrines(Shrines)
+    );
+    block_accessor!(
+        /// Block 8, when typed.
+        skills: Skills(Skills)
+    );
+    block_accessor!(
+        /// Block 12, when typed.
+        lore_notes: LoreNotes(LoreNotes)
+    );
+    block_accessor!(
+        /// Block 13, when typed.
+        factions: Factions(Factions)
+    );
+    block_accessor!(
+        /// Block 14, when typed.
+        ui: Ui(Ui)
+    );
+    block_accessor!(
+        /// Block 15, when typed.
+        tutorials: Tutorials(Tutorials)
+    );
+    block_accessor!(
+        /// Block 16, when typed.
+        stats: Stats(Stats)
+    );
+    block_accessor!(
+        /// Block 10, when typed.
+        tokens: Tokens(Tokens)
+    );
 }
 
 #[cfg(test)]
@@ -779,15 +995,24 @@ mod tests {
             Ok::<(), crate::crypto::EncodeError>(())
         })
         .unwrap();
+        enc.write_block(BlockId::new(99), |enc| {
+            enc.write_u32(1);
+            enc.write_string("records/y").unwrap();
+            Ok::<(), crate::crypto::EncodeError>(())
+        })
+        .unwrap();
         let bytes = enc.finish();
 
         let file = PlayerFile::parse(&bytes).unwrap();
         let reasons: Vec<_> = file
             .blocks()
             .iter()
-            .map(|block| match block {
-                Block::Opaque(opaque) => Some(opaque.reason()),
-                Block::CharacterInfo(_) | Block::Inventory(_) | Block::Stash(_) => None,
+            .map(|block| {
+                if let Block::Opaque(opaque) = block {
+                    Some(opaque.reason())
+                } else {
+                    None
+                }
             })
             .collect();
         assert_eq!(
@@ -795,10 +1020,13 @@ mod tests {
             vec![
                 Some(OpaqueReason::UnsupportedVersion { version: 6 }),
                 Some(OpaqueReason::UnsupportedVersion { version: 12 }),
+                Some(OpaqueReason::UnsupportedVersion { version: 1 }),
                 Some(OpaqueReason::Unmodeled),
             ]
         );
+        assert!(!file.is_fully_typed());
         assert!(file.inventory().is_none());
+        assert!(file.stats().is_none());
         assert_eq!(file.encode().unwrap(), bytes);
     }
 

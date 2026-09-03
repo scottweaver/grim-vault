@@ -34,6 +34,7 @@
 
 use thiserror::Error;
 
+use crate::blocks::skills::{SkillField, SkillsVersion};
 use crate::crypto::{BlockId, DecodeError, Decoder, EncodeError, Encoder};
 use crate::item::{ContainerVersion, ItemEncodeError, StashItem};
 
@@ -64,6 +65,26 @@ pub enum SaveEncodeError {
         read_under: u32,
         /// Key state at the point the block was about to be written.
         would_write_under: u32,
+    },
+    /// A skill carries a field its block version has no slot for
+    /// (`blocks::skills`).
+    #[error("skill field {field} is set but block 8 {version} does not carry it")]
+    SkillFieldNotInVersion {
+        /// The field that would be lost.
+        field: SkillField,
+        /// The version being written.
+        version: SkillsVersion,
+    },
+    /// A v7 UI hotbar set holds a different number of slots than the
+    /// block declares per set (`blocks::ui`).
+    #[error("hotbar set {set} holds {found} slots but the block declares {expected} per set")]
+    HotbarSetSize {
+        /// Index of the offending set.
+        set: usize,
+        /// Slots the block declares per set.
+        expected: u32,
+        /// Slots the set holds.
+        found: usize,
     },
 }
 

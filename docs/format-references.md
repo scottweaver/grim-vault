@@ -140,14 +140,53 @@ AaronHutchinson `decrypt-player.cpp`, gd-edit `gdc.clj`, dreeg
   v4..=11), 4 (stash v6..=11). Fixture: gdlc `test/v11_player.gdc`.
 - Real block sequence (identical in the fixture and all three real
   saves, 2026-09-03): `1 2 3 4 5 6 7 17 8 12 13 14 15 16 10`.
-  `grimvault-core` types 1, 3, and 4; the rest are opaque, which
-  makes `player.gdc` **read-only** until blocks 5–17 are typed (see
-  the re-key rule above). Reference layouts for those blocks:
-  wr8fdy/yagde (Rust, MIT) and Odie/gd-edit (Clojure, eyes-only).
+  **Every block is typed** (2026-09-03, `grimvault-core::blocks`,
+  one module per id), so the whole file re-encodes from the model
+  and an inventory or stash edit — which re-keys every later block —
+  is writable. Proof: removing, adding, and moving a sack item, then
+  encode → parse, reproduces the edited model exactly on the fixture
+  and on all three real saves (`tests/fixture_round_trip.rs`,
+  `examples/save_smoke.rs`). A block at a version outside the table
+  below falls back to opaque, which makes that file read-only again
+  (the re-key rule above). Layouts ported from wr8fdy/yagde (Rust,
+  MIT) and cross-checked field by field against nbak/grim-save-parser
+  (Rust, MIT); Odie/gd-edit (Clojure) stays eyes-only. Block 8 v8 and
+  block 16 v12 are what the current game writes and are unknown to
+  both references; they were established here from the fixture and
+  the real saves, and every sample closes on its block checksum
+  under them.
+
+  | Block | Meaning | Versions typed | Notes |
+  |---|---|---|---|
+  | 1 | character info | 5 | gdlc |
+  | 2 | bio: level, experience, unspent attribute / skill / devotion points, total devotion unlocked, physique, cunning, spirit, health, energy | 8 | yagde `Bio`, grim-save-parser `CharacterBio` agree |
+  | 3 | inventory (sacks, equipment) | 4–11 | gdlc |
+  | 4 | per-character stash | 6–11 | gdlc |
+  | 5 | respawn points: three 16-byte-uid lists (per difficulty) then three current uids | 1 | `RespawnList` in both |
+  | 6 | rift gates: three uid lists per difficulty | 1 | `TeleportList` in both |
+  | 7 | map markers: three uid lists per difficulty | 1 | `MarkerList` in both |
+  | 17 | devotion shrines: six uid lists, unnamed by either reference (plausibly 3 difficulties × 2 states) | 2 | `ShrineList` in both |
+  | 8 | skills: skill list (name, level, enabled byte, devotion level, experience, active, two unknown bytes, auto-cast skill / controller), masteries allowed, skill and devotion reclamation points, item skills (name, auto-cast pair, item slot, item), v6+ a counted sub-skill list | 5, 6, 8 | yagde reads the v6 word as a sub-skill list, grim-save-parser as one `u32` — identical while the count is 0, as in every sample. **v8** (current game): one extra byte per skill after `enabled`, 1 on the `itemskillsgdx3/potionmodifiers/healthpotion_*` entries and 0 elsewhere, meaning unknown; v7 has no sample |
+  | 12 | lore notes collected, as record paths | 1 | |
+  | 13 | factions: one leading word (both call it `faction`) then per faction `modified`, `unlocked` bytes, value, positive and negative boost | 5 | |
+  | 14 | UI: three unknown scalars (byte, word, byte), five unknown string / string / byte entries, hotbar sets, camera distance. v4 / v5 / v6: one set of 36 / 46 / 47 slots; v7: set count, slots per set, an id per set. Slot types 0 skill (skill, is-item-skill byte, item, equip location), 4 item (item, two bitmaps, wide label), 2 / 3 health / energy potion, `0xFFFFFFFF` empty | 4–7 | slot meanings from grim-save-parser |
+  | 15 | tutorial pages shown | 1 | |
+  | 16 | play stats: counters, greatest damage, per-difficulty monster records, champion / hero kills, crafting and exploration counters, nemesis kills per difficulty; v9+ survival-mode quartet; v11+ skill map, Shattered Realm souls / essence, difficulty-skip byte; two trailing unknown words | 7, 9, 11, 12 | **v12** (current game): two more words before the trailing pair (28 / 0 in the fixture, 0 / 0 in the real saves); v8 and v10 have no sample |
+  | 10 | quest trigger tokens: three string lists per difficulty | 2 | yagde calls it `Crucible` and its reader drops the tokens; grim-save-parser (`TriggerTokens`) keeps them. Written only when the header data version ≥ 7 |
+
 - Block 3 (inventory) has a `flag` byte (1 in every file) and a
   never-entered state with no sacks; block 1's `difficulty` byte
   reads 50/0/64/16 across four files, so it is not a difficulty
   index despite gdlc's name.
+- Sack grids are **not** in the save. Main bag 12 × 8 cells,
+  every additional bag 8 × 8: `records/game/gameengine.dbr` gives
+  `UICharWindowInventorySack0DimsX/Y` = 384 × 256 px and
+  `UICharWindowInventorySack1DimsX/Y` = 256 × 256 px (the same sizes
+  as `records/ui/character/characterinventory/inventory_grid0.dbr` /
+  `inventory_grid1.dbr` `inventoryXSize/YSize`) at 32 px per cell
+  (the item-bitmap footprint rule). Corroborated 2026-09-03 by item
+  extents: the fixture's packed sacks reach exactly x+w = 12 / 8 and
+  y+h = 8, the real saves stay within. `transfer::SackDimensions`.
 - Location: `save/main/_<Name>/player.gdc`; the game's own rotation
   is `player.g00` / `player.g01` (never ours to touch).
 
@@ -220,6 +259,8 @@ padding (preserved verbatim either way); whether IAGD ever shipped
 `GDCryptoDataBuffer.cs` itself (inferred from GDParser's derived
 file); GD Stash's Nexus/ModDB permission text (HTTP 403); whether the "multiple count
 groups" string-table loop in gdlc/lib-gddb reflects real files or
-defensive coding; the meaning of `player.gdc` blocks 5–17 (opaque
-for now); the `Sex` mapping (0 female / 1 male, inferred from
+defensive coding; the fields the block-typing pass could not name
+(the v8 per-skill byte, the two v12 stats words, the six shrine
+lists, `Factions::faction`); skills v7 and stats v8/v10 layouts (no
+sample); the `Sex` mapping (0 female / 1 male, inferred from
 character names only).

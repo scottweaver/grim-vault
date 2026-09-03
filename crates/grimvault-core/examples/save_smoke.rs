@@ -7,10 +7,13 @@
 //!
 //! For every `main/_*/player.gdc`: character, inventory, equipment and
 //! stash summary, the block ids seen (a `~` suffix marks an opaque
-//! block), and whether an unmodified re-encode is byte-identical. Then
-//! the same for `transfer.gst`, `formulas.gst`, `transmutes.gst` and
-//! `reagents.gst`. Exits non-zero if anything failed to parse or
-//! round-trip.
+//! block; every block the game writes should be typed), whether an
+//! unmodified re-encode is byte-identical, and whether an edited model
+//! survives encode → parse — one sack item removed, one added, one
+//! moved to the first stash tab — which re-keys every block after the
+//! inventory. Then the same read-only checks for `transfer.gst`,
+//! `formulas.gst`, `transmutes.gst` and `reagents.gst`. Exits non-zero
+//! if anything failed to parse, round-trip, or survive an edit.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -18,6 +21,7 @@ use std::process::ExitCode;
 use grimvault_core::block::{OpaqueBlock, OpaqueReason, SaveEncodeError, StashTab};
 use grimvault_core::gdc::{Block, PlayerFile};
 use grimvault_core::gst::{GstBlock, GstError, GstFile};
+use grimvault_core::item::StashItem;
 
 const GST_FILES: [&str; 4] = [
     "transfer.gst",
@@ -116,18 +120,133 @@ fn smoke_player(path: &Path) -> bool {
         }
         None => println!("   stash: not typed"),
     }
+    if let (Some(bio), Some(stats)) = (file.bio(), file.stats()) {
+        println!(
+            "   bio: experience {}  physique {}  cunning {}  spirit {}   stats {:?}: playtime {}s  deaths {}  kills {}",
+            bio.experience,
+            bio.physique,
+            bio.cunning,
+            bio.spirit,
+            stats.version(),
+            stats.playtime,
+            stats.deaths,
+            stats.kills
+        );
+    }
     let blocks: Vec<String> = file
         .blocks()
         .iter()
         .map(|block| match block {
-            Block::CharacterInfo(_) | Block::Inventory(_) | Block::Stash(_) => {
-                block.id().raw().to_string()
-            }
             Block::Opaque(opaque) => describe_opaque(opaque),
+            typed => typed.id().raw().to_string(),
         })
         .collect();
-    println!("   blocks: {}", blocks.join(" "));
-    report_round_trip(&bytes, file.encode())
+    let opaque = file.blocks().iter().filter(|b| b.is_opaque()).count();
+    let typed = file.blocks().len() - opaque;
+    println!(
+        "   blocks: {}   ({typed} typed, {opaque} opaque)",
+        blocks.join(" ")
+    );
+    let round_trip = report_round_trip(&bytes, file.encode());
+    let edits = report_edits(&file);
+    round_trip && edits
+}
+
+/// An edit that re-keys every block after the inventory; `false` when
+/// the file has nothing to edit.
+type Edit = fn(&mut PlayerFile) -> bool;
+
+const EDITS: [(&str, Edit); 3] = [
+    ("remove one sack item", remove_sack_item),
+    ("add one sack item", add_sack_item),
+    ("move one sack item to stash tab 0", move_sack_item_to_stash),
+];
+
+/// Applies each edit to a copy of `file`, encodes it, parses the bytes
+/// back, and requires the parse to equal the edited model — the proof
+/// that every block after the inventory survived the key change.
+fn report_edits(file: &PlayerFile) -> bool {
+    EDITS.iter().all(|(label, edit)| {
+        let mut edited = file.clone();
+        if !edit(&mut edited) {
+            println!("   edit `{label}`: not applicable (no sack item or stash tab)");
+            return true;
+        }
+        let bytes = match edited.encode() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                println!("   edit `{label}`: FAIL: encode: {error}");
+                return false;
+            }
+        };
+        match PlayerFile::parse(&bytes) {
+            Ok(parsed) if parsed == edited => {
+                println!(
+                    "   edit `{label}`: encode → parse equals the edited model ({} bytes)",
+                    bytes.len()
+                );
+                true
+            }
+            Ok(_) => {
+                println!("   edit `{label}`: FAIL: re-parsed model differs from the edited model");
+                false
+            }
+            Err(error) => {
+                println!("   edit `{label}`: FAIL: re-parse: {error}");
+                false
+            }
+        }
+    })
+}
+
+fn remove_sack_item(file: &mut PlayerFile) -> bool {
+    let Some(inventory) = file.inventory_mut() else {
+        return false;
+    };
+    inventory
+        .sacks_mut()
+        .iter_mut()
+        .find(|sack| !sack.items.is_empty())
+        .map(|sack| sack.items.remove(0))
+        .is_some()
+}
+
+fn add_sack_item(file: &mut PlayerFile) -> bool {
+    let Some(inventory) = file.inventory_mut() else {
+        return false;
+    };
+    let Some(sack) = inventory
+        .sacks_mut()
+        .iter_mut()
+        .find(|sack| !sack.items.is_empty())
+    else {
+        return false;
+    };
+    let mut copy = sack.items[0].clone();
+    copy.x += 1;
+    sack.items.push(copy);
+    true
+}
+
+fn move_sack_item_to_stash(file: &mut PlayerFile) -> bool {
+    let Some(taken) = file.inventory_mut().and_then(|inventory| {
+        inventory
+            .sacks_mut()
+            .iter_mut()
+            .find(|sack| !sack.items.is_empty())
+            .map(|sack| sack.items.remove(0))
+    }) else {
+        return false;
+    };
+    let Some(tab) = file.stash_mut().and_then(|stash| stash.tabs.first_mut()) else {
+        return false;
+    };
+    tab.items.push(StashItem {
+        item: taken.item,
+        x: 0.0,
+        y: 0.0,
+    });
+    true
 }
 
 fn smoke_gst(path: &Path) -> bool {

@@ -146,10 +146,13 @@ Q&A). Items marked TBD are open questions, not decisions.
   block is carried opaquely for reading and for writes that leave
   everything before it untouched, and **every block after an edited
   one must be fully typed** before that edit may be written;
-  `encode` refuses otherwise. Today that makes `transfer.gst`
-  writable (block 18 is last) and `player.gdc` read-only until
-  blocks 5–17 are typed. (2026-09-03, bootstrap dialog; opaque rule
-  added the same day from the parser finding)
+  `encode` refuses otherwise. Every `player.gdc` block in the
+  observed sequence is typed (ported from yagde, MIT; skills v8 and
+  stats v12 established from real saves), so `transfer.gst` and
+  `player.gdc` are both writable; an unfamiliar block id or version
+  still parses opaquely and keeps that file read-only. (2026-09-03,
+  bootstrap dialog; opaque rule and full typing added the same day
+  from the parser work)
 - Every write to a game-owned file goes through a backup-first
   write path: this app's own backup of the file exists on disk
   before the original is touched, **one backup per load** — the

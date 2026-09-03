@@ -9,6 +9,11 @@
 //! in-range cell before it is treated as one. Footprints are reference
 //! data the caller supplies through [`Footprints`] — normally the
 //! layered [`GameData`] — because the save file does not carry them.
+//!
+//! A character's inventory sacks (`player.gdc` block 3) work the same
+//! way with integer cells ([`SackItem`]), except that the save stores
+//! no sack dimensions: they come from the game's UI records, recorded
+//! once in [`SackDimensions`].
 
 use std::fmt;
 
@@ -19,8 +24,9 @@ use univault_engine::ids::{GridPos, RecordId};
 
 use crate::block::StashTab;
 use crate::gamedata::{Footprint, GameData};
+use crate::gdc::{PlayerFile, Sack};
 use crate::gst::TransferStash;
-use crate::item::{Item, StashItem};
+use crate::item::{Item, SackItem, StashItem};
 use crate::store::{ItemOrigin, StoredItemId, Timestamp, VaultStore};
 
 /// Position of a tab within the transfer stash, as the file orders
@@ -51,8 +57,77 @@ impl fmt::Display for TabIndex {
     }
 }
 
-/// Position of an item within a tab's item list, as the file orders
-/// them.
+/// Position of a sack (bag) within a character's inventory, as the
+/// file orders them: 0 is the main bag, 1 onward the additional bags.
+/// Serializes as the bare number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SackIndex(u32);
+
+impl SackIndex {
+    /// The main bag.
+    pub const MAIN: Self = Self(0);
+
+    #[must_use]
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+
+    #[must_use]
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+
+    /// The sack's grid size: [`MAIN_SACK`] for the main bag,
+    /// [`EXTRA_SACK`] for every other.
+    #[must_use]
+    pub const fn dimensions(self) -> SackDimensions {
+        if self.0 == 0 { MAIN_SACK } else { EXTRA_SACK }
+    }
+
+    fn slot(self) -> Option<usize> {
+        usize::try_from(self.0).ok()
+    }
+}
+
+impl fmt::Display for SackIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Grid size of a character sack in cells. The save does not store it.
+/// Source: `records/game/gameengine.dbr` lays the main bag out at
+/// `UICharWindowInventorySack0DimsX/Y` = 384 × 256 px and every
+/// additional bag at `UICharWindowInventorySack1DimsX/Y` = 256 × 256 px
+/// (the same sizes `records/ui/character/characterinventory/
+/// inventory_grid0.dbr` and `inventory_grid1.dbr` give as
+/// `inventoryXSize/YSize`), and an item cell is 32 px — the
+/// footprint-from-bitmap rule in `docs/format-references.md`. Checked
+/// 2026-09-03 against every sack of the vendored fixture and three real
+/// saves: no occupant reaches past these bounds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SackDimensions {
+    /// Columns.
+    pub width: u32,
+    /// Rows.
+    pub height: u32,
+}
+
+/// The main bag: 384 × 256 px ÷ 32.
+pub const MAIN_SACK: SackDimensions = SackDimensions {
+    width: 12,
+    height: 8,
+};
+
+/// Every additional bag: 256 × 256 px ÷ 32.
+pub const EXTRA_SACK: SackDimensions = SackDimensions {
+    width: 8,
+    height: 8,
+};
+
+/// Position of an item within a tab's or sack's item list, as the file
+/// orders them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ItemIndex(usize);
 
@@ -134,6 +209,27 @@ pub enum TransferError {
     /// The tab's existing occupants could not be laid out.
     #[error(transparent)]
     Occupancy(#[from] OccupancyError),
+    /// The character's inventory block is not typed, so its sacks
+    /// cannot be reached.
+    #[error("the character's inventory is not typed")]
+    NoInventory,
+    #[error("the inventory has no sack {0}")]
+    NoSuchSack(SackIndex),
+    #[error("sack {sack} has no item {index}")]
+    NoSuchSackItem { sack: SackIndex, index: ItemIndex },
+    #[error("sack {sack} has no room for a {}x{} item", .footprint.width, .footprint.height)]
+    SackNoRoom {
+        sack: SackIndex,
+        footprint: Footprint,
+    },
+    #[error("cells at ({},{}) in sack {sack} are occupied", .pos.x, .pos.y)]
+    SackOccupied { sack: SackIndex, pos: GridPos },
+    #[error("a {}x{} item at ({},{}) does not fit inside sack {sack}", .footprint.width, .footprint.height, .pos.x, .pos.y)]
+    SackOutOfBounds {
+        sack: SackIndex,
+        pos: GridPos,
+        footprint: Footprint,
+    },
 }
 
 /// The cells every item in `tab` occupies, in item order.
@@ -250,7 +346,232 @@ pub fn place_in_stash_at(
     move_into_tab(store, id, stash, tab, pos)
 }
 
-/// A tab's grid with every occupant resolved to cells.
+/// The cells every item in sack `sack` occupies, in item order.
+///
+/// # Errors
+/// [`OccupancyError`] when an occupant's footprint or position cannot
+/// be resolved.
+pub fn sack_occupancy(
+    sack: SackIndex,
+    contents: &Sack,
+    footprints: &impl Footprints,
+) -> Result<Vec<CellRect>, OccupancyError> {
+    sack_grid(sack, contents, footprints).map(|grid| grid.occupied)
+}
+
+/// First free spot for `footprint` in sack `sack` (columns left to
+/// right, each top to bottom); `Ok(None)` when nothing fits.
+///
+/// # Errors
+/// [`OccupancyError`] when the sack's occupants cannot be laid out.
+pub fn find_sack_slot(
+    sack: SackIndex,
+    contents: &Sack,
+    footprint: Footprint,
+    footprints: &impl Footprints,
+) -> Result<Option<GridPos>, OccupancyError> {
+    let grid = sack_grid(sack, contents, footprints)?;
+    Ok(find_open_cells(
+        &grid.occupied,
+        footprint.width,
+        footprint.height,
+        grid.width,
+        grid.height,
+    ))
+}
+
+/// Whether `footprint` at `pos` lies inside sack `sack` and overlaps
+/// nothing.
+///
+/// # Errors
+/// [`OccupancyError`] when the sack's occupants cannot be laid out.
+pub fn can_place_in_sack_at(
+    sack: SackIndex,
+    contents: &Sack,
+    footprint: Footprint,
+    pos: GridPos,
+    footprints: &impl Footprints,
+) -> Result<bool, OccupancyError> {
+    let grid = sack_grid(sack, contents, footprints)?;
+    Ok(check_placement(&grid, rect_at(pos, footprint)).is_ok())
+}
+
+/// Removes item `index` from sack `sack` of `player` and stores it with
+/// [`ItemOrigin::Character`]. Needs no footprint: the store has no
+/// grid.
+///
+/// # Errors
+/// [`TransferError::NoInventory`], [`TransferError::NoSuchSack`] or
+/// [`TransferError::NoSuchSackItem`]; the store and player are
+/// unchanged on error.
+pub fn vault_from_sack(
+    player: &mut PlayerFile,
+    sack: SackIndex,
+    index: ItemIndex,
+    store: &mut VaultStore,
+    at: Timestamp,
+) -> Result<StoredItemId, TransferError> {
+    let name = player.character_name().to_owned();
+    let contents = sack_mut(player, sack)?;
+    if index.value() >= contents.items.len() {
+        return Err(TransferError::NoSuchSackItem { sack, index });
+    }
+    let placed = contents.items.remove(index.value());
+    Ok(store.add(placed.item, ItemOrigin::Character { name }, at))
+}
+
+/// Moves stored item `id` into the first free spot of sack `sack`,
+/// returning where it landed.
+///
+/// # Errors
+/// Any [`TransferError`]; the store and player are unchanged on error.
+pub fn place_in_sack(
+    store: &mut VaultStore,
+    id: StoredItemId,
+    player: &mut PlayerFile,
+    sack: SackIndex,
+    footprints: &impl Footprints,
+) -> Result<GridPos, TransferError> {
+    let footprint = stored_footprint(store, id, footprints)?;
+    let pos = find_sack_slot(sack, sack_ref(player, sack)?, footprint, footprints)?
+        .ok_or(TransferError::SackNoRoom { sack, footprint })?;
+    move_into_sack(store, id, player, sack, sack_cell(sack, pos, footprint)?)?;
+    Ok(pos)
+}
+
+/// Moves stored item `id` into sack `sack` at exactly `pos`.
+///
+/// # Errors
+/// [`TransferError::SackOutOfBounds`] or [`TransferError::SackOccupied`]
+/// when the cells are not free, or any other [`TransferError`]; the
+/// store and player are unchanged on error.
+pub fn place_in_sack_at(
+    store: &mut VaultStore,
+    id: StoredItemId,
+    player: &mut PlayerFile,
+    sack: SackIndex,
+    pos: GridPos,
+    footprints: &impl Footprints,
+) -> Result<(), TransferError> {
+    let footprint = stored_footprint(store, id, footprints)?;
+    let grid = sack_grid(sack, sack_ref(player, sack)?, footprints)?;
+    check_placement(&grid, rect_at(pos, footprint)).map_err(|blocked| match blocked {
+        Blocked::OutOfBounds => TransferError::SackOutOfBounds {
+            sack,
+            pos,
+            footprint,
+        },
+        Blocked::Occupied => TransferError::SackOccupied { sack, pos },
+    })?;
+    move_into_sack(store, id, player, sack, sack_cell(sack, pos, footprint)?)
+}
+
+/// A sack cell as the file stores it.
+#[derive(Clone, Copy)]
+struct SackCell {
+    x: u32,
+    y: u32,
+}
+
+/// A bounds-checked position is non-negative, so this only fails for a
+/// position that never passed the check — reported as out of bounds.
+fn sack_cell(
+    sack: SackIndex,
+    pos: GridPos,
+    footprint: Footprint,
+) -> Result<SackCell, TransferError> {
+    match (u32::try_from(pos.x), u32::try_from(pos.y)) {
+        (Ok(x), Ok(y)) => Ok(SackCell { x, y }),
+        _ => Err(TransferError::SackOutOfBounds {
+            sack,
+            pos,
+            footprint,
+        }),
+    }
+}
+
+fn sack_grid(
+    sack: SackIndex,
+    contents: &Sack,
+    footprints: &impl Footprints,
+) -> Result<TabGrid, OccupancyError> {
+    let SackDimensions { width, height } = sack.dimensions();
+    let (Some(width), Some(height)) = (dimension(width), dimension(height)) else {
+        return Err(OccupancyError::GridTooLarge { width, height });
+    };
+    let occupied = contents
+        .items
+        .iter()
+        .enumerate()
+        .map(|(slot, placed)| sack_occupant_rect(ItemIndex::new(slot), placed, footprints))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(TabGrid {
+        width,
+        height,
+        occupied,
+    })
+}
+
+fn sack_occupant_rect(
+    index: ItemIndex,
+    placed: &SackItem,
+    footprints: &impl Footprints,
+) -> Result<CellRect, OccupancyError> {
+    let footprint =
+        footprints
+            .footprint(&placed.item)
+            .ok_or_else(|| OccupancyError::UnknownFootprint {
+                index,
+                base_name: placed.item.base_name.clone(),
+            })?;
+    let (Some(x), Some(y)) = (dimension(placed.x), dimension(placed.y)) else {
+        return Err(OccupancyError::InvalidPosition { index });
+    };
+    Ok(rect_at(GridPos { x, y }, footprint))
+}
+
+/// The final, fallible-only-by-lookup step of a sack placement: the
+/// sack is resolved before the store is touched, so a missing sack
+/// leaves the store intact.
+fn move_into_sack(
+    store: &mut VaultStore,
+    id: StoredItemId,
+    player: &mut PlayerFile,
+    sack: SackIndex,
+    cell: SackCell,
+) -> Result<(), TransferError> {
+    let contents = sack_mut(player, sack)?;
+    let stored = store.take(id).ok_or(TransferError::NoSuchStoredItem(id))?;
+    contents.items.push(SackItem {
+        item: stored.into_item(),
+        x: cell.x,
+        y: cell.y,
+    });
+    Ok(())
+}
+
+fn sack_ref(player: &PlayerFile, sack: SackIndex) -> Result<&Sack, TransferError> {
+    let sacks = player
+        .inventory()
+        .ok_or(TransferError::NoInventory)?
+        .sacks();
+    sack.slot()
+        .and_then(|slot| sacks.get(slot))
+        .ok_or(TransferError::NoSuchSack(sack))
+}
+
+fn sack_mut(player: &mut PlayerFile, sack: SackIndex) -> Result<&mut Sack, TransferError> {
+    let sacks = player
+        .inventory_mut()
+        .ok_or(TransferError::NoInventory)?
+        .sacks_mut();
+    sack.slot()
+        .and_then(|slot| sacks.get_mut(slot))
+        .ok_or(TransferError::NoSuchSack(sack))
+}
+
+/// A container's grid (stash tab or sack) with every occupant resolved
+/// to cells.
 struct TabGrid {
     width: i32,
     height: i32,
@@ -712,5 +1033,243 @@ mod tests {
         }
         assert_eq!(cell_from_f32(0.25), None);
         assert_eq!(cell_from_f32(-0.0), Some(0));
+    }
+
+    mod sacks {
+        use super::*;
+        use crate::gdc::{
+            Block, CharacterInfo, Inventory, InventoryContents, InventoryState, PlayerHeader, Sex,
+        };
+
+        const MAIN: SackIndex = SackIndex::MAIN;
+        const EXTRA: SackIndex = SackIndex::new(1);
+
+        fn in_sack(base_name: &str, x: u32, y: u32) -> SackItem {
+            SackItem {
+                item: item(base_name),
+                x,
+                y,
+            }
+        }
+
+        fn sack(items: Vec<SackItem>) -> Sack {
+            Sack { flag: 1, items }
+        }
+
+        fn player(sacks: Vec<Sack>) -> PlayerFile {
+            let inventory = Inventory {
+                version: ContainerVersion::new(11).unwrap(),
+                flag: 0,
+                state: InventoryState::Entered(Box::new(InventoryContents {
+                    focused_sack: 0,
+                    selected_sack: 0,
+                    sacks,
+                    use_alternate: 0,
+                    equipment: Default::default(),
+                    alternate_1: 0,
+                    weapon_set_1: Default::default(),
+                    alternate_2: 0,
+                    weapon_set_2: Default::default(),
+                })),
+            };
+            PlayerFile::from_parts(
+                7,
+                PlayerHeader {
+                    name: "Sif".into(),
+                    sex: Sex::Female,
+                    class_tag: String::new(),
+                    level: 1,
+                    hardcore: false,
+                    expansion_status: 7,
+                    data_version: 8,
+                    uid: [0; 16],
+                },
+                vec![
+                    Block::CharacterInfo(CharacterInfo {
+                        is_in_main_quest: true,
+                        has_been_in_game: true,
+                        difficulty: 0,
+                        greatest_difficulty: 0,
+                        money: 0,
+                        greatest_survival_difficulty: 0,
+                        current_tribute: 0,
+                        compass_state: 0,
+                        skill_window_show_help: 0,
+                        weapon_swap_active: 0,
+                        weapon_swap_enabled: 0,
+                        texture: String::new(),
+                        loot_filter: vec![],
+                    }),
+                    Block::Inventory(inventory),
+                ],
+            )
+        }
+
+        fn sacks_of(player: &PlayerFile) -> &[Sack] {
+            player.inventory().unwrap().sacks()
+        }
+
+        #[test]
+        fn dimensions_come_from_the_sack_index() {
+            assert_eq!(MAIN.dimensions(), MAIN_SACK);
+            assert_eq!(EXTRA.dimensions(), EXTRA_SACK);
+            assert_eq!(SackIndex::new(4).dimensions(), EXTRA_SACK);
+        }
+
+        #[test]
+        fn occupancy_resolves_each_item_to_its_cells() {
+            let contents = sack(vec![in_sack(CLUSTER, 1, 6), in_sack(LEGS, 3, 0)]);
+            assert_eq!(
+                sack_occupancy(MAIN, &contents, &table()).unwrap(),
+                vec![rect(1, 6, 1, 2), rect(3, 0, 2, 3)]
+            );
+            let bad = sack(vec![in_sack(CLUSTER, 70_000, 0)]);
+            assert_eq!(
+                sack_occupancy(MAIN, &bad, &table()).unwrap_err(),
+                OccupancyError::InvalidPosition {
+                    index: ItemIndex::new(0)
+                }
+            );
+        }
+
+        #[test]
+        fn vault_then_place_round_trips_the_item() {
+            let footprints = table();
+            let mut player = player(vec![sack(vec![in_sack(CLUSTER, 1, 6)])]);
+            let mut store = VaultStore::new();
+
+            let id =
+                vault_from_sack(&mut player, MAIN, ItemIndex::new(0), &mut store, NOW).unwrap();
+            assert!(sacks_of(&player)[0].items.is_empty());
+            let stored = store.get(id).unwrap();
+            assert_eq!(stored.item(), &item(CLUSTER));
+            assert_eq!(
+                stored.origin(),
+                &ItemOrigin::Character { name: "Sif".into() }
+            );
+
+            let pos = place_in_sack(&mut store, id, &mut player, MAIN, &footprints).unwrap();
+            assert_eq!(pos, at(0, 0));
+            assert!(store.is_empty());
+            assert_eq!(sacks_of(&player)[0].items, vec![in_sack(CLUSTER, 0, 0)]);
+        }
+
+        #[test]
+        fn placement_respects_each_sacks_own_bounds() {
+            let footprints = table();
+            let mut player = player(vec![sack(vec![]), sack(vec![])]);
+            let mut store = VaultStore::new();
+            let far_main = store.add(item(CLUSTER), ItemOrigin::Unknown, NOW);
+            let far_extra = store.add(item(CLUSTER), ItemOrigin::Unknown, NOW);
+            let too_far = store.add(item(CLUSTER), ItemOrigin::Unknown, NOW);
+
+            place_in_sack_at(
+                &mut store,
+                far_main,
+                &mut player,
+                MAIN,
+                at(11, 6),
+                &footprints,
+            )
+            .unwrap();
+            place_in_sack_at(
+                &mut store,
+                far_extra,
+                &mut player,
+                EXTRA,
+                at(7, 6),
+                &footprints,
+            )
+            .unwrap();
+            assert_eq!(
+                place_in_sack_at(
+                    &mut store,
+                    too_far,
+                    &mut player,
+                    EXTRA,
+                    at(8, 0),
+                    &footprints
+                ),
+                Err(TransferError::SackOutOfBounds {
+                    sack: EXTRA,
+                    pos: at(8, 0),
+                    footprint: footprints.footprint(&item(CLUSTER)).unwrap()
+                })
+            );
+            assert_eq!(
+                place_in_sack_at(
+                    &mut store,
+                    too_far,
+                    &mut player,
+                    MAIN,
+                    at(11, 6),
+                    &footprints
+                ),
+                Err(TransferError::SackOccupied {
+                    sack: MAIN,
+                    pos: at(11, 6)
+                })
+            );
+            assert_eq!(sacks_of(&player)[0].items, vec![in_sack(CLUSTER, 11, 6)]);
+            assert_eq!(sacks_of(&player)[1].items, vec![in_sack(CLUSTER, 7, 6)]);
+            assert_eq!(store.len(), 1);
+        }
+
+        #[test]
+        fn full_sack_reports_no_room() {
+            let footprints = table();
+            let full: Vec<SackItem> = (0..8)
+                .flat_map(|x| (0..4).map(move |row| in_sack(CLUSTER, x, row * 2)))
+                .collect();
+            let mut player = player(vec![sack(vec![]), sack(full)]);
+            let mut store = VaultStore::new();
+            let id = store.add(item(CLUSTER), ItemOrigin::Unknown, NOW);
+            assert_eq!(
+                place_in_sack(&mut store, id, &mut player, EXTRA, &footprints),
+                Err(TransferError::SackNoRoom {
+                    sack: EXTRA,
+                    footprint: footprints.footprint(&item(CLUSTER)).unwrap()
+                })
+            );
+            assert_eq!(
+                place_in_sack(&mut store, id, &mut player, MAIN, &footprints),
+                Ok(at(0, 0))
+            );
+        }
+
+        #[test]
+        fn vault_refuses_missing_sacks_and_items_without_touching_the_store() {
+            let mut player = player(vec![sack(vec![in_sack(CLUSTER, 1, 6)])]);
+            let mut store = VaultStore::new();
+            assert_eq!(
+                vault_from_sack(&mut player, EXTRA, ItemIndex::new(0), &mut store, NOW),
+                Err(TransferError::NoSuchSack(EXTRA))
+            );
+            assert_eq!(
+                vault_from_sack(&mut player, MAIN, ItemIndex::new(1), &mut store, NOW),
+                Err(TransferError::NoSuchSackItem {
+                    sack: MAIN,
+                    index: ItemIndex::new(1)
+                })
+            );
+            assert!(store.is_empty());
+            assert_eq!(sacks_of(&player)[0].items.len(), 1);
+
+            let mut untyped = PlayerFile::from_parts(7, player.header().clone(), vec![]);
+            assert_eq!(
+                vault_from_sack(&mut untyped, MAIN, ItemIndex::new(0), &mut store, NOW),
+                Err(TransferError::NoInventory)
+            );
+            assert_eq!(
+                place_in_sack(
+                    &mut store,
+                    StoredItemId::new(1),
+                    &mut untyped,
+                    MAIN,
+                    &table()
+                ),
+                Err(TransferError::NoSuchStoredItem(StoredItemId::new(1)))
+            );
+        }
     }
 }

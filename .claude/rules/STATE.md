@@ -5,32 +5,32 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-03 (M2 vault loop landed on
-`feat/gd-read-stack`; GUI shell next)
+Last updated: 2026-09-03 (M3 GUI shell and full player.gdc typing
+landed on `feat/gd-read-stack`; awaiting user acceptance)
 
 ## Active workstream
 
 Fast track to a usable Grim Dawn tool (user decision 2026-09-03; the
 separate-repo extraction of the shared engine is deferred,
-ARCHITECTURE.md "Crate layering"). On `feat/gd-read-stack` the
-**read stack (M1) and the first usable loop (M2) are done**: a
-five-crate workspace — `univault-engine` (tq-univault's parsers
-vendored, GD LZ4 dialect, `platform::config_dir`), `univault-io`
-(safe-io with post-write re-read), `univault-ui` (art-free egui kit),
-`grimvault-core` (rolling-XOR codec, `player.gdc` / `*.gst` parsers,
-layered game-data facade, `vault-store.json` store, computed buckets,
-transfer-stash moves, the `Loaded` lossless gate, save/game dir
-candidates), and a `grimvault-gui` scaffold — 190 tests, clippy
-pedantic clean. `examples/vault_cli` vaults an item out of a copy of
-the user's `transfer.gst` into the store and places it back, ending
-byte-identical to the original with `grimvault-bak` backups. Binding
-facts learned: **opaque save blocks cannot be re-keyed**, so
-`player.gdc` stays read-only until blocks 5–17 are typed (yagde, MIT,
-has read+write layouts) while `transfer.gst` is writable; and
-`formulas.gst` is plaintext TQ-style. Next: M3, the egui shell, so
-the loop is usable without a terminal. grim-vault is the Grim Dawn
-sibling of tq-univault (`~/Projects/tq-univault`); PROJECT.md is
-bound with `tracker: none`.
+ARCHITECTURE.md "Crate layering"). On `feat/gd-read-stack` **M1–M3
+are done and the app runs**: a five-crate workspace —
+`univault-engine` (tq-univault's parsers vendored, GD LZ4 dialect),
+`univault-io` (safe-io with post-write re-read), `univault-ui`
+(art-free egui kit), `grimvault-core` (rolling-XOR codec, **every
+`player.gdc` block typed** so edits re-key correctly, `*.gst`, layered
+game-data facade, `vault-store.json`, buckets, stash *and* sack
+transfer ops, the `Loaded` lossless gate), and `grimvault-gui` (the
+egui shell: setup with dir candidates, background load with progress,
+transfer-stash grids with icons, store by Group/Bucket, read-only
+characters, drag-and-drop and double-click moves through
+`transfer`, autosave 600 ms quiet with backup-first once per load,
+external-change guard with a Reload/Keep-mine modal, `--check`
+headless mode) — 261 tests, clippy pedantic clean. Verified on
+scratch copies of the user's install and saves; screenshot reviewed.
+**Not yet verified: the game reading a `transfer.gst` this app
+wrote** — the next step is the user's acceptance run on the real
+install with the game closed. grim-vault is the Grim Dawn sibling of
+tq-univault; PROJECT.md is bound with `tracker: none`.
 
 ## Branches in flight
 
@@ -38,35 +38,49 @@ bound with `tracker: none`.
 |---|---|---|
 | `main` | trunk | at `810f7a8` (rules layer), no code |
 | `design/shared-engine-split` | engine-split proposal + GD format references | docs only, one commit ahead of `main`; `feat/gd-read-stack` branched from it |
-| `feat/gd-read-stack` | workspace, read stack (M1), vault loop (M2), GUI scaffold | local, not pushed (no remote yet); 190 tests green |
+| `feat/gd-read-stack` | workspace, read stack (M1), vault loop (M2), GUI shell (M3), typed player.gdc | local, not pushed (no remote yet); 261 tests green |
 
 ## Next up
 
-1. **M3 — egui shell (`crates/grimvault-gui`, scaffolded):** first-run
-   setup (game dir + save dir pickers seeded from
-   `grimvault_core::platform` candidates; settings in the app config
-   dir), background game-data load with progress, transfer-stash tabs
-   as editable 10×19 grids with icons (`tex::decode`, fallback tile),
-   the store by Group/Bucket, characters read-only (inventory /
-   equipped / personal stash); drag-and-drop and double-click between
-   stash and store via `transfer::{vault_from_stash, place_in_stash,
-   place_in_stash_at}`; autosave (600 ms quiet, backup-first once per
-   load via `univault-io`) and an external-change guard (poll
-   size+mtime every 2 s; clean pane reloads, dirty pane suspends
-   autosave and prompts). Theme through `univault-ui` with
-   grim-vault's own palette, no custom fonts yet.
-2. **Type `player.gdc` blocks 5–17** by porting yagde (MIT,
-   `wr8fdy/yagde`, read+write for every block) so character
-   inventories become writable under the lossless gate; then
-   `ItemOrigin::Character` gets a producer.
+1. **User acceptance on the real install** (game closed): launch
+   `cargo run --release -p grimvault-gui`, point Setup at
+   `/Volumes/scott-games/steamapps/common/Grim Dawn` and
+   `/Volumes/scott-games/Grim Dawn Saves/remote/save`, vault an item
+   out of the transfer stash, place it back, then confirm in-game.
+   Watch load time over SMB (the three `Items.arc` are ~740 MB).
+2. **M4 — characters editable in the GUI:** the core already
+   supports it (`transfer::{vault_from_sack, place_in_sack(_at)}`,
+   `PlayerFile::inventory_mut`, full typing); the shell needs a
+   `CharacterDoc` save path with the same autosave / backup-first /
+   guard treatment as the stash, sack grids as drag sources and
+   targets, and `ItemOrigin::Character` on vaulted items. Keep the
+   read-only badge for any file with an opaque block.
 3. **Game-data cache** under the config dir (names, rarity, class,
-   footprint, icon RGBA per record actually referenced), stamp-keyed
-   to the archives — the three `Items.arc` files are ~740 MB and the
-   user's install is on a network mount.
+   footprint, icon RGBA per referenced record), stamp-keyed to the
+   archives, so launches over the network mount stop re-reading
+   ~870 MB.
 4. Deferred: extract the `univault-*` crates to their own repo and
    re-point tq-univault (R1–R5 done on the vendored copies).
 
 ## Most recent meaningful progress
+
+- **2026-09-03 — M3 egui shell + full `player.gdc` typing (branch
+  `feat/gd-read-stack`, not merged).** `grimvault-gui`: phases
+  Setup/Loading/Failed/Ready, pure `autosave` / `watch` / `drag` /
+  `grid` state machines with unit tests, every move through
+  `transfer`, write order destination-before-source, backup-first
+  once per load, stamp re-check before every save, Reload/Keep-mine
+  modal, `--check` headless transcript, no `player.gdc` writes. Core:
+  blocks 2, 5–8, 10, 12–17 typed from yagde (MIT) with skills v8 and
+  stats v12 established from real saves; remove/add/move edits
+  re-parse correctly on the fixture and all three real characters;
+  sack ops with 12×8 / 8×8 dims from `gameengine.dbr`. 261 tests.
+  Why: this is the "usable" bar the user asked for — the loop runs
+  without a terminal, and the read-only limit on characters is gone
+  at the core level. Risk: drag-and-drop, autosave, and the conflict
+  modal are covered by unit tests, not by input into the live window
+  (synthetic input is banned); and no rewritten file has been loaded
+  by the game yet.
 
 - **2026-09-03 — M2 first usable loop (branch `feat/gd-read-stack`,
   not merged).** `store.rs` (`grimvault-store` v1, monotonic ids

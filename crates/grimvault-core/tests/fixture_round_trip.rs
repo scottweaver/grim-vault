@@ -1,14 +1,27 @@
 //! Lossless-model gate: the vendored gdlc fixture (see
 //! `fixtures/FIXTURES.md`) and randomly generated block sequences must
-//! re-encode byte-for-byte, and the single-byte cipher order must be the
-//! one that makes the fixture's booleans booleans.
+//! re-encode byte-for-byte, the single-byte cipher order must be the
+//! one that makes the fixture's booleans booleans, and — the point of
+//! typing every block — an edited inventory or stash must survive
+//! encode → parse with every later block intact.
+//!
+//! The same edit checks run over every `main/_*/player.gdc` under
+//! `$GRIMVAULT_SAVE_DIR` when that variable names a directory (a
+//! **copy** of a save directory, never the live one); the test passes
+//! vacuously when it is unset.
 
-use grimvault_core::block::{OpaqueElement, OpaqueReason};
+use std::path::PathBuf;
+
+use grimvault_core::blocks::skills::SkillsVersion;
+use grimvault_core::blocks::stats::StatsVersion;
+use grimvault_core::blocks::ui::UiVersion;
 use grimvault_core::crypto::{BlockId, Decoder, EncodeError, Encoder, KeyTable};
-use grimvault_core::gdc::{Block, InventoryState, PlayerFile, Sex};
+use grimvault_core::gdc::{InventoryState, PlayerFile, Sex};
 use grimvault_core::gst::GstFile;
+use grimvault_core::item::StashItem;
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/v11_player.gdc");
+const EXPECTED_BLOCK_IDS: [u32; 15] = [1, 2, 3, 4, 5, 6, 7, 17, 8, 12, 13, 14, 15, 16, 10];
 
 #[test]
 fn fixture_re_encodes_byte_identically() {
@@ -28,22 +41,8 @@ fn fixture_header_and_typed_blocks_are_read() {
     assert_eq!(file.header().data_version, 8);
 
     let ids: Vec<u32> = file.blocks().iter().map(|b| b.id().raw()).collect();
-    assert_eq!(
-        ids,
-        vec![1, 2, 3, 4, 5, 6, 7, 17, 8, 12, 13, 14, 15, 16, 10]
-    );
-    let typed: Vec<bool> = file
-        .blocks()
-        .iter()
-        .map(|b| !matches!(b, Block::Opaque(_)))
-        .collect();
-    assert_eq!(
-        typed,
-        [true, false, true, true]
-            .into_iter()
-            .chain(std::iter::repeat_n(false, 11))
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(ids, EXPECTED_BLOCK_IDS);
+    assert!(file.is_fully_typed());
 
     let info = file.character_info().unwrap();
     assert_eq!(info.money, 1_069_109);
@@ -71,18 +70,165 @@ fn fixture_header_and_typed_blocks_are_read() {
 }
 
 #[test]
-fn fixture_opaque_blocks_are_flat_and_verified() {
+fn fixture_later_blocks_carry_their_contents() {
     let file = PlayerFile::parse(FIXTURE).unwrap();
-    for block in file.blocks() {
-        if let Block::Opaque(opaque) = block {
-            assert_eq!(opaque.reason(), OpaqueReason::Unmodeled);
-            assert!(
-                matches!(opaque.body(), [OpaqueElement::Bytes(_)]),
-                "{} should be one flat byte run",
-                opaque.id()
-            );
+    let bio = file.bio().unwrap();
+    assert_eq!(bio.level, 100);
+    assert!(bio.experience > 0);
+    assert!(bio.physique >= 50.0 && bio.cunning >= 50.0 && bio.spirit >= 50.0);
+
+    let skills = file.skills().unwrap();
+    assert_eq!(skills.version(), SkillsVersion::V8);
+    assert!(!skills.skills.is_empty());
+    assert!(
+        skills
+            .skills
+            .iter()
+            .all(|skill| skill.name.starts_with("records/skills/"))
+    );
+
+    let stats = file.stats().unwrap();
+    assert_eq!(stats.version(), StatsVersion::V12);
+    assert_eq!(stats.max_level, 100);
+    assert!(stats.playtime > 0);
+
+    let ui = file.ui().unwrap();
+    assert_eq!(ui.version(), UiVersion::V7);
+    assert!(ui.hotbars.slots().count() > 0);
+
+    assert!(file.respawns().is_some());
+    assert!(file.teleports().is_some());
+    assert!(file.markers().is_some());
+    assert!(file.shrines().is_some());
+    assert!(file.lore_notes().is_some());
+    assert!(!file.factions().unwrap().factions.is_empty());
+    assert!(file.tutorials().is_some());
+    assert!(file.tokens().is_some());
+}
+
+/// The three edits that change the key for every block after the
+/// inventory; each returns `false` when the file has nothing to edit.
+type Edit = fn(&mut PlayerFile) -> bool;
+
+const EDITS: [(&str, Edit); 3] = [
+    ("remove one sack item", remove_sack_item),
+    ("add one sack item", add_sack_item),
+    ("move one sack item to stash tab 0", move_sack_item_to_stash),
+];
+
+fn remove_sack_item(file: &mut PlayerFile) -> bool {
+    file.inventory_mut()
+        .and_then(|inventory| {
+            inventory
+                .sacks_mut()
+                .iter_mut()
+                .find(|sack| !sack.items.is_empty())
+                .map(|sack| sack.items.remove(0))
+        })
+        .is_some()
+}
+
+fn add_sack_item(file: &mut PlayerFile) -> bool {
+    let Some(sack) = file.inventory_mut().and_then(|inventory| {
+        inventory
+            .sacks_mut()
+            .iter_mut()
+            .find(|sack| !sack.items.is_empty())
+    }) else {
+        return false;
+    };
+    let mut copy = sack.items[0].clone();
+    copy.x += 1;
+    sack.items.push(copy);
+    true
+}
+
+fn move_sack_item_to_stash(file: &mut PlayerFile) -> bool {
+    let Some(taken) = file.inventory_mut().and_then(|inventory| {
+        inventory
+            .sacks_mut()
+            .iter_mut()
+            .find(|sack| !sack.items.is_empty())
+            .map(|sack| sack.items.remove(0))
+    }) else {
+        return false;
+    };
+    let Some(tab) = file.stash_mut().and_then(|stash| stash.tabs.first_mut()) else {
+        return false;
+    };
+    tab.items.push(StashItem {
+        item: taken.item,
+        x: 0.0,
+        y: 0.0,
+    });
+    true
+}
+
+/// Applies every applicable edit to `file` and asserts encode → parse
+/// reproduces the edited model exactly; returns how many applied.
+fn assert_edits_survive_re_encode(file: &PlayerFile, original: &[u8], label: &str) -> usize {
+    let mut applied = 0;
+    for (edit_name, edit) in EDITS {
+        let mut edited = file.clone();
+        if !edit(&mut edited) {
+            continue;
         }
+        applied += 1;
+        assert_ne!(&edited, file, "{label}: `{edit_name}` changed nothing");
+        let bytes = edited
+            .encode()
+            .unwrap_or_else(|error| panic!("{label}: `{edit_name}`: encode: {error}"));
+        assert_ne!(bytes, original, "{label}: `{edit_name}` bytes unchanged");
+        let parsed = PlayerFile::parse(&bytes)
+            .unwrap_or_else(|error| panic!("{label}: `{edit_name}`: re-parse: {error}"));
+        assert_eq!(parsed, edited, "{label}: `{edit_name}` did not survive");
+        assert_eq!(parsed.blocks().len(), file.blocks().len());
+        assert!(parsed.is_fully_typed());
     }
+    applied
+}
+
+#[test]
+fn fixture_edits_survive_re_encode() {
+    let file = PlayerFile::parse(FIXTURE).unwrap();
+    assert_eq!(
+        assert_edits_survive_re_encode(&file, FIXTURE, "fixture"),
+        EDITS.len()
+    );
+}
+
+#[test]
+fn real_saves_round_trip_and_survive_edits() {
+    let Some(save_dir) = std::env::var_os("GRIMVAULT_SAVE_DIR").map(PathBuf::from) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(save_dir.join("main"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path().join("player.gdc"))
+        .filter(|path| path.is_file())
+        .collect();
+    paths.sort();
+    assert!(
+        !paths.is_empty(),
+        "no main/_*/player.gdc under the save dir"
+    );
+    let mut applied = 0;
+    for path in paths {
+        let label = path.display().to_string();
+        let bytes = std::fs::read(&path).unwrap();
+        let file = PlayerFile::parse(&bytes).unwrap_or_else(|error| panic!("{label}: {error}"));
+        assert_eq!(
+            file.encode().unwrap(),
+            bytes,
+            "{label}: unmodified round trip"
+        );
+        let ids: Vec<u32> = file.blocks().iter().map(|b| b.id().raw()).collect();
+        assert_eq!(ids, EXPECTED_BLOCK_IDS, "{label}: block sequence");
+        assert!(file.is_fully_typed(), "{label}: an opaque block remains");
+        applied += assert_edits_survive_re_encode(&file, &bytes, &label);
+    }
+    assert!(applied > 0, "no save had a sack item to edit");
 }
 
 fn read_header_bools_update_first(bytes: &[u8]) -> (u8, u8) {

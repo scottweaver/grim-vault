@@ -17,6 +17,7 @@
 //! the transfer stash and the store.
 
 pub mod block;
+pub mod blocks;
 pub mod bucket;
 pub mod crypto;
 pub mod gamedata;
