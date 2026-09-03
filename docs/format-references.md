@@ -190,17 +190,12 @@ AaronHutchinson `decrypt-player.cpp`, gd-edit `gdc.clj`, dreeg
 - Location: `save/main/_<Name>/player.gdc`; the game's own rotation
   is `player.g00` / `player.g01` (never ours to touch).
 
-### `transfer.gst` (shared stash), `formulas.gst`, `transmutes.gst`
+### `transfer.gst` (shared stash), `formulas.gst`
 
 - `transfer.gst` per gdlc `stash.rs`: `2`, block `18`, stash version
   5..=11; gd-edit `stash.clj` corroborates Block 18. Stash items
   append `X, Y` floats.
 - Game rotation: `transfer.t00` – `.t09` (never ours to touch).
-- `transmutes.gst`: leading word 1, block 19 (v2) holding nested
-  id-0 blocks; `reagents.gst`: leading word 1, block 20 (v1) with 60
-  nested blocks. Both share block 18's zero word after the version.
-  Read opaquely, round-trip byte-identical; read-only per
-  ARCHITECTURE.md.
 - `formulas.gst` (blueprints) is **not obfuscated at all**: plaintext
   Titan-Quest-style `begin_block` 0xB01DFACE / `end_block`
   0xDEADC0DE with length-prefixed keys (`formulasVersion` = 3,
@@ -208,6 +203,60 @@ AaronHutchinson `decrypt-player.cpp`, gd-edit `gdc.clj`, dreeg
   `formulaRead`). Detected and refused with a matchable error by the
   `.gst` parser; the engine's key/value reader would parse it.
   Read-only per ARCHITECTURE.md.
+
+### `reagents.gst` (component and crafting-material storage)
+
+The account-wide storage the game shows as its Components and
+Crafting Materials tabs is one file. No reference (gdlc, yagde,
+grim-save-parser, gd-edit) types it; the layout below was established
+2026-09-03 with `grimvault-core`'s `Decoder` on the user's own file
+(62 entries, 4,191 bytes) and closes on every checksum;
+`gst::ReagentStorage`, writable (ARCHITECTURE.md "Source of truth").
+
+- Leading word `1`, then block **20** version **1**, then — in
+  block 18's shape — a static zero marker that does not feed the key.
+- Header words after the marker, in order: a `u32` **0**, modelled as
+  the mod name string (block 18's slot; an empty string encodes as
+  exactly one zero word, so the two readings are byte-identical on
+  the base game and the string reading is the one that matches
+  blocks 18 and 19); then the **entry count** (62). There is no
+  expansion-status byte: the count decodes as a `u32` directly after
+  the zero word and the 62 nested blocks then parse cleanly, which a
+  stray byte would break.
+- Then one nested id-0 block per entry: `string` record path (u32
+  length + bytes) and `u32` count, e.g.
+  `records/items/crafting/materials/craft_aetherialmissive.dbr` × 8
+  (59-character path, 67-byte body), `records/items/materia/
+  compb_unholyinscription.dbr` × 20, `records/items/questitems/
+  scrapmetal.dbr` × 80. An entry keeps nothing but record and count —
+  no seed, no affixes.
+- Which records the game admits (surveyed across all three database
+  layers, `reagents::ReagentKind`): exactly the 125 records whose
+  `craftingMaterial` flag is set — all 107 `ItemRelic` components
+  (`records/items/materia/`) and 18 `QuestItem`s (the 15 under
+  `records/items/crafting/materials/`, Scrap and Dynamite under
+  `records/items/questitems/`, one more under `materia/`). The
+  Components tab is the `ItemRelic`s; every other flagged record is a
+  crafting material. An entry whose record cannot be classified is
+  shown under Crafting Materials and may be vaulted but not merged
+  into.
+- Any other version of block 20 stays opaque, which keeps the file
+  read-only (the re-key rule above).
+
+### `transmutes.gst` (illusion collection)
+
+Block **19** version **2**, typed read-only 2026-09-03 from the user's
+file (`gst::Illusions`); ARCHITECTURE.md keeps the file read-only.
+
+- Leading word `1`; version; static zero marker; mod name string
+  (empty); expansion-status byte (7, as block 18's); `u32` slot count
+  (9).
+- Then one nested id-0 block per equipment slot: `u32` slot id, `u32`
+  record count, then that many record-path strings. Slot ids observed
+  1, 3, 4, 5, 7, 8, 9, 14, 15 holding head, torso, legs, feet, hands,
+  off-hand (foci and shields), weapons (one nested list for every
+  weapon class), shoulders, and medals respectively; the id ↔ slot
+  mapping beyond that observation is unverified.
 
 ### Item serialization (inside saves and stash)
 
@@ -255,7 +304,11 @@ scheme and block/checksum semantics; GD item field order including
 the v8/v11 additions; no relevant crates.io crates.
 
 **Unverified:** whether the 8-byte ARZ entry trailer is a FILETIME or
-padding (preserved verbatim either way); whether IAGD ever shipped
+padding (preserved verbatim either way); whether block 20's zero word
+is a mod name or a bare `u32` (identical bytes on the base game; only
+a mod's `reagents.gst` would tell); whether the game writes a
+zero-count entry or drops it (this app drops it); block 19's slot-id
+mapping; whether IAGD ever shipped
 `GDCryptoDataBuffer.cs` itself (inferred from GDParser's derived
 file); GD Stash's Nexus/ModDB permission text (HTTP 403); whether the "multiple count
 groups" string-table loop in gdlc/lib-gddb reflects real files or

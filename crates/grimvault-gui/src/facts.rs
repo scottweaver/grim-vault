@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use grimvault_core::bucket::Bucket;
 use grimvault_core::gamedata::{BitmapPath, Footprint, GameData, ItemClass, Rarity};
 use grimvault_core::item::Item;
+use grimvault_core::reagents::{ReagentKind, ReagentKinds};
 use grimvault_core::transfer::Footprints;
 use univault_engine::ids::RecordId;
 
@@ -29,6 +30,7 @@ pub struct BaseFacts {
     pub footprint: Option<Footprint>,
     pub bitmap: Option<BitmapPath>,
     pub bucket: Bucket,
+    pub reagent: Option<ReagentKind>,
 }
 
 /// One item's facts: its base record's, with the affix names the
@@ -66,9 +68,9 @@ impl ItemFacts<'_> {
 }
 
 /// The memo: base facts by base record path, affix names by affix
-/// record path. Only [`Footprints`] reads it without warming, so a
-/// caller that will move items warms every item involved first
-/// ([`FactsCache::warm`]).
+/// record path. Only the [`Footprints`] and [`ReagentKinds`] views
+/// read it without warming, so a caller that will move items warms
+/// every item involved first ([`FactsCache::warm`]).
 #[derive(Default)]
 pub struct FactsCache {
     bases: HashMap<String, BaseFacts>,
@@ -128,6 +130,12 @@ impl Footprints for FactsCache {
     }
 }
 
+impl ReagentKinds for FactsCache {
+    fn reagent_kind(&self, item: &Item) -> Option<ReagentKind> {
+        self.bases.get(&item.base_name)?.reagent
+    }
+}
+
 fn resolve_base(game: &GameData, base_name: &str) -> BaseFacts {
     let Some(id) = RecordId::parse(base_name.to_string()) else {
         return unknown("<empty record>".to_string());
@@ -150,6 +158,7 @@ fn resolve_base(game: &GameData, base_name: &str) -> BaseFacts {
         footprint,
         bitmap: info.bitmap,
         bucket,
+        reagent: info.reagent,
     }
 }
 
@@ -163,6 +172,7 @@ fn unknown(name: String) -> BaseFacts {
         footprint: None,
         bitmap: None,
         bucket: Bucket::Misc,
+        reagent: None,
     }
 }
 
@@ -213,12 +223,13 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_cache_knows_no_footprints_until_warmed() {
+    fn an_empty_cache_knows_no_footprints_or_kinds_until_warmed() {
         let cache = FactsCache::default();
         let item = Item {
             base_name: "records/items/x.dbr".into(),
             ..Item::default()
         };
         assert_eq!(cache.footprint(&item), None);
+        assert_eq!(cache.reagent_kind(&item), None);
     }
 }

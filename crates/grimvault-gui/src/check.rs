@@ -1,9 +1,9 @@
 //! `grimvault-gui --check <game dir> <save dir>`: the Loading phase
 //! without a window. Runs the same [`load_world`] the app does and
 //! prints what the Ready phase would hold — layers and archives, every
-//! stash tab with its items named, the store, and every character —
-//! exiting non-zero on any error, a character that failed to open
-//! included.
+//! stash tab with its items named, the component / crafting-material
+//! storage by tab, the store, and every character — exiting non-zero
+//! on any error, a character that failed to open included.
 
 use std::error::Error;
 use std::path::Path;
@@ -12,8 +12,9 @@ use std::process::ExitCode;
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::InventoryState;
 use grimvault_core::item::Item;
+use grimvault_core::reagents::ReagentKind;
 
-use crate::documents::CharacterEntry;
+use crate::documents::{CharacterEntry, Reagents};
 use crate::facts::FactsCache;
 use crate::loader::{LoadStep, WorldPaths, load_world};
 use crate::panes::character::{EQUIPMENT_SLOTS, EXTRA_SACK, MAIN_SACK, WEAPON_SLOTS};
@@ -79,6 +80,8 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
         }
     }
 
+    print_reagents(&world.reagents, &mut facts, &world.game);
+
     let store = world.store.store();
     let status = if world.store.path().is_file() {
         String::new()
@@ -116,6 +119,55 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
         }
     }
     Ok(problems)
+}
+
+fn print_reagents(reagents: &Reagents, facts: &mut FactsCache, game: &GameData) {
+    match reagents {
+        Reagents::Open(doc) => {
+            let storage = doc.storage();
+            println!(
+                "\ncomponent storage: {} ({} bytes, lossless; block 20 {}; {} entries, {} items)",
+                doc.path().display(),
+                doc.baseline_len(),
+                storage.version,
+                storage.entries.len(),
+                storage.total_count()
+            );
+            for kind in ReagentKind::ALL {
+                let mut rows: Vec<(String, usize, u32)> = storage
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, entry)| {
+                        let item = Item {
+                            base_name: entry.record.clone(),
+                            ..Item::default()
+                        };
+                        let base = facts.base(game, &item);
+                        (ReagentKind::in_storage(base.reagent) == kind)
+                            .then(|| (base.name.clone(), index, entry.count))
+                    })
+                    .collect();
+                rows.sort();
+                println!("  {} ({})", kind.label(), rows.len());
+                for (name, index, count) in rows {
+                    println!("    [{index:>2}] {name} x{count}");
+                }
+            }
+        }
+        Reagents::Absent { path } => {
+            println!(
+                "\ncomponent storage: {} is absent (the game writes it once the storage is used)",
+                path.display()
+            );
+        }
+        Reagents::Failed { path, error, .. } => {
+            println!(
+                "\ncomponent storage: {} cannot be edited: {error}",
+                path.display()
+            );
+        }
+    }
 }
 
 fn print_character(

@@ -95,6 +95,14 @@ impl SaveDir {
         self.0.join("transfer.gst")
     }
 
+    /// The component / crafting-material storage file. Not a marker:
+    /// a save directory the game has not yet written it into is still
+    /// a save directory.
+    #[must_use]
+    pub fn reagent_storage(&self) -> PathBuf {
+        self.0.join("reagents.gst")
+    }
+
     /// The directory of per-character folders.
     #[must_use]
     pub fn characters_dir(&self) -> PathBuf {

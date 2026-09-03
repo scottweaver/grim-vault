@@ -275,7 +275,9 @@ fn smoke_gst(path: &Path) -> bool {
         .blocks()
         .iter()
         .map(|block| match block {
-            GstBlock::TransferStash(_) => block.id().raw().to_string(),
+            GstBlock::TransferStash(_) | GstBlock::Illusions(_) | GstBlock::ReagentStorage(_) => {
+                block.id().raw().to_string()
+            }
             GstBlock::Opaque(opaque) => describe_opaque(opaque),
         })
         .collect();
@@ -291,6 +293,25 @@ fn smoke_gst(path: &Path) -> bool {
         println!(
             "   transfer stash {version}: mod {:?}  expansion_status {}  {tabs} tabs, items per tab {per_tab}",
             stash.mod_name, stash.expansion_status
+        );
+    }
+    if let Some(storage) = file.reagent_storage() {
+        println!(
+            "   reagent storage {}: mod {:?}  {} entries, {} items",
+            storage.version,
+            storage.mod_name,
+            storage.entries.len(),
+            storage.total_count()
+        );
+    }
+    if let Some(illusions) = file.illusions() {
+        println!(
+            "   illusions {}: mod {:?}  expansion_status {}  {} slots, {} unlocked",
+            illusions.version,
+            illusions.mod_name,
+            illusions.expansion_status,
+            illusions.slots.len(),
+            illusions.total_count()
         );
     }
     report_round_trip(&bytes, file.encode())

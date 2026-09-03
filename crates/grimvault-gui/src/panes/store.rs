@@ -1,6 +1,6 @@
 //! The vault store pane: a Group → Bucket selector over the computed
 //! type view, then the selected bucket's items as a flow of tiles.
-//! The whole pane is a drop target for stash items.
+//! The whole pane is a drop target for stash items and storage rows.
 
 use std::collections::HashMap;
 
@@ -94,7 +94,7 @@ pub fn show(
         && zone.contains(pointer)
     {
         let fit = match drag.source {
-            DragSource::Stash { .. } => Fit::Fits,
+            DragSource::Stash { .. } | DragSource::Reagent { .. } => Fit::Fits,
             DragSource::Store(_) => Fit::Blocked,
         };
         if fit == Fit::Fits {

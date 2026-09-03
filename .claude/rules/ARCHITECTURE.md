@@ -39,10 +39,14 @@ Q&A). Items marked TBD are open questions, not decisions.
 
 - The game's own files are the authoritative store for character
   data: `save/main/_<Name>/player.gdc` (character),
-  `save/transfer.gst` (shared stash), and the crafting files
-  `save/formulas.gst` (blueprints) and `save/transmutes.gst`. The
-  game owns them; this app is a guest editor. `player.gdc` and
-  `transfer.gst` are the only game-owned files the app writes;
+  `save/transfer.gst` (shared stash), `save/reagents.gst` (the
+  account-wide component and crafting-material storage), and the
+  crafting files `save/formulas.gst` (blueprints) and
+  `save/transmutes.gst` (illusions). The game owns them; this app is
+  a guest editor. `player.gdc`, `transfer.gst`, and `reagents.gst`
+  are the only game-owned files the app writes (`reagents.gst` added
+  2026-09-03 when block 20 was typed from the user's file — it is
+  item storage, the same role as the transfer stash);
   `formulas.gst`, `transmutes.gst`, `playmenu.cpn`, and the
   per-character `levels_world001.map/` trees are read-only until
   renegotiated here. (2026-09-03)

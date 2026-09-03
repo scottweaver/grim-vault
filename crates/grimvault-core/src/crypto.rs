@@ -49,6 +49,10 @@ impl BlockId {
     pub const PLAYER_STASH: Self = Self(4);
     /// `transfer.gst` shared stash.
     pub const TRANSFER_STASH: Self = Self(18);
+    /// `transmutes.gst` unlocked illusions.
+    pub const ILLUSIONS: Self = Self(19);
+    /// `reagents.gst` component and crafting-material storage.
+    pub const REAGENT_STORAGE: Self = Self(20);
 
     /// Wraps a raw block id read from a file.
     #[must_use]

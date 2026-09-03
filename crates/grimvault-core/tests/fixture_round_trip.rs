@@ -338,7 +338,7 @@ fn random_gst_image(rng: &mut Rng) -> Vec<u8> {
     let mut enc = Encoder::new(rng.next());
     enc.write_u32(1 + rng.below(2));
     for _ in 0..=rng.below(4) {
-        let id = BlockId::new(19 + rng.below(20));
+        let id = BlockId::new(21 + rng.below(20));
         enc.write_block(id, |enc| {
             enc.write_u32(1 + rng.below(3));
             if rng.below(2) == 0 {
@@ -349,6 +349,44 @@ fn random_gst_image(rng: &mut Rng) -> Vec<u8> {
         .unwrap();
     }
     enc.finish()
+}
+
+#[test]
+fn real_storage_files_round_trip_typed() {
+    let Some(save_dir) = std::env::var_os("GRIMVAULT_SAVE_DIR").map(PathBuf::from) else {
+        return;
+    };
+    let reagents = std::fs::read(save_dir.join("reagents.gst")).unwrap();
+    let file = GstFile::parse(&reagents).unwrap();
+    assert_eq!(file.encode().unwrap(), reagents, "reagents.gst round trip");
+    let storage = file
+        .reagent_storage()
+        .expect("reagents.gst carries a typed block 20");
+    assert_eq!(storage.version.raw(), 1);
+    assert_eq!(storage.mod_name, "");
+    assert!(!storage.entries.is_empty());
+    assert!(
+        storage
+            .entries
+            .iter()
+            .all(|entry| entry.record.starts_with("records/") && entry.count > 0)
+    );
+    let loaded = grimvault_core::loaded::Loaded::<GstFile>::load(reagents.clone()).unwrap();
+    assert_eq!(loaded.baseline(), &reagents[..]);
+
+    let transmutes = std::fs::read(save_dir.join("transmutes.gst")).unwrap();
+    let file = GstFile::parse(&transmutes).unwrap();
+    assert_eq!(
+        file.encode().unwrap(),
+        transmutes,
+        "transmutes.gst round trip"
+    );
+    let illusions = file
+        .illusions()
+        .expect("transmutes.gst carries a typed block 19");
+    assert_eq!(illusions.version.raw(), 2);
+    assert_eq!(illusions.expansion_status, 7);
+    assert!(!illusions.slots.is_empty());
 }
 
 #[test]

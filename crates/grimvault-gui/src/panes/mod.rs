@@ -1,10 +1,12 @@
-//! The Ready phase's surfaces: the stash, the store, and the
+//! The Ready phase's surfaces: the stash with the component /
+//! crafting-material storage beside it, the store, and the
 //! characters, over one shared cell-grid renderer. Each pane reads the
 //! documents, paints, and *reports* what the user did this frame
 //! through [`DragFrame`]; the app turns those reports into moves after
 //! every pane has drawn, so no pane ever mutates a document.
 
 pub mod character;
+pub mod reagents;
 pub mod stash;
 pub mod store;
 
@@ -222,7 +224,9 @@ pub fn grid_surface(
             let cell = geometry.snap(pointer - drag.grab, drag.footprint);
             let lifted_index = match drag.source {
                 DragSource::Stash { tab: from, index } if from == tab => Some(index),
-                DragSource::Stash { .. } | DragSource::Store(_) => None,
+                DragSource::Stash { .. } | DragSource::Store(_) | DragSource::Reagent { .. } => {
+                    None
+                }
             };
             let others = entries
                 .iter()

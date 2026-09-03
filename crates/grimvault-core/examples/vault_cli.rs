@@ -7,17 +7,23 @@
 //! vault_cli <game dir> <save dir> <store.json> list
 //! vault_cli <game dir> <save dir> <store.json> vault <tab> <index>
 //! vault_cli <game dir> <save dir> <store.json> place <id> <tab> [x y]
+//! vault_cli <game dir> <save dir> <store.json> reagents
+//! vault_cli <game dir> <save dir> <store.json> vault-reagent <index> <count>
+//! vault_cli <game dir> <save dir> <store.json> place-reagent <id>
 //! ```
 //!
-//! Write policy. Each invocation is one load, so both files go through
-//! `backup_first_write` under the `grimvault-bak` policy (five kept):
-//! the stash because ARCHITECTURE.md requires backup-first for every
-//! game-owned write, and the store — this app's own authoritative
-//! vault — because losing it is as bad as losing the stash. The
-//! *destination* of a move is always written before its *source*
-//! (`vault`: store then stash; `place`: stash then store), so a crash
-//! between the two writes leaves the item in both places rather than in
-//! neither.
+//! The `reagent` commands work the component / crafting-material
+//! storage, `reagents.gst`, the same way.
+//!
+//! Write policy. Each invocation is one load, so every file goes
+//! through `backup_first_write` under the `grimvault-bak` policy (five
+//! kept): the game files because ARCHITECTURE.md requires backup-first
+//! for every game-owned write, and the store — this app's own
+//! authoritative vault — because losing it is as bad as losing the
+//! stash. The *destination* of a move is always written before its
+//! *source* (`vault`: store then stash; `place`: stash then store), so
+//! a crash between the two writes leaves the item in both places rather
+//! than in neither.
 
 mod support;
 
@@ -28,11 +34,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use grimvault_core::bucket::{Bucket, Group};
 use grimvault_core::gamedata::GameData;
-use grimvault_core::gst::{GstFile, TransferStash};
+use grimvault_core::gst::{GstFile, ReagentStorage, TransferStash};
 use grimvault_core::item::Item;
 use grimvault_core::loaded::Loaded;
+use grimvault_core::reagents::{ReagentKind, ReagentKinds};
 use grimvault_core::store::{ItemOrigin, StoredItem, StoredItemId, Timestamp, VaultStore};
-use grimvault_core::transfer::{self, ItemIndex, TabIndex};
+use grimvault_core::transfer::{self, ItemIndex, ReagentIndex, TabIndex};
 use univault_engine::ids::{GridPos, RecordId};
 use univault_io::{BackupPolicy, backup_first_write, read_verified};
 
@@ -40,7 +47,8 @@ use support::{describe, load_game_data};
 
 const BACKUPS: BackupPolicy = BackupPolicy::new("grimvault-bak", 5);
 const USAGE: &str = "usage: vault_cli <game dir> <save dir> <store.json> \
-                     (list | vault <tab> <index> | place <id> <tab> [x y])";
+                     (list | vault <tab> <index> | place <id> <tab> [x y] \
+                     | reagents | vault-reagent <index> <count> | place-reagent <id>)";
 
 enum Command {
     List,
@@ -52,6 +60,14 @@ enum Command {
         id: StoredItemId,
         tab: TabIndex,
         pos: Option<GridPos>,
+    },
+    Reagents,
+    VaultReagent {
+        index: ReagentIndex,
+        count: u32,
+    },
+    PlaceReagent {
+        id: StoredItemId,
     },
 }
 
@@ -67,6 +83,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let invocation = parse_args(&args)?;
     let game_data = load_game_data(&invocation.game_dir)?;
     let stash_path = invocation.save_dir.join("transfer.gst");
+    let reagents_path = invocation.save_dir.join("reagents.gst");
     let mut stash = Loaded::<GstFile>::load(read_verified(&stash_path)?)?;
     let mut store = load_store(&invocation.store_path)?;
     println!(
@@ -114,6 +131,39 @@ fn main() -> Result<(), Box<dyn Error>> {
             print_stash(&game_data, transfer_stash(&reparse(&stash_path)?)?);
             print_store(&game_data, &store);
         }
+        Command::Reagents => {
+            let reagents = load_reagents(&reagents_path)?;
+            print_reagents(&game_data, reagent_storage(reagents.model())?);
+        }
+        Command::VaultReagent { index, count } => {
+            let mut reagents = load_reagents(&reagents_path)?;
+            let id = transfer::vault_from_reagents(
+                reagent_storage_mut(reagents.model_mut())?,
+                index,
+                count,
+                &mut store,
+                now()?,
+            )?;
+            println!("vaulted {count} of storage entry {index} as stored item {id}");
+            write_store(&invocation.store_path, &store)?;
+            write_stash(&reagents_path, &reagents)?;
+            print_reagents(&game_data, reagent_storage(&reparse(&reagents_path)?)?);
+            print_store(&game_data, &store);
+        }
+        Command::PlaceReagent { id } => {
+            let mut reagents = load_reagents(&reagents_path)?;
+            transfer::place_in_reagents(
+                &mut store,
+                id,
+                reagent_storage_mut(reagents.model_mut())?,
+                &game_data,
+            )?;
+            println!("placed stored item {id} in the component / crafting-material storage");
+            write_stash(&reagents_path, &reagents)?;
+            write_store(&invocation.store_path, &store)?;
+            print_reagents(&game_data, reagent_storage(&reparse(&reagents_path)?)?);
+            print_store(&game_data, &store);
+        }
     }
     Ok(())
 }
@@ -141,6 +191,14 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
                 y: y.parse()?,
             }),
         },
+        ("reagents", []) => Command::Reagents,
+        ("vault-reagent", [index, count]) => Command::VaultReagent {
+            index: ReagentIndex::new(index.parse()?),
+            count: count.parse()?,
+        },
+        ("place-reagent", [id]) => Command::PlaceReagent {
+            id: StoredItemId::new(id.parse()?),
+        },
         _ => return Err(USAGE.into()),
     };
     Ok(Invocation {
@@ -165,6 +223,26 @@ fn transfer_stash(file: &GstFile) -> Result<&TransferStash, Box<dyn Error>> {
 fn transfer_stash_mut(file: &mut GstFile) -> Result<&mut TransferStash, Box<dyn Error>> {
     file.transfer_stash_mut()
         .ok_or_else(|| "transfer.gst carries no typed transfer stash (block 18)".into())
+}
+
+fn reagent_storage(file: &GstFile) -> Result<&ReagentStorage, Box<dyn Error>> {
+    file.reagent_storage()
+        .ok_or_else(|| "reagents.gst carries no typed reagent storage (block 20)".into())
+}
+
+fn reagent_storage_mut(file: &mut GstFile) -> Result<&mut ReagentStorage, Box<dyn Error>> {
+    file.reagent_storage_mut()
+        .ok_or_else(|| "reagents.gst carries no typed reagent storage (block 20)".into())
+}
+
+fn load_reagents(path: &Path) -> Result<Loaded<GstFile>, Box<dyn Error>> {
+    let reagents = Loaded::<GstFile>::load(read_verified(path)?)?;
+    println!(
+        "loaded {} ({} bytes, lossless)",
+        path.display(),
+        reagents.baseline().len()
+    );
+    Ok(reagents)
 }
 
 fn load_store(path: &Path) -> Result<VaultStore, Box<dyn Error>> {
@@ -236,6 +314,40 @@ fn print_stash(game_data: &GameData, stash: &TransferStash) {
     }
 }
 
+fn print_reagents(game_data: &GameData, storage: &ReagentStorage) {
+    println!(
+        "\ncomponent / crafting-material storage: {} entries, {} items",
+        storage.entries.len(),
+        storage.total_count()
+    );
+    for kind in ReagentKind::ALL {
+        let mut rows: Vec<(String, usize, u32, &str)> = storage
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let item = Item {
+                    base_name: entry.record.clone(),
+                    ..Item::default()
+                };
+                (ReagentKind::in_storage(game_data.reagent_kind(&item)) == kind).then(|| {
+                    (
+                        describe(game_data, &item),
+                        index,
+                        entry.count,
+                        entry.record.as_str(),
+                    )
+                })
+            })
+            .collect();
+        rows.sort();
+        println!("  {} ({})", kind.label(), rows.len());
+        for (name, index, count, record) in rows {
+            println!("    [{index:>2}] {name} x{count}  {record}");
+        }
+    }
+}
+
 fn print_store(game_data: &GameData, store: &VaultStore) {
     println!("\nstore: {} items", store.len());
     let mut by_bucket: BTreeMap<Bucket, Vec<&StoredItem>> = BTreeMap::new();
@@ -281,6 +393,7 @@ fn origin_label(origin: &ItemOrigin) -> String {
     match origin {
         ItemOrigin::TransferStash { tab } => format!("transfer stash tab {tab}"),
         ItemOrigin::Character { name } => format!("character {name}"),
+        ItemOrigin::ReagentStorage => "component / crafting-material storage".to_string(),
         ItemOrigin::Unknown => "unknown".to_string(),
     }
 }

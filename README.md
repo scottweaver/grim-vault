@@ -18,6 +18,12 @@ Early. What works today:
   reproduce.
 - Vaults items out of the transfer stash into its own store and
   places them back, with automatic backups.
+- Reads and edits the component and crafting-material storage
+  (`reagents.gst`) the game shows as its Components / Crafting
+  Materials tabs: components and materials move between it, the
+  transfer stash, and the store by drag-and-drop, counts merging by
+  record. The illusion collection (`transmutes.gst`) is read
+  losslessly but never written.
 - Every block of `player.gdc` is typed and re-encodes faithfully
   after an edit, so character inventories can be vaulted too; the
   first GUI shell shows characters read-only and the next milestone
@@ -66,6 +72,7 @@ Command-line examples against the core library:
 ```sh
 cargo run --release -p grimvault-core --example smoke -- <game dir> <save dir>
 cargo run --release -p grimvault-core --example vault_cli -- <game dir> <save dir> <store.json> list
+cargo run --release -p grimvault-core --example vault_cli -- <game dir> <save dir> <store.json> reagents
 ```
 
 ## Workspace

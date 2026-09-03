@@ -11,7 +11,9 @@
 //! components and relics) names an item, `lootRandomizerName` names an
 //! affix, `itemClassification` is the rarity, `levelRequirement` the
 //! level gate, and the icon whose pixel size defines the footprint is
-//! `bitmap` for gear, `artifactBitmap` for relics, `emptyBitmap` for
+//! `bitmap` for gear and materials, `relicBitmap` for components
+//! (`ItemRelic`, whose `shardBitmap` is the partial piece older game
+//! versions dropped), `artifactBitmap` for relics, `emptyBitmap` for
 //! transmuters (see [`BITMAP_VARIABLES`]).
 
 use std::fmt;
@@ -21,6 +23,8 @@ use univault_engine::arz::{ArzError, ArzFile, DbRecord};
 use univault_engine::ids::{RecordId, normalize};
 use univault_engine::tex::{self, TexError};
 use univault_engine::text::TextDb;
+
+use crate::reagents::ReagentKind;
 
 /// Item quality as the game's `itemClassification` spells it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -101,9 +105,10 @@ impl BitmapPath {
 }
 
 /// The variables an item record may name its icon by, in lookup
-/// order: gear and components use `bitmap`, relics (`ItemArtifact`)
+/// order: gear and crafting materials use `bitmap`, components
+/// (`ItemRelic`) `relicBitmap`, relics (`ItemArtifact`)
 /// `artifactBitmap`, transmuters `emptyBitmap`.
-pub const BITMAP_VARIABLES: [&str; 3] = ["bitmap", "artifactBitmap", "emptyBitmap"];
+pub const BITMAP_VARIABLES: [&str; 4] = ["bitmap", "relicBitmap", "artifactBitmap", "emptyBitmap"];
 
 /// Grid footprint of an item in inventory cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -115,7 +120,9 @@ pub struct Footprint {
 /// What the database says about one item base record. `name` is the
 /// localized name when the text tables have it, else the record's
 /// `FileDescription` (the developers' working name), else the file
-/// stem — never empty.
+/// stem — never empty. `reagent` is the record's place in the
+/// component / crafting-material storage, from its `Class` and
+/// `craftingMaterial` flag ([`ReagentKind::of`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemInfo {
     pub name: String,
@@ -123,6 +130,7 @@ pub struct ItemInfo {
     pub rarity: Option<Rarity>,
     pub level_requirement: Option<u32>,
     pub bitmap: Option<BitmapPath>,
+    pub reagent: Option<ReagentKind>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -187,11 +195,16 @@ impl GameData {
             .localized_name(&record, &["itemNameTag", "description"])
             .or_else(|| record.string("FileDescription").map(str::to_string))
             .unwrap_or_else(|| id.file_stem().to_string());
+        let class = record
+            .string("Class")
+            .map(|class| ItemClass(class.to_string()));
+        let reagent = ReagentKind::of(
+            class.as_ref(),
+            record.boolean("craftingMaterial").unwrap_or(false),
+        );
         Some(Ok(ItemInfo {
             name,
-            class: record
-                .string("Class")
-                .map(|class| ItemClass(class.to_string())),
+            class,
             rarity: record.string("itemClassification").and_then(Rarity::parse),
             level_requirement: record
                 .integer("levelRequirement")
@@ -200,6 +213,7 @@ impl GameData {
                 .iter()
                 .find_map(|variable| record.string(variable))
                 .map(|bitmap| BitmapPath(bitmap.to_string())),
+            reagent,
         }))
     }
 
@@ -329,6 +343,7 @@ mod tests {
     #[test]
     fn bitmap_lookup_order_starts_with_gear_and_ends_with_transmuters() {
         assert_eq!(BITMAP_VARIABLES.first(), Some(&"bitmap"));
+        assert!(BITMAP_VARIABLES.contains(&"relicBitmap"));
         assert_eq!(BITMAP_VARIABLES.last(), Some(&"emptyBitmap"));
     }
 

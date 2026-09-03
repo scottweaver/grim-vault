@@ -18,10 +18,10 @@ use univault_ui::theme::{Palette, Theme};
 
 use crate::autosave::{Activity, Autosave, AutosaveState, Gate, Pending, Verdict};
 use crate::documents::{
-    Backup, CharacterEntry, Doc, Edits, FileStamp, SaveError, SaveOutcome, StashDoc,
-    StashOpenError, StoreDoc, StoreOpenError,
+    Backup, CharacterEntry, Doc, Edits, FileStamp, GstOpenError, ReagentDoc, Reagents, SaveError,
+    SaveOutcome, StashDoc, StoreDoc, StoreOpenError,
 };
-use crate::drag::{self, Applied, DragState, DropTarget, Fit, Move};
+use crate::drag::{self, Applied, DragSource, DragState, DropTarget, Fit, Move, Targets};
 use crate::facts::FactsCache;
 use crate::grid::CELL_PX;
 use crate::icons::{Icon, IconCache};
@@ -306,19 +306,38 @@ fn show_failed(ui: &mut Ui, failed: &LoadFailed, theme: &Theme) -> Option<Phase>
     })
 }
 
-/// Which document a crash between the two writes of a move may leave
-/// duplicated rather than lost: the destination is written first.
+/// The order the dirty documents are written in: a move's destination
+/// goes first, so a crash between two writes leaves the item
+/// duplicated rather than lost. Each move promotes its destination to
+/// the front, so the most recent move's rule always holds and earlier
+/// moves' rules hold whenever they still can.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WriteOrder {
-    StoreFirst,
-    StashFirst,
+struct WriteOrder([Doc; 3]);
+
+impl Default for WriteOrder {
+    fn default() -> Self {
+        Self([Doc::Store, Doc::Stash, Doc::Reagents])
+    }
+}
+
+impl WriteOrder {
+    fn prioritize(&mut self, destination: Doc) {
+        let Some(slot) = self.0.iter().position(|doc| *doc == destination) else {
+            return;
+        };
+        self.0[..=slot].rotate_right(1);
+    }
+
+    fn docs(self) -> [Doc; 3] {
+        self.0
+    }
 }
 
 /// Why a reload from disk failed.
 #[derive(Debug, thiserror::Error)]
 enum ReloadError {
     #[error("{0}")]
-    Stash(#[from] StashOpenError),
+    Gst(#[from] GstOpenError),
     #[error("{0}")]
     Store(#[from] StoreOpenError),
 }
@@ -329,6 +348,7 @@ pub struct World {
     game: GameData,
     report: LoadReport,
     stash: StashDoc,
+    reagents: Reagents,
     store: StoreDoc,
     characters: Vec<CharacterEntry>,
     facts: FactsCache,
@@ -355,6 +375,7 @@ impl World {
         match &watcher {
             Ok(watcher) => watcher.watch(vec![
                 loaded.stash.path().to_path_buf(),
+                loaded.reagents.path().to_path_buf(),
                 loaded.store.path().to_path_buf(),
             ]),
             Err(error) => toasts.error(format!(
@@ -366,6 +387,7 @@ impl World {
             game: loaded.game,
             report: loaded.report,
             stash: loaded.stash,
+            reagents: loaded.reagents,
             store: loaded.store,
             characters: loaded.characters,
             facts: FactsCache::default(),
@@ -378,7 +400,7 @@ impl World {
             watcher,
             refresh: RefreshTracker::default(),
             conflicts: Vec::new(),
-            write_order: WriteOrder::StoreFirst,
+            write_order: WriteOrder::default(),
         }
     }
 
@@ -436,6 +458,7 @@ impl World {
             panes::stash::show(
                 ui,
                 &self.stash,
+                &self.reagents,
                 &mut self.stash_view,
                 theme,
                 &mut cx,
@@ -461,9 +484,10 @@ impl World {
             ui.colored_label(colour, format!("autosave: {state}"));
             ui.separator();
             ui.weak(format!(
-                "backup-first: stash {}, store {}",
+                "backup-first: stash {}, store {}, components {}",
                 backup_label(self.stash.backup()),
-                backup_label(self.store.backup())
+                backup_label(self.store.backup()),
+                reagents_backup_label(&self.reagents)
             ))
             .on_hover_text(
                 "The first write of each file since it was loaded takes a grimvault-bak backup beside it; \
@@ -514,6 +538,14 @@ impl World {
                     (DropTarget::StashCell { tab, .. }, Fit::Unresolvable) => toasts.error(format!(
                         "tab {tab} holds items with unknown footprints; nothing can be placed there"
                     )),
+                    (DropTarget::Reagents(_), Fit::Blocked | Fit::Unresolvable) => {
+                        match state.source {
+                            DragSource::Stash { .. } | DragSource::Store(_) => toasts.info(
+                                "only components and crafting materials go in the storage; snapped back",
+                            ),
+                            DragSource::Reagent { .. } => {}
+                        }
+                    }
                     (DropTarget::StashTab(_) | DropTarget::Store, Fit::Blocked | Fit::Unresolvable) => {}
                 }
             }
@@ -562,10 +594,14 @@ impl World {
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |elapsed| elapsed.as_secs()),
         );
+        let moved = self.describe_move(mv);
         let outcome = drag::apply(
             mv,
-            self.stash.stash_mut(),
-            self.store.store_mut(),
+            Targets {
+                stash: self.stash.stash_mut(),
+                store: self.store.store_mut(),
+                reagents: self.reagents.doc_mut().map(ReagentDoc::storage_mut),
+            },
             &self.facts,
             now,
         );
@@ -573,24 +609,93 @@ impl World {
             Ok(Applied::Vaulted(id)) => {
                 self.stash.mark_edited();
                 self.store.mark_edited();
-                self.write_order = WriteOrder::StoreFirst;
-                let name = self
-                    .store
-                    .store()
-                    .get(id)
-                    .map(|stored| self.facts.facts(&self.game, stored.item()).display_name())
-                    .unwrap_or_default();
-                toasts.info(format!("vaulted {name} as stored item {id}"));
+                self.write_order.prioritize(Doc::Store);
+                toasts.info(format!("vaulted {moved} as stored item {id}"));
             }
             Ok(Applied::Placed(pos)) => {
                 self.stash.mark_edited();
                 self.store.mark_edited();
-                self.write_order = WriteOrder::StashFirst;
+                self.write_order.prioritize(Doc::Stash);
                 toasts.info(format!("placed in the stash at ({}, {})", pos.x, pos.y));
             }
             Ok(Applied::Rearranged(_)) => self.stash.mark_edited(),
+            Ok(Applied::ReagentVaulted(id)) => {
+                self.mark_reagents_edited();
+                self.store.mark_edited();
+                self.write_order.prioritize(Doc::Store);
+                toasts.info(format!("vaulted {moved} as stored item {id}"));
+            }
+            Ok(Applied::ReagentStored) => {
+                self.store.mark_edited();
+                self.mark_reagents_edited();
+                self.write_order.prioritize(Doc::Reagents);
+                toasts.info(format!("moved {moved} into the component storage"));
+            }
+            Ok(Applied::ReagentStashed) => {
+                self.stash.mark_edited();
+                self.mark_reagents_edited();
+                self.write_order.prioritize(Doc::Reagents);
+                toasts.info(format!("moved {moved} into the component storage"));
+            }
+            Ok(Applied::ReagentPlaced(pos)) => {
+                self.mark_reagents_edited();
+                self.stash.mark_edited();
+                self.write_order.prioritize(Doc::Stash);
+                toasts.info(format!(
+                    "placed {moved} in the stash at ({}, {})",
+                    pos.x, pos.y
+                ));
+            }
             Ok(Applied::Unmoved) => {}
             Err(error) => toasts.error(error.to_string()),
+        }
+    }
+
+    fn mark_reagents_edited(&mut self) {
+        if let Some(doc) = self.reagents.doc_mut() {
+            doc.mark_edited();
+        }
+    }
+
+    /// `name` or `N × name` of what a move carries, resolved before the
+    /// move so the toast can name it wherever it ended up.
+    fn describe_move(&mut self, mv: Move) -> String {
+        let item = match mv {
+            Move::Vault { tab, index } | Move::StashReagent { tab, index } => self
+                .stash
+                .stash()
+                .tabs
+                .get(usize::try_from(tab.value()).unwrap_or(usize::MAX))
+                .and_then(|tab| tab.items.get(index.value()))
+                .map(|placed| placed.item.clone()),
+            Move::PlaceAt { id, .. }
+            | Move::PlaceFirstFit { id, .. }
+            | Move::StoreReagent { id } => self
+                .store
+                .store()
+                .get(id)
+                .map(|stored| stored.item().clone()),
+            Move::VaultReagent { index, count }
+            | Move::ReagentToStashAt { index, count, .. }
+            | Move::ReagentToStashFirstFit { index, count, .. } => self
+                .reagents
+                .doc()
+                .and_then(|doc| doc.storage().entries.get(index.value()))
+                .map(|entry| grimvault_core::item::Item {
+                    base_name: entry.record.clone(),
+                    stack_count: count,
+                    ..grimvault_core::item::Item::default()
+                }),
+            Move::RearrangeAt { .. } | Move::RearrangeFirstFit { .. } | Move::Stay => None,
+        };
+        let Some(item) = item else {
+            return "the item".to_string();
+        };
+        let name = self.facts.facts(&self.game, &item).display_name();
+        if item.stack_count > 1 {
+            format!("{} × {name}", item.stack_count)
+        } else {
+            name
         }
     }
 
@@ -605,21 +710,44 @@ impl World {
             .flat_map(|tab| tab.items.iter().map(|placed| &placed.item));
         self.facts.warm_all(&self.game, stash_items);
         let stored = match mv {
-            Move::PlaceAt { id, .. } | Move::PlaceFirstFit { id, .. } => Some(id),
+            Move::PlaceAt { id, .. }
+            | Move::PlaceFirstFit { id, .. }
+            | Move::StoreReagent { id } => Some(id),
             Move::Vault { .. }
             | Move::RearrangeAt { .. }
             | Move::RearrangeFirstFit { .. }
+            | Move::VaultReagent { .. }
+            | Move::StashReagent { .. }
+            | Move::ReagentToStashAt { .. }
+            | Move::ReagentToStashFirstFit { .. }
             | Move::Stay => None,
         };
         if let Some(stored) = stored.and_then(|id| self.store.store().get(id)) {
             self.facts.warm(&self.game, stored.item());
         }
+        let entries = self
+            .reagents
+            .doc()
+            .map(|doc| {
+                doc.storage()
+                    .entries
+                    .iter()
+                    .map(panes::reagents::entry_item)
+            })
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        self.facts.warm_all(&self.game, &entries);
     }
 
     fn pending(&self) -> Pending {
-        match (self.stash.edits(), self.store.edits()) {
-            (Edits::Saved, Edits::Saved) => Pending::Nothing,
-            (Edits::Unsaved, _) | (_, Edits::Unsaved) => Pending::Edits,
+        if Doc::ALL
+            .iter()
+            .any(|doc| self.edits(*doc) == Edits::Unsaved)
+        {
+            Pending::Edits
+        } else {
+            Pending::Nothing
         }
     }
 
@@ -661,11 +789,7 @@ impl World {
     }
 
     fn flush(&mut self, toasts: &mut Toasts) -> Result<(), SaveError> {
-        let order = match self.write_order {
-            WriteOrder::StoreFirst => [Doc::Store, Doc::Stash],
-            WriteOrder::StashFirst => [Doc::Stash, Doc::Store],
-        };
-        for doc in order {
+        for doc in self.write_order.docs() {
             if self.edits(doc) == Edits::Unsaved {
                 match self.save(doc)? {
                     SaveOutcome::Saved {
@@ -692,10 +816,16 @@ impl World {
         }
     }
 
+    /// Writes one document; an absent or unusable `reagents.gst` has
+    /// nothing to write and never has edits to flush.
     fn save(&mut self, doc: Doc) -> Result<SaveOutcome, SaveError> {
         match doc {
             Doc::Stash => self.stash.save(),
             Doc::Store => self.store.save(),
+            Doc::Reagents => self
+                .reagents
+                .doc_mut()
+                .map_or(Ok(SaveOutcome::Saved { backup: None }), ReagentDoc::save),
         }
     }
 
@@ -703,6 +833,7 @@ impl World {
         match doc {
             Doc::Stash => self.stash.edits(),
             Doc::Store => self.store.edits(),
+            Doc::Reagents => self.reagents.edits(),
         }
     }
 
@@ -710,6 +841,7 @@ impl World {
         match doc {
             Doc::Stash => self.stash.stamp(),
             Doc::Store => self.store.stamp(),
+            Doc::Reagents => self.reagents.stamp(),
         }
     }
 
@@ -717,6 +849,7 @@ impl World {
         match doc {
             Doc::Stash => self.stash.path(),
             Doc::Store => self.store.path(),
+            Doc::Reagents => self.reagents.path(),
         }
     }
 
@@ -724,6 +857,7 @@ impl World {
         match doc {
             Doc::Stash => self.stash.reload()?,
             Doc::Store => self.store.reload()?,
+            Doc::Reagents => self.reagents.reload()?,
         }
         Ok(())
     }
@@ -732,6 +866,11 @@ impl World {
         match doc {
             Doc::Stash => self.stash.keep_mine(),
             Doc::Store => self.store.keep_mine(),
+            Doc::Reagents => {
+                if let Some(doc) = self.reagents.doc_mut() {
+                    doc.keep_mine();
+                }
+            }
         }
     }
 
@@ -758,7 +897,7 @@ impl World {
         let mut settled: Vec<Doc> = Vec::new();
         for poll in &polls {
             for (path, seen) in &poll.stamps {
-                for doc in [Doc::Stash, Doc::Store] {
+                for doc in Doc::ALL {
                     if path != self.path(doc) {
                         continue;
                     }
@@ -858,6 +997,33 @@ fn backup_label(backup: Backup) -> &'static str {
     match backup {
         Backup::Armed => "armed",
         Backup::Taken => "taken",
+    }
+}
+
+fn reagents_backup_label(reagents: &Reagents) -> &'static str {
+    match reagents {
+        Reagents::Open(doc) => backup_label(doc.backup()),
+        Reagents::Absent { .. } => "no file",
+        Reagents::Failed { .. } => "read-only",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_order_puts_the_latest_destination_first_and_keeps_the_rest() {
+        let mut order = WriteOrder::default();
+        assert_eq!(order.docs(), [Doc::Store, Doc::Stash, Doc::Reagents]);
+        order.prioritize(Doc::Stash);
+        assert_eq!(order.docs(), [Doc::Stash, Doc::Store, Doc::Reagents]);
+        order.prioritize(Doc::Reagents);
+        assert_eq!(order.docs(), [Doc::Reagents, Doc::Stash, Doc::Store]);
+        order.prioritize(Doc::Store);
+        assert_eq!(order.docs(), [Doc::Store, Doc::Reagents, Doc::Stash]);
+        order.prioritize(Doc::Store);
+        assert_eq!(order.docs(), [Doc::Store, Doc::Reagents, Doc::Stash]);
     }
 }
 

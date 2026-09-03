@@ -14,6 +14,13 @@
 //! way with integer cells ([`SackItem`]), except that the save stores
 //! no sack dimensions: they come from the game's UI records, recorded
 //! once in [`SackDimensions`].
+//!
+//! The component / crafting-material storage (`reagents.gst`,
+//! [`ReagentStorage`]) has no grid at all: it holds one counted entry
+//! per record. Moving into it keeps only the record and the stack
+//! count — that is all the game keeps — and is allowed only for a
+//! record the database flags as storable ([`ReagentKinds`]); moving
+//! out of it creates a plain item of that record with the count taken.
 
 use std::fmt;
 
@@ -25,8 +32,9 @@ use univault_engine::ids::{GridPos, RecordId};
 use crate::block::StashTab;
 use crate::gamedata::{Footprint, GameData};
 use crate::gdc::{PlayerFile, Sack};
-use crate::gst::TransferStash;
+use crate::gst::{ReagentEntry, ReagentStorage, TransferStash};
 use crate::item::{Item, SackItem, StashItem};
+use crate::reagents::ReagentKinds;
 use crate::store::{ItemOrigin, StoredItemId, Timestamp, VaultStore};
 
 /// Position of a tab within the transfer stash, as the file orders
@@ -149,6 +157,29 @@ impl fmt::Display for ItemIndex {
     }
 }
 
+/// Position of an entry within the component / crafting-material
+/// storage, as the file orders them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ReagentIndex(usize);
+
+impl ReagentIndex {
+    #[must_use]
+    pub const fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    #[must_use]
+    pub const fn value(self) -> usize {
+        self.0
+    }
+}
+
+impl fmt::Display for ReagentIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Supplies the grid footprint of an item, `None` when the source has
 /// no record of it.
 pub trait Footprints {
@@ -230,6 +261,41 @@ pub enum TransferError {
         pos: GridPos,
         footprint: Footprint,
     },
+    #[error("the storage has no entry {0}")]
+    NoSuchReagent(ReagentIndex),
+    /// A move of zero items was asked for.
+    #[error("cannot take zero of entry {0}")]
+    ZeroReagentCount(ReagentIndex),
+    #[error("entry {index} holds {available}, fewer than the {requested} asked for")]
+    ReagentCountExceeded {
+        index: ReagentIndex,
+        requested: u32,
+        available: u32,
+    },
+    /// Merging would push the entry's count past what the file can hold.
+    #[error("entry {index} ({record:?}) cannot hold {more} more")]
+    ReagentCountOverflow {
+        index: ReagentIndex,
+        record: String,
+        more: u32,
+    },
+    /// The stored item's record is not one the game keeps in the
+    /// storage (no `craftingMaterial` flag, or unknown to the
+    /// database).
+    #[error("stored item {id} ({base_name:?}) is not a component or crafting material")]
+    NotAReagent { id: StoredItemId, base_name: String },
+    /// The stash item's record is not one the game keeps in the
+    /// storage.
+    #[error("tab {tab} item {index} ({base_name:?}) is not a component or crafting material")]
+    StashItemNotAReagent {
+        tab: TabIndex,
+        index: ItemIndex,
+        base_name: String,
+    },
+    /// The entry's record has no known footprint, so it cannot be laid
+    /// out on a grid.
+    #[error("storage entry {index} ({record:?}) has no known footprint")]
+    UnknownReagentFootprint { index: ReagentIndex, record: String },
 }
 
 /// The cells every item in `tab` occupies, in item order.
@@ -464,6 +530,256 @@ pub fn place_in_sack_at(
         Blocked::Occupied => TransferError::SackOccupied { sack, pos },
     })?;
     move_into_sack(store, id, player, sack, sack_cell(sack, pos, footprint)?)
+}
+
+/// Takes `count` of storage entry `index` into the store as one stack
+/// with [`ItemOrigin::ReagentStorage`], removing the entry when it is
+/// emptied.
+///
+/// # Errors
+/// [`TransferError::NoSuchReagent`], [`TransferError::ZeroReagentCount`]
+/// or [`TransferError::ReagentCountExceeded`]; the store and storage
+/// are unchanged on error.
+pub fn vault_from_reagents(
+    storage: &mut ReagentStorage,
+    index: ReagentIndex,
+    count: u32,
+    store: &mut VaultStore,
+    at: Timestamp,
+) -> Result<StoredItemId, TransferError> {
+    let entry = reagent_ref(storage, index)?;
+    if count == 0 {
+        return Err(TransferError::ZeroReagentCount(index));
+    }
+    if count > entry.count {
+        return Err(TransferError::ReagentCountExceeded {
+            index,
+            requested: count,
+            available: entry.count,
+        });
+    }
+    let item = Item {
+        base_name: entry.record.clone(),
+        stack_count: count,
+        ..Item::default()
+    };
+    let id = store.add(item, ItemOrigin::ReagentStorage, at);
+    take_from_entry(storage, index, count);
+    Ok(id)
+}
+
+/// Moves stored item `id` into the storage: its stack count merges into
+/// the entry for its record, or a new entry is appended.
+///
+/// # Errors
+/// [`TransferError::NotAReagent`] when the record is not storable,
+/// [`TransferError::ReagentCountOverflow`] when the merged count would
+/// not fit, or [`TransferError::NoSuchStoredItem`]; the store and
+/// storage are unchanged on error.
+pub fn place_in_reagents(
+    store: &mut VaultStore,
+    id: StoredItemId,
+    storage: &mut ReagentStorage,
+    kinds: &impl ReagentKinds,
+) -> Result<(), TransferError> {
+    let stored = store.get(id).ok_or(TransferError::NoSuchStoredItem(id))?;
+    if kinds.reagent_kind(stored.item()).is_none() {
+        return Err(TransferError::NotAReagent {
+            id,
+            base_name: stored.item().base_name.clone(),
+        });
+    }
+    check_merge(storage, stored.item())?;
+    let stored = store.take(id).ok_or(TransferError::NoSuchStoredItem(id))?;
+    merge_into_storage(storage, stored.into_item());
+    Ok(())
+}
+
+/// Moves item `index` of stash tab `tab` into the storage, merging its
+/// stack count into the entry for its record or appending one.
+///
+/// # Errors
+/// [`TransferError::StashItemNotAReagent`] when the record is not
+/// storable, [`TransferError::ReagentCountOverflow`] when the merged
+/// count would not fit, or [`TransferError::NoSuchTab`] /
+/// [`TransferError::NoSuchItem`]; the stash and storage are unchanged
+/// on error.
+pub fn stash_to_reagents(
+    stash: &mut TransferStash,
+    tab: TabIndex,
+    index: ItemIndex,
+    storage: &mut ReagentStorage,
+    kinds: &impl ReagentKinds,
+) -> Result<(), TransferError> {
+    let placed = tab_ref(stash, tab)?
+        .items
+        .get(index.value())
+        .ok_or(TransferError::NoSuchItem { tab, index })?;
+    if kinds.reagent_kind(&placed.item).is_none() {
+        return Err(TransferError::StashItemNotAReagent {
+            tab,
+            index,
+            base_name: placed.item.base_name.clone(),
+        });
+    }
+    check_merge(storage, &placed.item)?;
+    let placed = tab_mut(stash, tab)?.items.remove(index.value());
+    merge_into_storage(storage, placed.item);
+    Ok(())
+}
+
+/// Takes `count` of storage entry `index` into the first free spot of
+/// stash tab `tab` as one stack, returning where it landed.
+///
+/// # Errors
+/// [`TransferError::UnknownReagentFootprint`] when the record's
+/// footprint is unknown, [`TransferError::NoRoom`], or any other
+/// [`TransferError`]; the stash and storage are unchanged on error.
+pub fn reagents_to_stash(
+    storage: &mut ReagentStorage,
+    index: ReagentIndex,
+    count: u32,
+    stash: &mut TransferStash,
+    tab: TabIndex,
+    footprints: &impl Footprints,
+) -> Result<GridPos, TransferError> {
+    let (item, footprint) = reagent_stack(storage, index, count, footprints)?;
+    let pos = find_slot(tab_ref(stash, tab)?, footprint, footprints)?
+        .ok_or(TransferError::NoRoom { tab, footprint })?;
+    tab_mut(stash, tab)?.items.push(StashItem {
+        item,
+        x: cell_to_f32(pos.x),
+        y: cell_to_f32(pos.y),
+    });
+    take_from_entry(storage, index, count);
+    Ok(pos)
+}
+
+/// Takes `count` of storage entry `index` into stash tab `tab` at
+/// exactly `pos` as one stack.
+///
+/// # Errors
+/// [`TransferError::OutOfBounds`] or [`TransferError::Occupied`] when
+/// the cells are not free, or any other [`TransferError`]; the stash
+/// and storage are unchanged on error.
+pub fn reagents_to_stash_at(
+    storage: &mut ReagentStorage,
+    index: ReagentIndex,
+    count: u32,
+    stash: &mut TransferStash,
+    tab: TabIndex,
+    pos: GridPos,
+    footprints: &impl Footprints,
+) -> Result<(), TransferError> {
+    let (item, footprint) = reagent_stack(storage, index, count, footprints)?;
+    let grid = grid(tab_ref(stash, tab)?, footprints)?;
+    check_placement(&grid, rect_at(pos, footprint)).map_err(|blocked| match blocked {
+        Blocked::OutOfBounds => TransferError::OutOfBounds {
+            tab,
+            pos,
+            footprint,
+        },
+        Blocked::Occupied => TransferError::Occupied { tab, pos },
+    })?;
+    tab_mut(stash, tab)?.items.push(StashItem {
+        item,
+        x: cell_to_f32(pos.x),
+        y: cell_to_f32(pos.y),
+    });
+    take_from_entry(storage, index, count);
+    Ok(())
+}
+
+/// The stack `count` of entry `index` would become, with its
+/// footprint; every refusal happens here, before anything moves.
+fn reagent_stack(
+    storage: &ReagentStorage,
+    index: ReagentIndex,
+    count: u32,
+    footprints: &impl Footprints,
+) -> Result<(Item, Footprint), TransferError> {
+    let entry = reagent_ref(storage, index)?;
+    if count == 0 {
+        return Err(TransferError::ZeroReagentCount(index));
+    }
+    if count > entry.count {
+        return Err(TransferError::ReagentCountExceeded {
+            index,
+            requested: count,
+            available: entry.count,
+        });
+    }
+    let item = Item {
+        base_name: entry.record.clone(),
+        stack_count: count,
+        ..Item::default()
+    };
+    let footprint =
+        footprints
+            .footprint(&item)
+            .ok_or_else(|| TransferError::UnknownReagentFootprint {
+                index,
+                record: entry.record.clone(),
+            })?;
+    Ok((item, footprint))
+}
+
+/// The count an item contributes to the storage: its stack, and one
+/// for an item written without a stack.
+fn stack_of(item: &Item) -> u32 {
+    item.stack_count.max(1)
+}
+
+/// Whether the entry `item` would merge into can take its stack.
+fn check_merge(storage: &ReagentStorage, item: &Item) -> Result<(), TransferError> {
+    let more = stack_of(item);
+    match storage.position_of(&item.base_name) {
+        Some(slot) if storage.entries[slot].count.checked_add(more).is_none() => {
+            Err(TransferError::ReagentCountOverflow {
+                index: ReagentIndex::new(slot),
+                record: item.base_name.clone(),
+                more,
+            })
+        }
+        Some(_) | None => Ok(()),
+    }
+}
+
+/// Merges an item whose record [`check_merge`] accepted; a stack that
+/// still overflows here is a defect in that check, so it saturates
+/// rather than wrapping.
+fn merge_into_storage(storage: &mut ReagentStorage, item: Item) {
+    let more = stack_of(&item);
+    match storage.position_of(&item.base_name) {
+        Some(slot) => {
+            let entry = &mut storage.entries[slot];
+            entry.count = entry.count.saturating_add(more);
+        }
+        None => storage.entries.push(ReagentEntry {
+            record: item.base_name,
+            count: more,
+        }),
+    }
+}
+
+/// Decrements entry `index` by `count` — already checked to be within
+/// the entry — and removes the entry once empty.
+fn take_from_entry(storage: &mut ReagentStorage, index: ReagentIndex, count: u32) {
+    let entry = &mut storage.entries[index.value()];
+    entry.count = entry.count.saturating_sub(count);
+    if entry.count == 0 {
+        storage.entries.remove(index.value());
+    }
+}
+
+fn reagent_ref(
+    storage: &ReagentStorage,
+    index: ReagentIndex,
+) -> Result<&ReagentEntry, TransferError> {
+    storage
+        .entries
+        .get(index.value())
+        .ok_or(TransferError::NoSuchReagent(index))
 }
 
 /// A sack cell as the file stores it.
@@ -1033,6 +1349,310 @@ mod tests {
         }
         assert_eq!(cell_from_f32(0.25), None);
         assert_eq!(cell_from_f32(-0.0), Some(0));
+    }
+
+    mod reagents {
+        use super::*;
+        use crate::gst::{ReagentEntry, ReagentStorage, ReagentStorageVersion};
+        use crate::reagents::ReagentKind;
+
+        const SHARD: &str = "records/items/crafting/materials/craft_aethershard.dbr";
+
+        struct Kinds;
+
+        impl ReagentKinds for Kinds {
+            fn reagent_kind(&self, item: &Item) -> Option<ReagentKind> {
+                match item.base_name.as_str() {
+                    CLUSTER => Some(ReagentKind::Component),
+                    SHARD => Some(ReagentKind::CraftingMaterial),
+                    _ => None,
+                }
+            }
+        }
+
+        fn entry(record: &str, count: u32) -> ReagentEntry {
+            ReagentEntry {
+                record: record.into(),
+                count,
+            }
+        }
+
+        fn storage(entries: Vec<ReagentEntry>) -> ReagentStorage {
+            ReagentStorage {
+                version: ReagentStorageVersion::new(1).unwrap(),
+                mod_name: String::new(),
+                entries,
+            }
+        }
+
+        fn stack(base_name: &str, count: u32) -> Item {
+            Item {
+                base_name: base_name.into(),
+                stack_count: count,
+                ..Item::default()
+            }
+        }
+
+        const FIRST: ReagentIndex = ReagentIndex::new(0);
+
+        #[test]
+        fn vaulting_part_of_an_entry_decrements_it_and_all_of_it_removes_it() {
+            let mut storage = storage(vec![entry(SHARD, 15), entry(CLUSTER, 20)]);
+            let mut store = VaultStore::new();
+
+            let id = vault_from_reagents(&mut storage, FIRST, 5, &mut store, NOW).unwrap();
+            let stored = store.get(id).unwrap();
+            assert_eq!(stored.item(), &stack(SHARD, 5));
+            assert_eq!(stored.origin(), &ItemOrigin::ReagentStorage);
+            assert_eq!(stored.stored_at(), NOW);
+            assert_eq!(storage.entries, vec![entry(SHARD, 10), entry(CLUSTER, 20)]);
+
+            vault_from_reagents(&mut storage, FIRST, 10, &mut store, NOW).unwrap();
+            assert_eq!(storage.entries, vec![entry(CLUSTER, 20)]);
+            assert_eq!(store.len(), 2);
+        }
+
+        #[test]
+        fn vaulting_refuses_bad_indexes_and_counts_without_touching_the_store() {
+            let mut storage = storage(vec![entry(SHARD, 15)]);
+            let mut store = VaultStore::new();
+            let before = storage.clone();
+            assert_eq!(
+                vault_from_reagents(&mut storage, ReagentIndex::new(1), 1, &mut store, NOW),
+                Err(TransferError::NoSuchReagent(ReagentIndex::new(1)))
+            );
+            assert_eq!(
+                vault_from_reagents(&mut storage, FIRST, 0, &mut store, NOW),
+                Err(TransferError::ZeroReagentCount(FIRST))
+            );
+            assert_eq!(
+                vault_from_reagents(&mut storage, FIRST, 16, &mut store, NOW),
+                Err(TransferError::ReagentCountExceeded {
+                    index: FIRST,
+                    requested: 16,
+                    available: 15
+                })
+            );
+            assert!(store.is_empty());
+            assert_eq!(storage, before);
+            assert_eq!(
+                store.add(stack(SHARD, 1), ItemOrigin::Unknown, NOW),
+                StoredItemId::new(1)
+            );
+        }
+
+        #[test]
+        fn placing_merges_into_the_existing_entry_or_appends() {
+            let mut storage = storage(vec![entry(SHARD, 15)]);
+            let mut store = VaultStore::new();
+            let shards = store.add(stack(SHARD, 5), ItemOrigin::Unknown, NOW);
+            let clusters = store.add(stack(CLUSTER, 3), ItemOrigin::Unknown, NOW);
+            let single = store.add(stack(CLUSTER, 0), ItemOrigin::Unknown, NOW);
+
+            place_in_reagents(&mut store, shards, &mut storage, &Kinds).unwrap();
+            assert_eq!(storage.entries, vec![entry(SHARD, 20)]);
+            place_in_reagents(&mut store, clusters, &mut storage, &Kinds).unwrap();
+            assert_eq!(storage.entries, vec![entry(SHARD, 20), entry(CLUSTER, 3)]);
+            place_in_reagents(&mut store, single, &mut storage, &Kinds).unwrap();
+            assert_eq!(storage.entries, vec![entry(SHARD, 20), entry(CLUSTER, 4)]);
+            assert!(store.is_empty());
+        }
+
+        #[test]
+        fn placing_refuses_non_reagents_and_overflow_without_touching_anything() {
+            let mut storage = storage(vec![entry(SHARD, u32::MAX - 1)]);
+            let mut store = VaultStore::new();
+            let legs = store.add(item(LEGS), ItemOrigin::Unknown, NOW);
+            let too_many = store.add(stack(SHARD, 2), ItemOrigin::Unknown, NOW);
+            let before = (store.clone(), storage.clone());
+
+            assert_eq!(
+                place_in_reagents(&mut store, legs, &mut storage, &Kinds),
+                Err(TransferError::NotAReagent {
+                    id: legs,
+                    base_name: LEGS.into()
+                })
+            );
+            assert_eq!(
+                place_in_reagents(&mut store, too_many, &mut storage, &Kinds),
+                Err(TransferError::ReagentCountOverflow {
+                    index: FIRST,
+                    record: SHARD.into(),
+                    more: 2
+                })
+            );
+            assert_eq!(
+                place_in_reagents(&mut store, StoredItemId::new(9), &mut storage, &Kinds),
+                Err(TransferError::NoSuchStoredItem(StoredItemId::new(9)))
+            );
+            assert_eq!((store, storage), before);
+        }
+
+        #[test]
+        fn stash_items_move_into_the_storage_by_record() {
+            let mut stash = stash(vec![tab(
+                10,
+                19,
+                vec![placed(LEGS, 0.0, 0.0), placed(CLUSTER, 5.0, 5.0)],
+            )]);
+            stash.tabs[0].items[1].item.stack_count = 7;
+            let mut storage = storage(vec![entry(CLUSTER, 1)]);
+
+            stash_to_reagents(&mut stash, TAB0, ItemIndex::new(1), &mut storage, &Kinds).unwrap();
+            assert_eq!(storage.entries, vec![entry(CLUSTER, 8)]);
+            assert_eq!(stash.tabs[0].items, vec![placed(LEGS, 0.0, 0.0)]);
+
+            let before = (stash.clone(), storage.clone());
+            assert_eq!(
+                stash_to_reagents(&mut stash, TAB0, ItemIndex::new(0), &mut storage, &Kinds),
+                Err(TransferError::StashItemNotAReagent {
+                    tab: TAB0,
+                    index: ItemIndex::new(0),
+                    base_name: LEGS.into()
+                })
+            );
+            assert_eq!(
+                stash_to_reagents(&mut stash, TAB0, ItemIndex::new(4), &mut storage, &Kinds),
+                Err(TransferError::NoSuchItem {
+                    tab: TAB0,
+                    index: ItemIndex::new(4)
+                })
+            );
+            assert_eq!(
+                stash_to_reagents(
+                    &mut stash,
+                    TabIndex::new(2),
+                    ItemIndex::new(0),
+                    &mut storage,
+                    &Kinds
+                ),
+                Err(TransferError::NoSuchTab(TabIndex::new(2)))
+            );
+            assert_eq!((stash, storage), before);
+        }
+
+        #[test]
+        fn storage_entries_land_in_the_stash_at_first_fit_or_an_exact_cell() {
+            let footprints = table();
+            let mut stash = stash(vec![tab(4, 4, vec![placed(LEGS, 0.0, 0.0)])]);
+            let mut storage = storage(vec![entry(CLUSTER, 10)]);
+
+            let pos =
+                reagents_to_stash(&mut storage, FIRST, 4, &mut stash, TAB0, &footprints).unwrap();
+            assert_eq!(pos, at(2, 0));
+            assert_eq!(stash.tabs[0].items[1].item, stack(CLUSTER, 4));
+            assert_eq!(storage.entries, vec![entry(CLUSTER, 6)]);
+
+            reagents_to_stash_at(
+                &mut storage,
+                FIRST,
+                6,
+                &mut stash,
+                TAB0,
+                at(3, 2),
+                &footprints,
+            )
+            .unwrap();
+            assert_eq!(stash.tabs[0].items[2].item, stack(CLUSTER, 6));
+            assert_eq!(
+                (stash.tabs[0].items[2].x, stash.tabs[0].items[2].y),
+                (3.0, 2.0)
+            );
+            assert!(storage.entries.is_empty());
+        }
+
+        #[test]
+        fn refused_stash_placements_leave_the_storage_and_stash_unchanged() {
+            let footprints = table();
+            let mut stash = stash(vec![tab(2, 3, vec![placed(LEGS, 0.0, 0.0)])]);
+            let mut storage = storage(vec![entry(CLUSTER, 2), entry(MYSTERY, 1)]);
+            let before = (stash.clone(), storage.clone());
+            let cluster = footprints.footprint(&item(CLUSTER)).unwrap();
+
+            assert_eq!(
+                reagents_to_stash(&mut storage, FIRST, 1, &mut stash, TAB0, &footprints),
+                Err(TransferError::NoRoom {
+                    tab: TAB0,
+                    footprint: cluster
+                })
+            );
+            assert_eq!(
+                reagents_to_stash(
+                    &mut storage,
+                    ReagentIndex::new(1),
+                    1,
+                    &mut stash,
+                    TAB0,
+                    &footprints
+                ),
+                Err(TransferError::UnknownReagentFootprint {
+                    index: ReagentIndex::new(1),
+                    record: MYSTERY.into()
+                })
+            );
+            assert_eq!(
+                reagents_to_stash(&mut storage, FIRST, 3, &mut stash, TAB0, &footprints),
+                Err(TransferError::ReagentCountExceeded {
+                    index: FIRST,
+                    requested: 3,
+                    available: 2
+                })
+            );
+            assert_eq!(
+                reagents_to_stash_at(
+                    &mut storage,
+                    FIRST,
+                    1,
+                    &mut stash,
+                    TAB0,
+                    at(0, 0),
+                    &footprints
+                ),
+                Err(TransferError::Occupied {
+                    tab: TAB0,
+                    pos: at(0, 0)
+                })
+            );
+            assert_eq!(
+                reagents_to_stash_at(
+                    &mut storage,
+                    FIRST,
+                    1,
+                    &mut stash,
+                    TAB0,
+                    at(1, 2),
+                    &footprints
+                ),
+                Err(TransferError::OutOfBounds {
+                    tab: TAB0,
+                    pos: at(1, 2),
+                    footprint: cluster
+                })
+            );
+            assert_eq!(
+                reagents_to_stash(
+                    &mut storage,
+                    FIRST,
+                    1,
+                    &mut stash,
+                    TabIndex::new(5),
+                    &footprints
+                ),
+                Err(TransferError::NoSuchTab(TabIndex::new(5)))
+            );
+            assert_eq!((stash, storage), before);
+        }
+
+        #[test]
+        fn vault_then_place_restores_the_storage_exactly() {
+            let mut storage = storage(vec![entry(SHARD, 15), entry(CLUSTER, 20)]);
+            let before = storage.clone();
+            let mut store = VaultStore::new();
+            let id = vault_from_reagents(&mut storage, FIRST, 3, &mut store, NOW).unwrap();
+            place_in_reagents(&mut store, id, &mut storage, &Kinds).unwrap();
+            assert_eq!(storage, before);
+            assert!(store.is_empty());
+        }
     }
 
     mod sacks {

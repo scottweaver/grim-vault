@@ -103,6 +103,8 @@ pub enum ItemOrigin {
     TransferStash { tab: TabIndex },
     /// A character's own inventory or stash.
     Character { name: String },
+    /// The component / crafting-material storage, `reagents.gst`.
+    ReagentStorage,
     /// Provenance not recorded.
     Unknown,
 }
@@ -493,6 +495,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ItemOrigin::Unknown).unwrap(),
             json!({ "kind": "unknown" })
+        );
+        assert_eq!(
+            serde_json::to_value(ItemOrigin::ReagentStorage).unwrap(),
+            json!({ "kind": "reagentStorage" })
         );
     }
 }

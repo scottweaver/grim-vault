@@ -1,22 +1,26 @@
 //! The open files as the shell holds them: the transfer stash, the
-//! vault store, and the read-only characters. Each writable document
-//! knows the disk stamp it was read under (the external-change guard's
-//! baseline), whether it holds unsaved edits, and whether this load's
-//! backup has been taken yet — the backup-first rule is *one backup per
-//! load*, so the first write since load takes it and later writes
-//! reuse it (ARCHITECTURE.md "Data flow").
+//! component / crafting-material storage, the vault store, and the
+//! read-only characters. Each writable document knows the disk stamp
+//! it was read under (the external-change guard's baseline), whether
+//! it holds unsaved edits, and whether this load's backup has been
+//! taken yet — the backup-first rule is *one backup per load*, so the
+//! first write since load takes it and later writes reuse it
+//! (ARCHITECTURE.md "Data flow").
 //!
 //! `player.gdc` is never written by this build — the vault loop edits
-//! only `transfer.gst` — so [`CharacterDoc`] has no save path at all.
+//! only `transfer.gst` and `reagents.gst` — so [`CharacterDoc`] has no
+//! save path at all.
 
 use std::fmt;
 use std::io;
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use grimvault_core::block::SaveEncodeError;
+use grimvault_core::crypto::BlockId;
 use grimvault_core::gdc::{GdcError, PlayerFile};
-use grimvault_core::gst::{GstError, GstFile, TransferStash};
+use grimvault_core::gst::{GstError, GstFile, ReagentStorage, TransferStash};
 use grimvault_core::loaded::{LoadError, Loaded};
 use grimvault_core::store::{StoreError, VaultStore};
 use thiserror::Error;
@@ -81,7 +85,7 @@ pub enum SaveOutcome {
 /// Why a save failed outright.
 #[derive(Debug, Error)]
 pub enum SaveError {
-    #[error("encoding the stash: {0}")]
+    #[error("encoding: {0}")]
     Encode(#[from] SaveEncodeError),
     #[error("writing {}: {source}", path.display())]
     Write { path: PathBuf, source: io::Error },
@@ -92,6 +96,12 @@ pub enum SaveError {
 pub enum Doc {
     Stash,
     Store,
+    Reagents,
+}
+
+impl Doc {
+    /// Every writable document.
+    pub const ALL: [Doc; 3] = [Doc::Stash, Doc::Store, Doc::Reagents];
 }
 
 impl fmt::Display for Doc {
@@ -99,6 +109,7 @@ impl fmt::Display for Doc {
         f.write_str(match self {
             Self::Stash => "transfer stash",
             Self::Store => "vault store",
+            Self::Reagents => "component storage",
         })
     }
 }
@@ -116,9 +127,9 @@ fn write_document(path: &Path, bytes: &[u8], backup: &mut Backup) -> io::Result<
     }
 }
 
-/// Why `transfer.gst` could not be opened for editing.
+/// Why a `.gst` could not be opened for editing.
 #[derive(Debug, Error)]
-pub enum StashOpenError {
+pub enum GstOpenError {
     #[error("reading {}: {source}", path.display())]
     Read { path: PathBuf, source: io::Error },
     #[error("{}: {source}", path.display())]
@@ -126,39 +137,77 @@ pub enum StashOpenError {
         path: PathBuf,
         source: LoadError<GstError, SaveEncodeError>,
     },
-    #[error("{} carries no typed transfer stash (block 18)", path.display())]
-    NoTransferStash { path: PathBuf },
+    #[error("{} carries no typed {block}", path.display())]
+    NoTypedBlock { path: PathBuf, block: BlockId },
 }
 
-/// The shared stash, editable because it passed the lossless gate and
-/// carries a typed block 18.
+/// The typed block a [`GstDoc`] edits, and how to find it in the file.
+pub trait EditableBlock: fmt::Debug + Sized {
+    /// The block's id, for the error when a file lacks it.
+    const ID: BlockId;
+    fn of(file: &GstFile) -> Option<&Self>;
+    fn of_mut(file: &mut GstFile) -> Option<&mut Self>;
+}
+
+impl EditableBlock for TransferStash {
+    const ID: BlockId = BlockId::TRANSFER_STASH;
+
+    fn of(file: &GstFile) -> Option<&Self> {
+        file.transfer_stash()
+    }
+
+    fn of_mut(file: &mut GstFile) -> Option<&mut Self> {
+        file.transfer_stash_mut()
+    }
+}
+
+impl EditableBlock for ReagentStorage {
+    const ID: BlockId = BlockId::REAGENT_STORAGE;
+
+    fn of(file: &GstFile) -> Option<&Self> {
+        file.reagent_storage()
+    }
+
+    fn of_mut(file: &mut GstFile) -> Option<&mut Self> {
+        file.reagent_storage_mut()
+    }
+}
+
+/// A `.gst` editable through its typed block `B`, because it passed
+/// the lossless gate and carries that block.
 #[derive(Debug)]
-pub struct StashDoc {
+pub struct GstDoc<B: EditableBlock> {
     path: PathBuf,
     loaded: Loaded<GstFile>,
     stamp: Option<FileStamp>,
     edits: Edits,
     backup: Backup,
+    block: PhantomData<B>,
 }
 
-impl StashDoc {
-    /// Reads, gates, and stamps the stash.
+/// The shared stash.
+pub type StashDoc = GstDoc<TransferStash>;
+/// The component / crafting-material storage.
+pub type ReagentDoc = GstDoc<ReagentStorage>;
+
+impl<B: EditableBlock> GstDoc<B> {
+    /// Reads, gates, and stamps the file.
     ///
     /// # Errors
-    /// [`StashOpenError`], including a `NotLossless` load — never
-    /// edited around.
-    pub fn open(path: PathBuf) -> Result<Self, StashOpenError> {
-        let bytes = read_verified(&path).map_err(|source| StashOpenError::Read {
+    /// [`GstOpenError`], including a `NotLossless` load — never edited
+    /// around.
+    pub fn open(path: PathBuf) -> Result<Self, GstOpenError> {
+        let bytes = read_verified(&path).map_err(|source| GstOpenError::Read {
             path: path.clone(),
             source,
         })?;
         let stamp = stamp_of(&path);
-        let loaded = Loaded::<GstFile>::load(bytes).map_err(|source| StashOpenError::Load {
+        let loaded = Loaded::<GstFile>::load(bytes).map_err(|source| GstOpenError::Load {
             path: path.clone(),
             source,
         })?;
-        if loaded.model().transfer_stash().is_none() {
-            return Err(StashOpenError::NoTransferStash { path });
+        if B::of(loaded.model()).is_none() {
+            return Err(GstOpenError::NoTypedBlock { path, block: B::ID });
         }
         Ok(Self {
             path,
@@ -166,6 +215,7 @@ impl StashDoc {
             stamp,
             edits: Edits::Saved,
             backup: Backup::Armed,
+            block: PhantomData,
         })
     }
 
@@ -174,22 +224,18 @@ impl StashDoc {
         &self.path
     }
 
-    /// Block 18. `open` proved it present and `GstFile` cannot drop a
-    /// block, so the lookup cannot fail.
+    /// The typed block. `open` proved it present and `GstFile` cannot
+    /// drop a block, so the lookup cannot fail.
     #[must_use]
-    pub fn stash(&self) -> &TransferStash {
-        self.loaded
-            .model()
-            .transfer_stash()
-            .expect("open refused a file without block 18 and blocks cannot be removed")
+    pub fn block(&self) -> &B {
+        B::of(self.loaded.model())
+            .expect("open refused a file without the block and blocks cannot be removed")
     }
 
-    /// Block 18 for editing; call [`Self::mark_edited`] after.
-    pub fn stash_mut(&mut self) -> &mut TransferStash {
-        self.loaded
-            .model_mut()
-            .transfer_stash_mut()
-            .expect("open refused a file without block 18 and blocks cannot be removed")
+    /// The typed block for editing; call [`Self::mark_edited`] after.
+    pub fn block_mut(&mut self) -> &mut B {
+        B::of_mut(self.loaded.model_mut())
+            .expect("open refused a file without the block and blocks cannot be removed")
     }
 
     pub fn mark_edited(&mut self) {
@@ -250,10 +296,126 @@ impl StashDoc {
     /// document is untouched, edits included.
     ///
     /// # Errors
-    /// [`StashOpenError`].
-    pub fn reload(&mut self) -> Result<(), StashOpenError> {
+    /// [`GstOpenError`].
+    pub fn reload(&mut self) -> Result<(), GstOpenError> {
         *self = Self::open(self.path.clone())?;
         Ok(())
+    }
+}
+
+impl StashDoc {
+    /// Block 18.
+    #[must_use]
+    pub fn stash(&self) -> &TransferStash {
+        self.block()
+    }
+
+    /// Block 18 for editing; call [`Self::mark_edited`] after.
+    pub fn stash_mut(&mut self) -> &mut TransferStash {
+        self.block_mut()
+    }
+}
+
+impl ReagentDoc {
+    /// Block 20.
+    #[must_use]
+    pub fn storage(&self) -> &ReagentStorage {
+        self.block()
+    }
+
+    /// Block 20 for editing; call [`Self::mark_edited`] after.
+    pub fn storage_mut(&mut self) -> &mut ReagentStorage {
+        self.block_mut()
+    }
+}
+
+/// `reagents.gst` however it fared: the game writes it only once the
+/// storage has been used, so a save directory without it is normal,
+/// and a file this build cannot type is shown, not fatal.
+#[derive(Debug)]
+pub enum Reagents {
+    Open(ReagentDoc),
+    Absent {
+        path: PathBuf,
+    },
+    /// Present but not editable; `stamp` is the file as it was found,
+    /// so the guard only reacts when it changes again.
+    Failed {
+        path: PathBuf,
+        stamp: Option<FileStamp>,
+        error: GstOpenError,
+    },
+}
+
+impl Reagents {
+    /// Opens `path` when it exists.
+    #[must_use]
+    pub fn open(path: PathBuf) -> Self {
+        if !path.is_file() {
+            return Self::Absent { path };
+        }
+        let stamp = stamp_of(&path);
+        match ReagentDoc::open(path.clone()) {
+            Ok(doc) => Self::Open(doc),
+            Err(error) => Self::Failed { path, stamp, error },
+        }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Open(doc) => doc.path(),
+            Self::Absent { path } | Self::Failed { path, .. } => path,
+        }
+    }
+
+    /// The stamp the guard compares against: the document's, or the
+    /// file's as it was found unusable; `None` while absent.
+    #[must_use]
+    pub fn stamp(&self) -> Option<FileStamp> {
+        match self {
+            Self::Open(doc) => doc.stamp(),
+            Self::Absent { .. } => None,
+            Self::Failed { stamp, .. } => *stamp,
+        }
+    }
+
+    /// The document's edits; an absent or unusable file has none.
+    #[must_use]
+    pub fn edits(&self) -> Edits {
+        self.doc().map_or(Edits::Saved, GstDoc::edits)
+    }
+
+    #[must_use]
+    pub fn doc(&self) -> Option<&ReagentDoc> {
+        match self {
+            Self::Open(doc) => Some(doc),
+            Self::Absent { .. } | Self::Failed { .. } => None,
+        }
+    }
+
+    pub fn doc_mut(&mut self) -> Option<&mut ReagentDoc> {
+        match self {
+            Self::Open(doc) => Some(doc),
+            Self::Absent { .. } | Self::Failed { .. } => None,
+        }
+    }
+
+    /// Re-reads the file: an open document reloads in place (keeping
+    /// its edits on failure), an absent or failed one is opened afresh
+    /// — whatever the disk now holds becomes the state, a file the
+    /// game has since written included.
+    ///
+    /// # Errors
+    /// [`GstOpenError`] when an open document could not be re-read.
+    pub fn reload(&mut self) -> Result<(), GstOpenError> {
+        match self {
+            Self::Open(doc) => doc.reload(),
+            Self::Absent { path } | Self::Failed { path, .. } => {
+                *self = Self::open(path.clone());
+                Ok(())
+            }
+        }
     }
 }
 
@@ -364,13 +526,13 @@ impl StoreDoc {
         Ok(SaveOutcome::Saved { backup })
     }
 
-    /// See [`StashDoc::keep_mine`].
+    /// See [`GstDoc::keep_mine`].
     pub fn keep_mine(&mut self) {
         self.stamp = stamp_of(&self.path);
         self.backup = Backup::Armed;
     }
 
-    /// See [`StashDoc::reload`].
+    /// See [`GstDoc::reload`].
     ///
     /// # Errors
     /// [`StoreOpenError`].
@@ -477,6 +639,9 @@ pub fn open_characters(save_dir: &SaveDir) -> Vec<CharacterEntry> {
 
 #[cfg(test)]
 mod tests {
+    use grimvault_core::crypto::{EncodeError, Encoder};
+    use grimvault_core::gst::ReagentEntry;
+
     use super::*;
 
     struct Scratch(PathBuf);
@@ -507,6 +672,24 @@ mod tests {
             .flatten()
             .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
             .count()
+    }
+
+    fn reagents_bytes() -> Vec<u8> {
+        let mut enc = Encoder::new(0x77DF_33C5);
+        enc.write_u32(1);
+        enc.write_block(BlockId::REAGENT_STORAGE, |enc| {
+            enc.write_u32(1);
+            enc.write_zero_marker();
+            enc.write_u32(0);
+            enc.write_u32(1);
+            enc.write_block(BlockId::NESTED, |enc| {
+                enc.write_string("records/items/materia/compa_moltenskin.dbr")?;
+                enc.write_u32(20);
+                Ok::<(), EncodeError>(())
+            })
+        })
+        .unwrap();
+        enc.finish()
     }
 
     #[test]
@@ -595,12 +778,74 @@ mod tests {
         std::fs::write(&path, b"\x0b\x00\x00\x00begin_block").unwrap();
         assert!(matches!(
             StashDoc::open(path).unwrap_err(),
-            StashOpenError::Load { .. }
+            GstOpenError::Load { .. }
         ));
         assert!(matches!(
             StashDoc::open(scratch.0.join("absent.gst")).unwrap_err(),
-            StashOpenError::Read { .. }
+            GstOpenError::Read { .. }
         ));
+    }
+
+    #[test]
+    fn a_reagent_file_edits_saves_backup_first_and_reloads() {
+        let scratch = Scratch::new("reagents");
+        let path = scratch.0.join("reagents.gst");
+        let bytes = reagents_bytes();
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(matches!(
+            StashDoc::open(path.clone()).unwrap_err(),
+            GstOpenError::NoTypedBlock { block, .. } if block == BlockId::TRANSFER_STASH
+        ));
+
+        let mut reagents = Reagents::open(path.clone());
+        let doc = reagents.doc_mut().expect("typed block 20 opens");
+        assert_eq!(doc.baseline_len(), bytes.len());
+        assert_eq!(doc.storage().entries[0].count, 20);
+        doc.storage_mut().entries.push(ReagentEntry {
+            record: "records/items/questitems/scrapmetal.dbr".into(),
+            count: 80,
+        });
+        doc.mark_edited();
+        let outcome = doc.save().unwrap();
+        assert!(
+            matches!(outcome, SaveOutcome::Saved { backup: Some(_) }),
+            "{outcome:?}"
+        );
+        assert_eq!(backups_of(&path), 1);
+        assert_eq!(doc.edits(), Edits::Saved);
+        let written = GstFile::parse(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written.reagent_storage().unwrap().entries.len(), 2);
+
+        std::fs::write(&path, &bytes).unwrap();
+        reagents.reload().unwrap();
+        assert_eq!(reagents.doc().unwrap().storage().entries.len(), 1);
+    }
+
+    #[test]
+    fn absent_reagents_are_normal_and_appear_on_reload() {
+        let scratch = Scratch::new("reagents-absent");
+        let path = scratch.0.join("reagents.gst");
+        let mut reagents = Reagents::open(path.clone());
+        assert!(matches!(reagents, Reagents::Absent { .. }));
+        assert!(reagents.doc().is_none());
+        assert_eq!(reagents.path(), path);
+        reagents.reload().unwrap();
+        assert!(matches!(reagents, Reagents::Absent { .. }));
+
+        std::fs::write(&path, reagents_bytes()).unwrap();
+        reagents.reload().unwrap();
+        assert!(reagents.doc().is_some());
+
+        std::fs::write(&path, b"\x0b\x00\x00\x00begin_block").unwrap();
+        let mut failed = Reagents::open(path.clone());
+        assert!(matches!(failed, Reagents::Failed { .. }));
+        assert_eq!(failed.stamp(), stamp_of(&path));
+        assert_eq!(failed.edits(), Edits::Saved);
+        failed.reload().unwrap();
+        assert!(matches!(failed, Reagents::Failed { .. }));
+        std::fs::remove_file(&path).unwrap();
+        failed.reload().unwrap();
+        assert!(matches!(failed, Reagents::Absent { .. }));
     }
 
     #[test]

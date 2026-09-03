@@ -5,8 +5,8 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-03 (M3 GUI shell and full player.gdc typing
-landed on `feat/gd-read-stack`; awaiting user acceptance)
+Last updated: 2026-09-03 (component / crafting-material storage
+added after the first live run; awaiting user acceptance)
 
 ## Active workstream
 
@@ -19,7 +19,9 @@ are done and the app runs**: a five-crate workspace —
 (art-free egui kit), `grimvault-core` (rolling-XOR codec, **every
 `player.gdc` block typed** so edits re-key correctly, `*.gst`, layered
 game-data facade, `vault-store.json`, buckets, stash *and* sack
-transfer ops, the `Loaded` lossless gate), and `grimvault-gui` (the
+transfer ops, the `Loaded` lossless gate, and — after the user's
+first live run — the account-wide component / crafting-material
+storage `reagents.gst` typed and writable), and `grimvault-gui` (the
 egui shell: setup with dir candidates, background load with progress,
 transfer-stash grids with icons, store by Group/Bucket, read-only
 characters, drag-and-drop and double-click moves through
@@ -38,7 +40,7 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
 |---|---|---|
 | `main` | trunk | at `810f7a8` (rules layer), no code |
 | `design/shared-engine-split` | engine-split proposal + GD format references | docs only, one commit ahead of `main`; `feat/gd-read-stack` branched from it |
-| `feat/gd-read-stack` | workspace, read stack (M1), vault loop (M2), GUI shell (M3), typed player.gdc | local, not pushed (no remote yet); 261 tests green |
+| `feat/gd-read-stack` | workspace, read stack (M1), vault loop (M2), GUI shell (M3), typed player.gdc, reagent storage | local, not pushed (no remote yet); 288 tests green |
 
 ## Next up
 
@@ -63,6 +65,27 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
    re-point tq-univault (R1–R5 done on the vendored copies).
 
 ## Most recent meaningful progress
+
+- **2026-09-03 — Component and crafting-material storage (branch
+  `feat/gd-read-stack`, not merged).** User feedback from the first
+  live run: the app lacked the game's dedicated component and
+  crafting-material storage. Decoded `reagents.gst` (block 20 v1:
+  zero marker, empty mod name, count, then `record + u32 count`
+  entries) and `transmutes.gst` (block 19 v2: the per-slot illusion
+  collection, typed read-only). Classification comes from the
+  database's own `craftingMaterial` flag (125 records: 107
+  `ItemRelic` components, 18 quest-class materials). Core gained
+  `ReagentStorage`, `Illusions`, `reagents::ReagentKind`, four
+  transfer ops, `ItemOrigin::ReagentStorage`, and `relicBitmap` as
+  an icon source (components had no icon before). GUI: Components /
+  Crafting materials tabs beside the stash with the full drag
+  matrix, a third document under autosave / backup / guard,
+  `WriteOrder` promoting the destination. `reagents.gst` is now a
+  writable game-owned file in ARCHITECTURE. CLI vault → place ends
+  byte-identical. 288 tests. Why: a vault that ignores the storage
+  the game itself uses for components is not usable. Risk: the game
+  has not yet read a rewritten `reagents.gst`; whether it tolerates
+  a removed (zero-count) entry versus expecting it kept is unknown.
 
 - **2026-09-03 — M3 egui shell + full `player.gdc` typing (branch
   `feat/gd-read-stack`, not merged).** `grimvault-gui`: phases

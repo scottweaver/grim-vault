@@ -1,8 +1,8 @@
 //! The Loading phase: reading the layered game data exactly as
 //! `grimvault-core`'s examples do (three database layers, three
 //! `Text_EN.arc`, three `Items.arc`, missing expansion files skipped),
-//! then opening the transfer stash, the vault store, and every
-//! character. [`load_world`] is the whole path as one function, so the
+//! then opening the transfer stash, the component / crafting-material
+//! storage, the vault store, and every character. [`load_world`] is the whole path as one function, so the
 //! window and the headless `--check` run the same code; [`start`] moves
 //! it onto a thread and reports progress over a channel.
 
@@ -19,7 +19,7 @@ use univault_engine::arz::{ArzDialect, ArzError, ArzFile};
 use univault_engine::codec::Codec;
 
 use crate::documents::{
-    CharacterEntry, StashDoc, StashOpenError, StoreDoc, StoreOpenError, open_characters,
+    CharacterEntry, GstOpenError, Reagents, StashDoc, StoreDoc, StoreOpenError, open_characters,
 };
 use crate::setup::{GameDir, SaveDir};
 
@@ -55,6 +55,7 @@ pub enum LoadStep {
     ItemArchive(&'static str),
     Localization,
     Stash,
+    Reagents,
     Store,
     Characters,
 }
@@ -67,6 +68,7 @@ impl fmt::Display for LoadStep {
             Self::ItemArchive(relative) => write!(f, "reading item archive {relative}"),
             Self::Localization => f.write_str("building the localization table"),
             Self::Stash => f.write_str("opening transfer.gst"),
+            Self::Reagents => f.write_str("opening reagents.gst"),
             Self::Store => f.write_str("opening the vault store"),
             Self::Characters => f.write_str("opening characters"),
         }
@@ -87,6 +89,7 @@ pub struct LoadedWorld {
     pub game: GameData,
     pub report: LoadReport,
     pub stash: StashDoc,
+    pub reagents: Reagents,
     pub store: StoreDoc,
     pub characters: Vec<CharacterEntry>,
 }
@@ -103,7 +106,7 @@ pub enum LoadFailure {
     #[error("localization text: {0}")]
     Localization(ArcError),
     #[error("transfer stash: {0}")]
-    Stash(#[from] StashOpenError),
+    Stash(#[from] GstOpenError),
     #[error("vault store: {0}")]
     Store(#[from] StoreOpenError),
 }
@@ -112,7 +115,8 @@ pub enum LoadFailure {
 ///
 /// # Errors
 /// [`LoadFailure`] for the first fatal step; a character that fails
-/// to open is not fatal and is reported inside the world instead.
+/// to open, or a `reagents.gst` that is absent or cannot be typed, is
+/// not fatal and is reported inside the world instead.
 pub fn load_world(
     paths: &WorldPaths,
     progress: &mut dyn FnMut(LoadStep),
@@ -145,6 +149,8 @@ pub fn load_world(
 
     progress(LoadStep::Stash);
     let stash = StashDoc::open(paths.save.transfer_stash())?;
+    progress(LoadStep::Reagents);
+    let reagents = Reagents::open(paths.save.reagent_storage());
     progress(LoadStep::Store);
     let store = StoreDoc::open(paths.store.clone())?;
     progress(LoadStep::Characters);
@@ -153,6 +159,7 @@ pub fn load_world(
         game,
         report,
         stash,
+        reagents,
         store,
         characters,
     })
