@@ -43,12 +43,13 @@ use grimvault_core::transfer::{self, ItemIndex, ReagentIndex, TabIndex};
 use univault_engine::ids::{GridPos, RecordId};
 use univault_io::{BackupPolicy, backup_first_write, read_verified};
 
-use support::{describe, load_game_data};
+use support::{cli_paths, describe, load_game_data};
 
 const BACKUPS: BackupPolicy = BackupPolicy::new("grimvault-bak", 5);
-const USAGE: &str = "usage: vault_cli <game dir> <save dir> <store.json> \
+const USAGE: &str = "usage: vault_cli [--game DIR] [--save DIR] [--store FILE] \
                      (list | vault <tab> <index> | place <id> <tab> [x y] \
-                     | reagents | vault-reagent <index> <count> | place-reagent <id>)";
+                     | reagents | vault-reagent <index> <count> | place-reagent <id>) \
+                     — paths not given come from the app's saved settings";
 
 enum Command {
     List,
@@ -169,7 +170,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
-    let [game_dir, save_dir, store_path, command, rest @ ..] = args else {
+    let paths = cli_paths(args)?;
+    let [command, rest @ ..] = paths.rest.as_slice() else {
         return Err(USAGE.into());
     };
     let command = match (command.as_str(), rest) {
@@ -202,9 +204,9 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
         _ => return Err(USAGE.into()),
     };
     Ok(Invocation {
-        game_dir: PathBuf::from(game_dir),
-        save_dir: PathBuf::from(save_dir),
-        store_path: PathBuf::from(store_path),
+        game_dir: paths.game_dir,
+        save_dir: paths.save_dir,
+        store_path: paths.store_path,
         command,
     })
 }

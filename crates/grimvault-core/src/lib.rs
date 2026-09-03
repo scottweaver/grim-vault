@@ -29,5 +29,6 @@ pub mod item;
 pub mod loaded;
 pub mod platform;
 pub mod reagents;
+pub mod settings;
 pub mod store;
 pub mod transfer;

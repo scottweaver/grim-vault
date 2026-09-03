@@ -3,7 +3,8 @@
 //! resolved item names, rarity, and footprints, plus the byte-identical
 //! round-trip status of every file.
 //!
-//! `cargo run --release -p grimvault-core --example smoke -- <game dir> <save dir>`
+//! `cargo run --release -p grimvault-core --example smoke -- [--game DIR] [--save DIR]`
+//! — paths not given come from the app's saved settings.
 
 mod support;
 
@@ -14,15 +15,16 @@ use std::path::Path;
 use grimvault_core::gdc::PlayerFile;
 use grimvault_core::gst::GstFile;
 
-use support::{describe, load_game_data};
+use support::{cli_paths, describe, load_game_data};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut args = std::env::args().skip(1);
-    let (Some(game_dir), Some(save_dir)) = (args.next(), args.next()) else {
-        return Err("usage: smoke <game dir> <save dir>".into());
-    };
-    let game_data = load_game_data(Path::new(&game_dir))?;
-    let save_dir = Path::new(&save_dir);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let paths = cli_paths(&args)?;
+    if !paths.rest.is_empty() {
+        return Err("usage: smoke [--game DIR] [--save DIR]".into());
+    }
+    let game_data = load_game_data(&paths.game_dir)?;
+    let save_dir: &Path = &paths.save_dir;
 
     let mut characters: Vec<_> = fs::read_dir(save_dir.join("main"))?
         .filter_map(Result::ok)

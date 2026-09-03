@@ -4,11 +4,12 @@
 
 use std::error::Error;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use grimvault_core::gamedata::{GameData, text_from_archives};
 use grimvault_core::item::Item;
+use grimvault_core::settings::{ConfigDir, Settings};
 use univault_engine::arc::ArcFile;
 use univault_engine::arz::{ArzDialect, ArzFile};
 use univault_engine::codec::Codec;
@@ -91,4 +92,68 @@ pub fn describe(game_data: &GameData, item: &Item) -> String {
         String::new()
     };
     format!("{name}{stack} [{rarity}{footprint}]")
+}
+
+/// Where an example reads from: explicit `--game DIR`, `--save DIR`,
+/// and `--store FILE` flags win, and anything not given comes from the
+/// app's saved settings (`settings.json` in the config directory, the
+/// store beside it) so the paths need typing only once, in the app.
+pub struct CliPaths {
+    pub game_dir: PathBuf,
+    pub save_dir: PathBuf,
+    // Shared by every example; the read-only ones never open the store.
+    #[allow(dead_code)]
+    pub store_path: PathBuf,
+    /// The arguments that were not path flags, in order.
+    pub rest: Vec<String>,
+}
+
+pub fn cli_paths(args: &[String]) -> Result<CliPaths, Box<dyn Error>> {
+    let (mut game, mut save, mut store) = (None, None, None);
+    let mut rest = Vec::new();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        let slot = match word.as_str() {
+            "--game" => &mut game,
+            "--save" => &mut save,
+            "--store" => &mut store,
+            _ => {
+                rest.push(word.clone());
+                continue;
+            }
+        };
+        let Some(value) = words.next() else {
+            return Err(format!("{word} needs a value").into());
+        };
+        *slot = Some(PathBuf::from(value));
+    }
+    let config = ConfigDir::resolve()?;
+    let settings = if game.is_none() || save.is_none() {
+        Some(load_settings(&config)?)
+    } else {
+        None
+    };
+    let from_settings = |field: fn(&Settings) -> &PathBuf| settings.as_ref().map(field).cloned();
+    Ok(CliPaths {
+        game_dir: game
+            .or_else(|| from_settings(|s| &s.game_dir))
+            .ok_or("no game dir: pass --game DIR or run the app once")?,
+        save_dir: save
+            .or_else(|| from_settings(|s| &s.save_dir))
+            .ok_or("no save dir: pass --save DIR or run the app once")?,
+        store_path: store.unwrap_or_else(|| config.store_file()),
+        rest,
+    })
+}
+
+fn load_settings(config: &ConfigDir) -> Result<Settings, Box<dyn Error>> {
+    let path = config.settings_file();
+    if !path.is_file() {
+        return Err(format!(
+            "no settings at {}: run the app once, or pass --game DIR --save DIR",
+            path.display()
+        )
+        .into());
+    }
+    Ok(Settings::parse(&fs::read(&path)?)?)
 }

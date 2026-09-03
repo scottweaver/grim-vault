@@ -61,19 +61,26 @@ config directory: `~/Library/Application Support/grim-vault` (macOS),
 `%APPDATA%\grim-vault` (Windows), `$XDG_CONFIG_HOME/grim-vault`
 (Linux).
 
-Headless check of the load path, without a window:
+Every command-line tool reads the same saved settings, so the paths
+are typed once, in the app. Headless check of the load path, without
+a window:
 
 ```sh
-cargo run --release -p grimvault-gui -- --check <game dir> <save dir>
+cargo run --release -p grimvault-gui -- --check
 ```
 
-Command-line examples against the core library:
+Command-line examples against the core library (the store defaults
+to the one in the config directory):
 
 ```sh
-cargo run --release -p grimvault-core --example smoke -- <game dir> <save dir>
-cargo run --release -p grimvault-core --example vault_cli -- <game dir> <save dir> <store.json> list
-cargo run --release -p grimvault-core --example vault_cli -- <game dir> <save dir> <store.json> reagents
+cargo run --release -p grimvault-core --example smoke
+cargo run --release -p grimvault-core --example vault_cli -- list
+cargo run --release -p grimvault-core --example vault_cli -- reagents
 ```
+
+Any of them accepts `--game DIR`, `--save DIR`, and (for `vault_cli`)
+`--store FILE` to override the saved paths, and `--check` still takes
+`<game dir> <save dir>` explicitly.
 
 ## Workspace
 
