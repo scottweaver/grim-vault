@@ -5,51 +5,75 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-03 (rules layer bootstrapped; no code yet)
+Last updated: 2026-09-03 (shared-engine split decided; docs on
+`design/shared-engine-split`)
 
 ## Active workstream
 
-Greenfield. grim-vault is the Grim Dawn sibling of tq-univault
-(`~/Projects/tq-univault`, GitHub `scottweaver/TQ-AE-Univault`): a
-platform-independent item-vault manager in Rust with an egui/eframe
-front-end. On 2026-09-03 the repo was initialised on `main` and the
-rules layer installed; PROJECT.md is bound with `tracker: none`
-(personal project — the Kunai Linear workspace is deliberately not
-used here). Binding decisions from the bootstrap dialog (contract in
-ARCHITECTURE.md): shared code moves into a **separate engine repo**
-consumed as a git dependency (working name `univault-engine`;
-extracting it from tq-univault is the first task); tq-univault's
-data-flow contract carries over wholesale (unified JSON store with
-computed buckets, autosave, backup-first, external-change guard) with
-one departure — GD saves are rolling-XOR obfuscated, so writes are a
-full re-encode gated by a byte-identical round-trip of the unmodified
-baseline; the read-only MCP server, mod forge, and the `gdx3` overlay
-are sanctioned surfaces but **not v1**. No Cargo workspace exists yet.
+Greenfield; the shared-engine split is **decided** (2026-09-03,
+`docs/engine-extraction.md`). grim-vault is the Grim Dawn sibling of
+tq-univault (`~/Projects/tq-univault`, GitHub
+`scottweaver/TQ-AE-Univault`): a platform-independent item-vault
+manager in Rust with an egui/eframe front-end; PROJECT.md is bound
+with `tracker: none` (personal project — the Kunai Linear workspace
+is deliberately not used here). Shared code goes to a new repo
+`univault-engine` with three crates (`univault-engine` pure formats,
+`univault-io` safe-io + watcher, `univault-ui` art-free egui kit),
+extracted by plain copy **after refactors R1–R5 land in
+tq-univault**; phase 1 is the pure modules only. GD-side contract
+(ARCHITECTURE.md): tq-univault's data flow carried over wholesale,
+except writes are a full re-encode gated by a byte-identical
+round-trip because GD saves are rolling-XOR obfuscated (cipher now
+confirmed across four implementations, `docs/format-references.md`).
+MCP server, mod forge, and `gdx3` are sanctioned but not v1. No Cargo
+workspace exists yet; the next code lands in tq-univault (R1–R5),
+not here.
 
 ## Branches in flight
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | freshly initialised, no commits yet |
+| `main` | trunk | at `810f7a8` (rules layer), no code |
+| `design/shared-engine-split` | engine-split proposal + GD format references (docs only) | local, one commit ahead of `main`; not pushed (foundation work per METHODOLOGIES) |
 
 ## Next up
 
-1. Extract the shared engine repo from tq-univault (typed LE reader,
-   ARC/ARZ container parsing, store envelope + id scheme, platform
-   discovery, safe-io; egui chrome as a second crate) and scaffold
-   this workspace — `crates/grimvault-core` + `crates/grimvault-gui`
-   — against it via a git dependency with a local `[patch]` override.
-2. Read-only GD format smoke against the real install on
-   `/Volumes/scott-games`: decode `player.gdc` + `transfer.gst`
-   (rolling XOR) and `database.arz` + `GDX1`/`GDX2` overlays (LZ4),
-   behind the byte-identical round-trip test gate. Write
-   `docs/format-references.md` (GD edition, with license checks on GD
-   Stash / GD Item Assistant) before the first parser PR merges.
-3. Store + egui shell: `vault-store.json` (`grimvault-store`),
-   character and stash panes, reusing tq-univault chrome through the
-   shared UI crate.
+1. **In tq-univault:** refactors R1–R5 from `docs/engine-extraction.md`
+   (`ids` module; `BlockCodec` + `ArzDialect`; `pub` visibility for
+   `writer` / `stats::format` / block constants; one slicing helper;
+   `config_dir(app_name)`), each its own refactor PR answering
+   METHODOLOGIES' four questions, 274 tests green after each.
+2. Create the `univault-engine` repo (MIT OR Apache-2.0, CI mirroring
+   tq-univault's `ci.yml`), plain-copy the phase-1 modules with a
+   provenance commit, swap tq-univault to the git dependency; then
+   scaffold this workspace (`crates/grimvault-core`,
+   `crates/grimvault-gui`) against it with a local `[patch]`.
+3. Read-only GD smoke against the real install on
+   `/Volumes/scott-games`: engine ARC/ARZ with the LZ4 dialect over
+   `database.arz` + `GDX1`/`GDX2`; rolling-XOR cursor and
+   `player.gdc` / `transfer.gst` parsers in `grimvault-core` behind
+   the byte-identical round-trip gate (gdlc's `test/v11_player.gdc`
+   as a second fixture).
+4. Store + egui shell: `vault-store.json` (`grimvault-store`),
+   character and stash panes, `univault-ui` components with
+   grim-vault's own textures and fonts.
 
 ## Most recent meaningful progress
+
+- **2026-09-03 — Shared-engine split decided (design dialog; docs only,
+  branch `design/shared-engine-split`).** Surveyed tq-univault core
+  and gui module by module and researched the GD formats; wrote
+  `docs/engine-extraction.md` (dispositions, seams, refactors R1–R12,
+  three phases) and `docs/format-references.md` (GD edition).
+  Decisions: repo `univault-engine` with crates engine / io / ui;
+  phase 1 = pure modules; plain copy with a provenance commit; the ui
+  kit ships no art. Why: the first real code (R1–R5 in tq-univault)
+  now has an agreed boundary, and ARCHITECTURE's provenance TBDs are
+  resolved (gdlc MIT end to end; iagd MIT, no save decoder; GD Stash
+  closed). Risk: dispositions come from reading, not compiling — the
+  `RecordId` / `GridPos` move (R1) and the codec seam (R2) may
+  surface couplings the survey missed; verify with tq-univault's
+  tests, not by re-surveying.
 
 - **2026-09-03 — Rules layer bootstrapped.** `git init` on `main`;
   installed RUST_BEST_PRACTICES, METHODOLOGIES, STATE, ARCHITECTURE,

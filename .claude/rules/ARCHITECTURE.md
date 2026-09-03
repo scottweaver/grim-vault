@@ -80,27 +80,32 @@ Q&A). Items marked TBD are open questions, not decisions.
 
 ## Crate layering
 
-- Shared code lives in a **separate repository** (working name
-  `univault-engine`, TBD until it exists), extracted from tq-univault
-  and consumed by both projects as a **git dependency**. That repo
-  exposes at least two crates: a headless engine crate (typed LE
-  reader, ARC/ARZ container parsing, store envelope + id scheme,
-  platform discovery, safe-io) and an egui widget crate (chrome,
-  theme, tabbed panels). Committed manifests in this repo never
-  reference a path outside it; a local `[patch]` in an uncommitted
-  `.cargo/config.toml` is the sanctioned way to develop against a
-  checkout. (2026-09-03, bootstrap dialog)
+- Shared code lives in a **separate repository**, `univault-engine`,
+  extracted from tq-univault and consumed by both projects as a
+  **git dependency**. It exposes three crates: `univault-engine`
+  (headless formats, ids, store and cache envelopes, game-data
+  facade; never touches the filesystem), `univault-io` (safe-io,
+  file watcher, backup policy, debounced state file), and
+  `univault-ui` (egui theme and chrome components, **art-free**:
+  textures and fonts are supplied by the app). Committed manifests in
+  this repo never reference a path outside it; a local `[patch]` in
+  an uncommitted `.cargo/config.toml` is the sanctioned way to
+  develop against a checkout. (2026-09-03, bootstrap dialog; split
+  and names decided the same day in the engine-extraction dialog,
+  `docs/engine-extraction.md`)
 - This repo is a Cargo workspace with `crates/grimvault-core` (GD
   file formats, store and vault logic, in-memory model —
   GUI-agnostic) and `crates/grimvault-gui` (egui/eframe front-end).
   `crates/grimvault-mcp` is added if and when the MCP surface is
   built. (2026-09-03)
 - Dependencies flow shell → core → engine (`grimvault-gui` →
-  `grimvault-core` → engine; `grimvault-mcp` → `grimvault-core`),
-  never the reverse, never shell → shell, and `grimvault-core` never
-  depends on the egui widget crate. Falsifiable check:
-  `grimvault-core` compiles headless with no egui, eframe, winit,
-  rmcp, or tokio anywhere in its dependency tree. (2026-09-03)
+  `grimvault-core` → `univault-engine`; `grimvault-mcp` →
+  `grimvault-core`; shells additionally use `univault-io` and
+  `univault-ui`), never the reverse, never shell → shell, and
+  `grimvault-core` never depends on `univault-io` or `univault-ui`.
+  Falsifiable check: `grimvault-core` compiles headless with no egui,
+  eframe, winit, rmcp, or tokio anywhere in its dependency tree, and
+  no `std::fs` use outside tests. (2026-09-03)
 - The GUI framework is egui/eframe; the core/gui split exists
   precisely so this remains swappable without touching core.
   (2026-09-03)
@@ -118,9 +123,11 @@ Q&A). Items marked TBD are open questions, not decisions.
   decision)
 - **Full re-encode, not splice** — the one departure from
   tq-univault's write rule. GD saves (`player.gdc`, `*.gst`) are
-  XOR-obfuscated with a rolling key that every prior byte feeds (per
-  the community reference implementations; verify in the first
-  parser PR), so a byte-level splice cannot exist. Writes are
+  XOR-obfuscated with a rolling key that every prior byte feeds
+  (cipher confirmed 2026-09-03 across four independent
+  implementations, `docs/format-references.md`; still to be verified
+  against real saves in the first parser PR), so a byte-level splice
+  cannot exist. Writes are
   decode → typed model → full re-encode, under one rule, **lossless
   model**, enforced at two points: (1) every file the parser accepts
   must re-encode byte-for-byte when unmodified, with unrecognized
@@ -169,7 +176,10 @@ Q&A). Items marked TBD are open questions, not decisions.
   guarded by its own module with a typed read/write surface. Format
   modules that are engine-generic (ARC/ARZ container parsing, the LE
   reader) live in the engine crate; GD-specific record and save
-  shapes live in `grimvault-core`. (2026-09-03)
+  shapes live in `grimvault-core`. ARC and ARZ are **one parser
+  each**, shared with tq-univault and parametrized by codec (zlib vs
+  raw LZ4 block) and ARZ dialect; a forked GD copy is structural.
+  (2026-09-03, engine-extraction dialog)
 - Import/export interchange with GD Stash or GD Item Assistant files
   is TBD (2026-09-03): not a boundary until a format is chosen and
   recorded here.
@@ -199,11 +209,14 @@ Q&A). Items marked TBD are open questions, not decisions.
   reused. External porting reference for GD formats:
   [dandels/gdlc](https://github.com/dandels/gdlc) (Rust, MIT).
   [gregates/lib-gddb](https://github.com/gregates/lib-gddb) is GPL —
-  eyes-only, never transcribed. GD Stash and GD Item Assistant are
-  eyes-only until their licenses are checked and recorded in
-  `docs/format-references.md`, which must exist before the first
-  parser PR merges. TBD (2026-09-03): which reference covers the
-  save/stash encoding end to end.
+  eyes-only, never transcribed. GD Item Assistant
+  (`marius00/iagd`, MIT) is a sanctioned secondary reference for
+  ARZ, ARC, and `.tex` and contains no save decoder; GD Stash is
+  closed source with no published license, so there is nothing to
+  read. The reference map is `docs/format-references.md` (written
+  2026-09-03). gdlc covers the save/stash encoding end to end,
+  corroborated by three independent implementations (resolved
+  2026-09-03, engine-extraction survey).
 - The project is dual-licensed MIT OR Apache-2.0. (2026-09-03)
 
 ## Planned surfaces (sanctioned, not v1)
@@ -242,6 +255,8 @@ cleanup:
 - `crates/grimvault-mcp/src/*.rs` (when it exists) — read-only and
   stdio-only
 - `docs/format-references.md` — provenance and license records
+- `docs/engine-extraction.md` — the shared-crate boundary and phase
+  plan
 
 ## Structural criteria
 
