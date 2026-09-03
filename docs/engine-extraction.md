@@ -1,7 +1,15 @@
 # Shared engine extraction — proposal
 
-Status: **DECIDED 2026-09-03** in the design dialog recorded under
-"Decisions" at the end. Source: a read-only survey of tq-univault
+Status: **DECIDED 2026-09-03**, then **extraction DEFERRED** the same
+day: the user chose to fast-track a usable Grim Dawn tool over
+migrating tq-univault first. The crate boundary below is being built
+inside this workspace (`crates/univault-engine`, vendored from
+tq-univault); refactors R1–R5 land on the vendored copy here, and
+tq-univault is re-pointed at the engine only when it is extracted.
+Decisions are recorded under "Decisions" at the end. **Phase 1
+shipped 2026-09-03** in-workspace: `crates/univault-engine`,
+`crates/univault-io`, `crates/univault-ui`; R1–R4 are done on the
+vendored copies, R5 (`config_dir(app_name)`) waits for `platform`. Source: a read-only survey of tq-univault
 (`crates/univault-core` 15,631 LOC / 25 files, `crates/univault-gui`
 10,307 LOC / 13 files, at main `36e7774`) plus the Grim Dawn format
 research recorded in `format-references.md`. Line references below
@@ -224,6 +232,11 @@ with an app-local copy of the autosave loop if phase 3 lags.
 4. **Art:** the ui kit is art-free. Components and the theme take
    textures and fonts from the app; tq-univault keeps its gold and
    bronze PNGs and OFL fonts, grim-vault bundles its own.
+5. **Sequencing (renegotiated later the same day):** fast track.
+   Vendor the phase-1 modules into `crates/univault-engine` in this
+   workspace now, skip the tq-univault refactor PRs, and extract to
+   a separate repository later — at which point tq-univault adopts
+   the engine and R1–R5 are already done on the vendored copy.
 
 ## TBDs in ARCHITECTURE.md this survey resolves
 

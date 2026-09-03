@@ -1,0 +1,834 @@
+//! `player.gdc`: the character save.
+//!
+//! Header and blocks 1, 3, 4 ported from gdlc (MIT, dandels 2025),
+//! `src/player.rs`.
+//!
+//! Layout: raw seed; `"GDCX"`; header version 2; character name (wide),
+//! sex, class tag, level, hardcore flag, expansion status byte; a static
+//! zero marker; data version; 16-byte uid; then an ordered sequence of
+//! framed blocks to end of file. Blocks 1 (character info, v5), 3
+//! (inventory) and 4 (per-character stash) are typed; everything else —
+//! and any of those at a version this crate does not lay out — is
+//! carried as an [`OpaqueBlock`] (see `block` for what that promises).
+//!
+//! [`PlayerFile::encode`] reproduces the loaded bytes exactly when the
+//! model is unmodified; `tests/` gates that against the vendored fixture.
+
+use thiserror::Error;
+
+use crate::block::{
+    Dispatch, OpaqueBlock, OpaqueReason, SaveEncodeError, StashTab, length_word, read_block,
+};
+use crate::crypto::{BlockId, DecodeError, Decoder, Encoder};
+use crate::item::{ContainerVersion, Item, ItemEncodeError, SackItem};
+
+const MAGIC: u32 = u32::from_le_bytes(*b"GDCX");
+const HEADER_VERSION: u32 = 2;
+const CHARACTER_INFO_VERSION: u32 = 5;
+const PLAYER_STASH_MIN_VERSION: u32 = 6;
+const EQUIPMENT_SLOTS: usize = 12;
+const WEAPON_SLOTS: usize = 2;
+
+/// Why a `player.gdc` could not be parsed.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum GdcError {
+    /// Cipher / framing failure.
+    #[error(transparent)]
+    Decode(#[from] DecodeError),
+    /// The file does not start with `GDCX`.
+    #[error("not a player.gdc: magic {found:#010x}")]
+    BadMagic {
+        /// The word found where `GDCX` belongs.
+        found: u32,
+    },
+    /// The header version is not the one this crate lays out.
+    #[error("unsupported player.gdc header version {version} (expected {HEADER_VERSION})")]
+    UnsupportedHeaderVersion {
+        /// The version read.
+        version: u32,
+    },
+}
+
+/// Character sex flag. `false`/`true` on the wire; the mapping is
+/// inferred from character names in the fixture and user saves and is
+/// not verified against the game UI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sex {
+    /// Wire value 0.
+    Female,
+    /// Wire value 1.
+    Male,
+}
+
+impl From<bool> for Sex {
+    fn from(flag: bool) -> Self {
+        if flag { Self::Male } else { Self::Female }
+    }
+}
+
+impl From<Sex> for bool {
+    fn from(sex: Sex) -> Self {
+        matches!(sex, Sex::Male)
+    }
+}
+
+/// The fixed header preceding the block sequence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayerHeader {
+    /// Character name.
+    pub name: String,
+    /// Sex flag.
+    pub sex: Sex,
+    /// Class tag such as `tagSkillClassName0506`; empty before a class
+    /// is chosen.
+    pub class_tag: String,
+    /// Character level.
+    pub level: u32,
+    /// Hardcore flag.
+    pub hardcore: bool,
+    /// Expansion status byte (observed 7 with both expansions, 3 on an
+    /// older character).
+    pub expansion_status: u8,
+    /// Data version following the zero marker (observed 8).
+    pub data_version: u32,
+    /// 16-byte uid (observed all zero).
+    pub uid: [u8; 16],
+}
+
+/// Block 1, version 5. Byte fields whose semantics gdlc only names are
+/// kept as bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CharacterInfo {
+    /// Whether the character is in the main quest.
+    pub is_in_main_quest: bool,
+    /// Whether the character has ever entered the game.
+    pub has_been_in_game: bool,
+    /// Current difficulty.
+    pub difficulty: u8,
+    /// Highest difficulty reached.
+    pub greatest_difficulty: u8,
+    /// Iron bits.
+    pub money: u32,
+    /// Highest survival-mode difficulty reached.
+    pub greatest_survival_difficulty: u8,
+    /// Current tribute.
+    pub current_tribute: u32,
+    /// Compass state.
+    pub compass_state: u8,
+    /// Skill-window help toggle.
+    pub skill_window_show_help: u8,
+    /// Weapon-swap active flag.
+    pub weapon_swap_active: u8,
+    /// Weapon-swap enabled flag.
+    pub weapon_swap_enabled: u8,
+    /// Character texture record, or empty.
+    pub texture: String,
+    /// Loot filter toggles.
+    pub loot_filter: Vec<u8>,
+}
+
+impl CharacterInfo {
+    fn read_body(dec: &mut Decoder<'_>) -> Result<Self, DecodeError> {
+        let is_in_main_quest = dec.read_bool()?;
+        let has_been_in_game = dec.read_bool()?;
+        let difficulty = dec.read_u8()?;
+        let greatest_difficulty = dec.read_u8()?;
+        let money = dec.read_u32()?;
+        let greatest_survival_difficulty = dec.read_u8()?;
+        let current_tribute = dec.read_u32()?;
+        let compass_state = dec.read_u8()?;
+        let skill_window_show_help = dec.read_u8()?;
+        let weapon_swap_active = dec.read_u8()?;
+        let weapon_swap_enabled = dec.read_u8()?;
+        let texture = dec.read_string()?;
+        let loot_filter_len = dec.read_u32()?;
+        let loot_filter = dec.read_bytes(loot_filter_len as usize)?;
+        Ok(Self {
+            is_in_main_quest,
+            has_been_in_game,
+            difficulty,
+            greatest_difficulty,
+            money,
+            greatest_survival_difficulty,
+            current_tribute,
+            compass_state,
+            skill_window_show_help,
+            weapon_swap_active,
+            weapon_swap_enabled,
+            texture,
+            loot_filter,
+        })
+    }
+
+    fn write(&self, enc: &mut Encoder) -> Result<(), SaveEncodeError> {
+        enc.write_block(BlockId::CHARACTER_INFO, |enc| {
+            enc.write_u32(CHARACTER_INFO_VERSION);
+            enc.write_bool(self.is_in_main_quest);
+            enc.write_bool(self.has_been_in_game);
+            enc.write_u8(self.difficulty);
+            enc.write_u8(self.greatest_difficulty);
+            enc.write_u32(self.money);
+            enc.write_u8(self.greatest_survival_difficulty);
+            enc.write_u32(self.current_tribute);
+            enc.write_u8(self.compass_state);
+            enc.write_u8(self.skill_window_show_help);
+            enc.write_u8(self.weapon_swap_active);
+            enc.write_u8(self.weapon_swap_enabled);
+            enc.write_string(&self.texture)?;
+            enc.write_u32(length_word(self.loot_filter.len())?);
+            enc.write_bytes(&self.loot_filter);
+            Ok(())
+        })
+    }
+}
+
+/// An equipment slot: the item (empty base name for an empty slot) and
+/// gdlc's `attached` byte.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EquippedItem {
+    /// The item, or an empty item for an empty slot.
+    pub item: Item,
+    /// Attached flag byte.
+    pub attached: u8,
+}
+
+impl EquippedItem {
+    fn read(dec: &mut Decoder<'_>, version: ContainerVersion) -> Result<Self, DecodeError> {
+        let item = Item::read(dec, version)?;
+        let attached = dec.read_u8()?;
+        Ok(Self { item, attached })
+    }
+
+    fn write(&self, enc: &mut Encoder, version: ContainerVersion) -> Result<(), ItemEncodeError> {
+        self.item.write(enc, version)?;
+        enc.write_u8(self.attached);
+        Ok(())
+    }
+}
+
+/// One inventory sack (bag).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Sack {
+    /// Leading flag byte (gdlc reads it as a boolean it calls `is_ok`).
+    pub flag: u8,
+    /// Items with their cell positions.
+    pub items: Vec<SackItem>,
+}
+
+impl Sack {
+    fn read(dec: &mut Decoder<'_>, version: ContainerVersion) -> Result<Self, DecodeError> {
+        dec.read_block_start_expecting(BlockId::NESTED)?;
+        let flag = dec.read_u8()?;
+        let count = dec.read_u32()?;
+        let items = (0..count)
+            .map(|_| SackItem::read(dec, version))
+            .collect::<Result<Vec<_>, _>>()?;
+        dec.read_block_end()?;
+        Ok(Self { flag, items })
+    }
+
+    fn write(&self, enc: &mut Encoder, version: ContainerVersion) -> Result<(), SaveEncodeError> {
+        enc.write_block(BlockId::NESTED, |enc| {
+            enc.write_u8(self.flag);
+            enc.write_u32(length_word(self.items.len())?);
+            self.items
+                .iter()
+                .try_for_each(|item| item.write(enc, version))?;
+            Ok(())
+        })
+    }
+}
+
+/// Sacks and equipment of a character that has entered the game.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InventoryContents {
+    /// Index of the focused sack.
+    pub focused_sack: u32,
+    /// Index of the selected sack.
+    pub selected_sack: u32,
+    /// The sacks, in order.
+    pub sacks: Vec<Sack>,
+    /// Weapon-swap byte preceding the equipment.
+    pub use_alternate: u8,
+    /// The twelve equipment slots.
+    pub equipment: [EquippedItem; EQUIPMENT_SLOTS],
+    /// Byte preceding weapon set 1.
+    pub alternate_1: u8,
+    /// Weapon set 1.
+    pub weapon_set_1: [EquippedItem; WEAPON_SLOTS],
+    /// Byte preceding weapon set 2.
+    pub alternate_2: u8,
+    /// Weapon set 2.
+    pub weapon_set_2: [EquippedItem; WEAPON_SLOTS],
+}
+
+impl InventoryContents {
+    fn read(dec: &mut Decoder<'_>, version: ContainerVersion) -> Result<Self, DecodeError> {
+        let sack_count = dec.read_u32()?;
+        let focused_sack = dec.read_u32()?;
+        let selected_sack = dec.read_u32()?;
+        let sacks = (0..sack_count)
+            .map(|_| Sack::read(dec, version))
+            .collect::<Result<Vec<_>, _>>()?;
+        let use_alternate = dec.read_u8()?;
+        let equipment = read_array(|| EquippedItem::read(dec, version))?;
+        let alternate_1 = dec.read_u8()?;
+        let weapon_set_1 = read_array(|| EquippedItem::read(dec, version))?;
+        let alternate_2 = dec.read_u8()?;
+        let weapon_set_2 = read_array(|| EquippedItem::read(dec, version))?;
+        Ok(Self {
+            focused_sack,
+            selected_sack,
+            sacks,
+            use_alternate,
+            equipment,
+            alternate_1,
+            weapon_set_1,
+            alternate_2,
+            weapon_set_2,
+        })
+    }
+
+    fn write(&self, enc: &mut Encoder, version: ContainerVersion) -> Result<(), SaveEncodeError> {
+        enc.write_u32(length_word(self.sacks.len())?);
+        enc.write_u32(self.focused_sack);
+        enc.write_u32(self.selected_sack);
+        self.sacks
+            .iter()
+            .try_for_each(|sack| sack.write(enc, version))?;
+        enc.write_u8(self.use_alternate);
+        write_slots(enc, version, &self.equipment)?;
+        enc.write_u8(self.alternate_1);
+        write_slots(enc, version, &self.weapon_set_1)?;
+        enc.write_u8(self.alternate_2);
+        write_slots(enc, version, &self.weapon_set_2)?;
+        Ok(())
+    }
+
+    /// Every occupied slot across equipment and both weapon sets.
+    pub fn equipped(&self) -> impl Iterator<Item = &EquippedItem> {
+        self.equipment
+            .iter()
+            .chain(&self.weapon_set_1)
+            .chain(&self.weapon_set_2)
+            .filter(|slot| !slot.item.is_empty())
+    }
+}
+
+fn write_slots(
+    enc: &mut Encoder,
+    version: ContainerVersion,
+    slots: &[EquippedItem],
+) -> Result<(), ItemEncodeError> {
+    slots.iter().try_for_each(|slot| slot.write(enc, version))
+}
+
+fn read_array<T, const N: usize>(
+    mut read: impl FnMut() -> Result<T, DecodeError>,
+) -> Result<[T; N], DecodeError> {
+    let items = (0..N).map(|_| read()).collect::<Result<Vec<_>, _>>()?;
+    Ok(items
+        .try_into()
+        .unwrap_or_else(|_| unreachable!("collected exactly N elements")))
+}
+
+/// What block 3 holds beyond its version and flag.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InventoryState {
+    /// The character has never entered the game: the block ends after
+    /// the flag byte.
+    NeverEntered,
+    /// Sacks and equipment.
+    Entered(Box<InventoryContents>),
+}
+
+/// Block 3.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Inventory {
+    /// Layout version.
+    pub version: ContainerVersion,
+    /// Flag byte following the version (gdlc expects 0).
+    pub flag: u8,
+    /// Contents.
+    pub state: InventoryState,
+}
+
+impl Inventory {
+    fn read_body(dec: &mut Decoder<'_>, version: ContainerVersion) -> Result<Self, DecodeError> {
+        let flag = dec.read_u8()?;
+        let state = if dec.is_at_end() {
+            InventoryState::NeverEntered
+        } else {
+            InventoryState::Entered(Box::new(InventoryContents::read(dec, version)?))
+        };
+        Ok(Self {
+            version,
+            flag,
+            state,
+        })
+    }
+
+    fn write(&self, enc: &mut Encoder) -> Result<(), SaveEncodeError> {
+        enc.write_block(BlockId::INVENTORY, |enc| {
+            enc.write_u32(self.version.raw());
+            enc.write_u8(self.flag);
+            match &self.state {
+                InventoryState::NeverEntered => Ok(()),
+                InventoryState::Entered(contents) => contents.write(enc, self.version),
+            }
+        })
+    }
+
+    /// The sacks; empty for a character that never entered the game.
+    #[must_use]
+    pub fn sacks(&self) -> &[Sack] {
+        match &self.state {
+            InventoryState::NeverEntered => &[],
+            InventoryState::Entered(contents) => &contents.sacks,
+        }
+    }
+
+    /// Every occupied equipment slot.
+    pub fn equipped(&self) -> impl Iterator<Item = &EquippedItem> {
+        match &self.state {
+            InventoryState::NeverEntered => None,
+            InventoryState::Entered(contents) => Some(contents.equipped()),
+        }
+        .into_iter()
+        .flatten()
+    }
+}
+
+/// Block 4: the per-character stash.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayerStash {
+    /// Layout version.
+    pub version: ContainerVersion,
+    /// The tabs, in order.
+    pub tabs: Vec<StashTab>,
+}
+
+impl PlayerStash {
+    fn read_body(dec: &mut Decoder<'_>, version: ContainerVersion) -> Result<Self, DecodeError> {
+        let count = dec.read_u32()?;
+        let tabs = (0..count)
+            .map(|_| StashTab::read(dec, version))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { version, tabs })
+    }
+
+    fn write(&self, enc: &mut Encoder) -> Result<(), SaveEncodeError> {
+        enc.write_block(BlockId::PLAYER_STASH, |enc| {
+            enc.write_u32(self.version.raw());
+            enc.write_u32(length_word(self.tabs.len())?);
+            self.tabs
+                .iter()
+                .try_for_each(|tab| tab.write(enc, self.version))
+        })
+    }
+}
+
+/// One top-level block of the file, in file order.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Block {
+    /// Block 1 at version 5.
+    CharacterInfo(CharacterInfo),
+    /// Block 3 at a supported version.
+    Inventory(Inventory),
+    /// Block 4 at a supported version.
+    Stash(PlayerStash),
+    /// Anything else, preserved verbatim.
+    Opaque(OpaqueBlock),
+}
+
+impl Block {
+    /// The block id.
+    #[must_use]
+    pub fn id(&self) -> BlockId {
+        match self {
+            Self::CharacterInfo(_) => BlockId::CHARACTER_INFO,
+            Self::Inventory(_) => BlockId::INVENTORY,
+            Self::Stash(_) => BlockId::PLAYER_STASH,
+            Self::Opaque(block) => block.id(),
+        }
+    }
+
+    fn read(dec: &mut Decoder<'_>) -> Result<Self, GdcError> {
+        read_block(
+            dec,
+            |dec, header| {
+                let unsupported = OpaqueReason::UnsupportedVersion {
+                    version: header.version,
+                };
+                Ok::<_, GdcError>(match header.id {
+                    BlockId::CHARACTER_INFO if header.version == CHARACTER_INFO_VERSION => {
+                        Dispatch::Typed(Self::CharacterInfo(CharacterInfo::read_body(dec)?))
+                    }
+                    BlockId::INVENTORY => match ContainerVersion::new(header.version) {
+                        Ok(version) => {
+                            Dispatch::Typed(Self::Inventory(Inventory::read_body(dec, version)?))
+                        }
+                        Err(_) => Dispatch::Opaque(unsupported),
+                    },
+                    BlockId::PLAYER_STASH => match ContainerVersion::new(header.version) {
+                        Ok(version) if version.raw() >= PLAYER_STASH_MIN_VERSION => {
+                            Dispatch::Typed(Self::Stash(PlayerStash::read_body(dec, version)?))
+                        }
+                        Ok(_) | Err(_) => Dispatch::Opaque(unsupported),
+                    },
+                    BlockId::CHARACTER_INFO => Dispatch::Opaque(unsupported),
+                    _ => Dispatch::Opaque(OpaqueReason::Unmodeled),
+                })
+            },
+            Self::Opaque,
+        )
+    }
+
+    fn write(&self, enc: &mut Encoder) -> Result<(), SaveEncodeError> {
+        match self {
+            Self::CharacterInfo(info) => info.write(enc),
+            Self::Inventory(inventory) => inventory.write(enc),
+            Self::Stash(stash) => stash.write(enc),
+            Self::Opaque(block) => block.write(enc),
+        }
+    }
+}
+
+/// A parsed `player.gdc`: header plus the ordered block sequence.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayerFile {
+    seed: u32,
+    header: PlayerHeader,
+    blocks: Vec<Block>,
+}
+
+impl PlayerFile {
+    /// Parses a whole file image.
+    ///
+    /// # Errors
+    /// [`GdcError`] for a bad magic or header version, or any cipher /
+    /// framing failure — including a typed block whose layout did not
+    /// consume exactly its declared length.
+    pub fn parse(bytes: &[u8]) -> Result<Self, GdcError> {
+        let mut dec = Decoder::new(bytes)?;
+        let magic = dec.read_u32()?;
+        if magic != MAGIC {
+            return Err(GdcError::BadMagic { found: magic });
+        }
+        let header_version = dec.read_u32()?;
+        if header_version != HEADER_VERSION {
+            return Err(GdcError::UnsupportedHeaderVersion {
+                version: header_version,
+            });
+        }
+        let name = dec.read_wstring()?;
+        let sex = Sex::from(dec.read_bool()?);
+        let class_tag = dec.read_string()?;
+        let level = dec.read_u32()?;
+        let hardcore = dec.read_bool()?;
+        let expansion_status = dec.read_u8()?;
+        dec.read_zero_marker()?;
+        let data_version = dec.read_u32()?;
+        let uid = read_array(|| dec.read_u8())?;
+        let header = PlayerHeader {
+            name,
+            sex,
+            class_tag,
+            level,
+            hardcore,
+            expansion_status,
+            data_version,
+            uid,
+        };
+        let mut blocks = Vec::new();
+        while !dec.is_at_end() {
+            blocks.push(Block::read(&mut dec)?);
+        }
+        Ok(Self {
+            seed: dec.seed(),
+            header,
+            blocks,
+        })
+    }
+
+    /// Re-encodes the file; byte-identical to the input when unmodified.
+    ///
+    /// # Errors
+    /// [`SaveEncodeError`], notably `OpaqueRekeyed` when a block before
+    /// an opaque one changed.
+    pub fn encode(&self) -> Result<Vec<u8>, SaveEncodeError> {
+        let mut enc = Encoder::new(self.seed);
+        enc.write_u32(MAGIC);
+        enc.write_u32(HEADER_VERSION);
+        enc.write_wstring(&self.header.name)?;
+        enc.write_bool(self.header.sex.into());
+        enc.write_string(&self.header.class_tag)?;
+        enc.write_u32(self.header.level);
+        enc.write_bool(self.header.hardcore);
+        enc.write_u8(self.header.expansion_status);
+        enc.write_zero_marker();
+        enc.write_u32(self.header.data_version);
+        enc.write_bytes(&self.header.uid);
+        self.blocks
+            .iter()
+            .try_for_each(|block| block.write(&mut enc))?;
+        Ok(enc.finish())
+    }
+
+    /// The raw cipher seed the file was written with.
+    #[must_use]
+    pub fn seed(&self) -> u32 {
+        self.seed
+    }
+
+    /// The fixed header.
+    #[must_use]
+    pub fn header(&self) -> &PlayerHeader {
+        &self.header
+    }
+
+    /// The character's name.
+    #[must_use]
+    pub fn character_name(&self) -> &str {
+        &self.header.name
+    }
+
+    /// The character's level.
+    #[must_use]
+    pub fn level(&self) -> u32 {
+        self.header.level
+    }
+
+    /// The blocks in file order.
+    #[must_use]
+    pub fn blocks(&self) -> &[Block] {
+        &self.blocks
+    }
+
+    /// Block 1, when typed.
+    #[must_use]
+    pub fn character_info(&self) -> Option<&CharacterInfo> {
+        self.blocks.iter().find_map(|block| match block {
+            Block::CharacterInfo(info) => Some(info),
+            Block::Inventory(_) | Block::Stash(_) | Block::Opaque(_) => None,
+        })
+    }
+
+    /// Block 3, when typed.
+    #[must_use]
+    pub fn inventory(&self) -> Option<&Inventory> {
+        self.blocks.iter().find_map(|block| match block {
+            Block::Inventory(inventory) => Some(inventory),
+            Block::CharacterInfo(_) | Block::Stash(_) | Block::Opaque(_) => None,
+        })
+    }
+
+    /// Block 4, when typed.
+    #[must_use]
+    pub fn stash(&self) -> Option<&PlayerStash> {
+        self.blocks.iter().find_map(|block| match block {
+            Block::Stash(stash) => Some(stash),
+            Block::CharacterInfo(_) | Block::Inventory(_) | Block::Opaque(_) => None,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::block::TabDecoration;
+    use crate::item::StashItem;
+
+    fn item(name: &str) -> Item {
+        Item {
+            base_name: name.into(),
+            stack_count: 1,
+            ..Item::default()
+        }
+    }
+
+    fn sample() -> PlayerFile {
+        let version = ContainerVersion::new(11).unwrap();
+        let mut equipment: [EquippedItem; EQUIPMENT_SLOTS] = Default::default();
+        equipment[0].item = item("records/items/gearhead/h.dbr");
+        PlayerFile {
+            seed: 0x0BAD_F00D,
+            header: PlayerHeader {
+                name: "Sif".into(),
+                sex: Sex::Female,
+                class_tag: "tagSkillClassName0306".into(),
+                level: 6,
+                hardcore: false,
+                expansion_status: 7,
+                data_version: 8,
+                uid: [0; 16],
+            },
+            blocks: vec![
+                Block::CharacterInfo(CharacterInfo {
+                    is_in_main_quest: true,
+                    has_been_in_game: true,
+                    difficulty: 0,
+                    greatest_difficulty: 0,
+                    money: 1234,
+                    greatest_survival_difficulty: 0,
+                    current_tribute: 0,
+                    compass_state: 3,
+                    skill_window_show_help: 1,
+                    weapon_swap_active: 0,
+                    weapon_swap_enabled: 1,
+                    texture: "creatures/pc/hero02.tex".into(),
+                    loot_filter: vec![1; 42],
+                }),
+                Block::Inventory(Inventory {
+                    version,
+                    flag: 0,
+                    state: InventoryState::Entered(Box::new(InventoryContents {
+                        focused_sack: 0,
+                        selected_sack: 0,
+                        sacks: vec![Sack {
+                            flag: 1,
+                            items: vec![SackItem {
+                                item: item("records/items/gearweapons/w.dbr"),
+                                x: 1,
+                                y: 2,
+                            }],
+                        }],
+                        use_alternate: 0,
+                        equipment,
+                        alternate_1: 0,
+                        weapon_set_1: Default::default(),
+                        alternate_2: 0,
+                        weapon_set_2: Default::default(),
+                    })),
+                }),
+                Block::Stash(PlayerStash {
+                    version,
+                    tabs: vec![StashTab {
+                        width: 8,
+                        height: 16,
+                        items: vec![StashItem {
+                            item: item("records/items/materia/m.dbr"),
+                            x: 0.0,
+                            y: 1.0,
+                        }],
+                        decoration: TabDecoration::default(),
+                    }],
+                }),
+            ],
+        }
+    }
+
+    #[test]
+    fn typed_blocks_round_trip_through_bytes() {
+        let file = sample();
+        let bytes = file.encode().unwrap();
+        let parsed = PlayerFile::parse(&bytes).unwrap();
+        assert_eq!(parsed, file);
+        assert_eq!(parsed.encode().unwrap(), bytes);
+        assert_eq!(parsed.character_name(), "Sif");
+        assert_eq!(parsed.level(), 6);
+        assert_eq!(parsed.inventory().unwrap().sacks()[0].items.len(), 1);
+        assert_eq!(parsed.inventory().unwrap().equipped().count(), 1);
+        assert_eq!(parsed.stash().unwrap().tabs.len(), 1);
+        assert_eq!(parsed.character_info().unwrap().money, 1234);
+    }
+
+    #[test]
+    fn never_entered_inventory_round_trips() {
+        let mut file = sample();
+        file.blocks[1] = Block::Inventory(Inventory {
+            version: ContainerVersion::new(4).unwrap(),
+            flag: 0,
+            state: InventoryState::NeverEntered,
+        });
+        let bytes = file.encode().unwrap();
+        let parsed = PlayerFile::parse(&bytes).unwrap();
+        assert_eq!(parsed, file);
+        assert!(parsed.inventory().unwrap().sacks().is_empty());
+    }
+
+    #[test]
+    fn unsupported_versions_fall_back_to_opaque() {
+        let mut enc = Encoder::new(5);
+        enc.write_u32(MAGIC);
+        enc.write_u32(HEADER_VERSION);
+        enc.write_wstring("X").unwrap();
+        enc.write_bool(false);
+        enc.write_string("").unwrap();
+        enc.write_u32(1);
+        enc.write_bool(false);
+        enc.write_u8(7);
+        enc.write_zero_marker();
+        enc.write_u32(8);
+        enc.write_bytes(&[0; 16]);
+        enc.write_block(BlockId::CHARACTER_INFO, |enc| {
+            enc.write_u32(6);
+            enc.write_bytes(&[1, 2, 3]);
+            Ok::<(), crate::crypto::EncodeError>(())
+        })
+        .unwrap();
+        enc.write_block(BlockId::INVENTORY, |enc| {
+            enc.write_u32(12);
+            enc.write_u8(0);
+            Ok::<(), crate::crypto::EncodeError>(())
+        })
+        .unwrap();
+        enc.write_block(BlockId::new(16), |enc| {
+            enc.write_u32(1);
+            enc.write_string("records/x").unwrap();
+            Ok::<(), crate::crypto::EncodeError>(())
+        })
+        .unwrap();
+        let bytes = enc.finish();
+
+        let file = PlayerFile::parse(&bytes).unwrap();
+        let reasons: Vec<_> = file
+            .blocks()
+            .iter()
+            .map(|block| match block {
+                Block::Opaque(opaque) => Some(opaque.reason()),
+                Block::CharacterInfo(_) | Block::Inventory(_) | Block::Stash(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            reasons,
+            vec![
+                Some(OpaqueReason::UnsupportedVersion { version: 6 }),
+                Some(OpaqueReason::UnsupportedVersion { version: 12 }),
+                Some(OpaqueReason::Unmodeled),
+            ]
+        );
+        assert!(file.inventory().is_none());
+        assert_eq!(file.encode().unwrap(), bytes);
+    }
+
+    #[test]
+    fn bad_magic_is_reported() {
+        let mut enc = Encoder::new(1);
+        enc.write_u32(0x1234);
+        assert_eq!(
+            PlayerFile::parse(&enc.finish()),
+            Err(GdcError::BadMagic { found: 0x1234 })
+        );
+    }
+
+    #[test]
+    fn editing_before_an_opaque_block_is_refused() {
+        let mut file = sample();
+        let mut enc = Encoder::new(1);
+        enc.write_block(BlockId::new(9), |enc| {
+            enc.write_u32(1);
+            Ok::<(), crate::crypto::EncodeError>(())
+        })
+        .unwrap();
+        let bytes = enc.finish();
+        let mut dec = Decoder::new(&bytes).unwrap();
+        file.blocks.push(Block::Opaque(
+            OpaqueBlock::read(&mut dec, OpaqueReason::Unmodeled).unwrap(),
+        ));
+        assert!(matches!(
+            file.encode(),
+            Err(SaveEncodeError::OpaqueRekeyed { block, .. }) if block == BlockId::new(9)
+        ));
+    }
+}

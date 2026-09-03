@@ -80,22 +80,28 @@ Q&A). Items marked TBD are open questions, not decisions.
 
 ## Crate layering
 
-- Shared code lives in a **separate repository**, `univault-engine`,
-  extracted from tq-univault and consumed by both projects as a
-  **git dependency**. It exposes three crates: `univault-engine`
+- Shared code is **vendored into this workspace** as
+  `crates/univault-engine` (copied from tq-univault with a
+  provenance line per file), behind the same crate boundary the
+  eventual separate repository will have: `univault-engine`
   (headless formats, ids, store and cache envelopes, game-data
-  facade; never touches the filesystem), `univault-io` (safe-io,
-  file watcher, backup policy, debounced state file), and
-  `univault-ui` (egui theme and chrome components, **art-free**:
-  textures and fonts are supplied by the app). Committed manifests in
-  this repo never reference a path outside it; a local `[patch]` in
-  an uncommitted `.cargo/config.toml` is the sanctioned way to
-  develop against a checkout. (2026-09-03, bootstrap dialog; split
-  and names decided the same day in the engine-extraction dialog,
-  `docs/engine-extraction.md`)
-- This repo is a Cargo workspace with `crates/grimvault-core` (GD
-  file formats, store and vault logic, in-memory model —
-  GUI-agnostic) and `crates/grimvault-gui` (egui/eframe front-end).
+  facade; never touches the filesystem) and — when they exist —
+  `univault-io` (safe-io, file watcher, backup policy, debounced
+  state file) and `univault-ui` (egui theme and chrome components,
+  **art-free**: textures and fonts are supplied by the app).
+  Extracting them to their own repository and re-pointing
+  tq-univault is **deferred, not abandoned**: the boundary is what
+  makes that a move rather than a rewrite. Committed manifests in
+  this repo never reference a path outside it. Renegotiated
+  2026-09-03 (user: fast-track a usable Grim Dawn tool over
+  migrating tq-univault) from the bootstrap-dialog decision of
+  "separate repo first, consumed as a git dependency";
+  `docs/engine-extraction.md` records the deferred plan.
+  (2026-09-03)
+- This repo is a Cargo workspace with `crates/univault-engine` (the
+  vendored shared engine above), `crates/grimvault-core` (GD file
+  formats, store and vault logic, in-memory model — GUI-agnostic)
+  and `crates/grimvault-gui` (egui/eframe front-end).
   `crates/grimvault-mcp` is added if and when the MCP surface is
   built. (2026-09-03)
 - Dependencies flow shell → core → engine (`grimvault-gui` →
@@ -123,28 +129,36 @@ Q&A). Items marked TBD are open questions, not decisions.
   decision)
 - **Full re-encode, not splice** — the one departure from
   tq-univault's write rule. GD saves (`player.gdc`, `*.gst`) are
-  XOR-obfuscated with a rolling key that every prior byte feeds
-  (cipher confirmed 2026-09-03 across four independent
-  implementations, `docs/format-references.md`; still to be verified
-  against real saves in the first parser PR), so a byte-level splice
-  cannot exist. Writes are
-  decode → typed model → full re-encode, under one rule, **lossless
-  model**, enforced at two points: (1) every file the parser accepts
-  must re-encode byte-for-byte when unmodified, with unrecognized
-  blocks carried as opaque byte ranges rather than dropped — a test
-  gate run against real saves; (2) before any write, core re-encodes
-  the unmodified baseline and compares it to the bytes read at load;
-  a mismatch aborts the save with a visible error rather than
-  writing a file the parser did not fully understand. (2026-09-03,
-  bootstrap dialog)
+  XOR-obfuscated with a rolling key that every ciphertext byte feeds
+  (cipher confirmed 2026-09-03 across four implementations and
+  verified byte-for-byte against real saves the same day,
+  `docs/format-references.md`), so a byte-level splice cannot exist.
+  Writes are decode → typed model → full re-encode under one rule,
+  **lossless model**, enforced at two points: (1) every file the
+  parser accepts must re-encode byte-for-byte when unmodified — a
+  test gate run against real saves; (2) before any write, core
+  re-encodes the unmodified baseline and compares it to the bytes
+  read at load; a mismatch aborts the save with a visible error.
+  **Opaque blocks are not re-keyable** (found 2026-09-03): a u32
+  field and four single bytes decode differently under the rolling
+  key, so a block whose field layout is unknown can only be
+  re-encoded under the exact key it was read with. An unrecognised
+  block is carried opaquely for reading and for writes that leave
+  everything before it untouched, and **every block after an edited
+  one must be fully typed** before that edit may be written;
+  `encode` refuses otherwise. Today that makes `transfer.gst`
+  writable (block 18 is last) and `player.gdc` read-only until
+  blocks 5–17 are typed. (2026-09-03, bootstrap dialog; opaque rule
+  added the same day from the parser finding)
 - Every write to a game-owned file goes through a backup-first
   write path: this app's own backup of the file exists on disk
   before the original is touched, **one backup per load** — the
   first write since the file was last loaded takes the backup;
   subsequent autosaves of the same loaded baseline reuse it, so
   per-edit writes cannot churn the pre-session state away.
-  (Re)loading a file re-arms the backup. Writes go
-  staging-file-then-rename and are re-read to verify. This app
+  (Re)loading a file re-arms the backup. Writes are synced in place after the backup (tq-univault's proven
+  path; staging-then-rename was declined) and re-read to verify
+  before the save is reported done. This app
   mutates people's save files; this constraint is non-negotiable.
   (2026-09-03)
 - The shell watches the open files by polling and keeps panes
@@ -262,8 +276,8 @@ cleanup:
 
 Structural (this doc must change in the same PR): a GUI or async
 dependency appearing in core or any reversal of the crate DAG; a
-committed path dependency outside this repo, or moving shared code
-back into this workspace; a new external boundary (network access, a
+committed path dependency outside this repo, or game-specific code
+leaking into `univault-engine`; a new external boundary (network access, a
 new file format, an interchange format, telemetry); a change to who
 holds authoritative state; writing to any game-owned file not listed
 as writable above, to the game's backup rotation, or to ARZ/ARC files

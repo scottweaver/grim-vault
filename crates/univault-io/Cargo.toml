@@ -1,0 +1,14 @@
+[package]
+name = "univault-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shell-side file IO shared by tq-univault and grim-vault: uncached verified reads, backup-first synced writes, backup rotation"
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

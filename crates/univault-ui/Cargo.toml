@@ -1,0 +1,26 @@
+[package]
+name = "univault-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Art-free egui UI kit shared by tq-univault and grim-vault: theme, chrome components, slicing, sort direction, dev preview/review tooling"
+
+[lints]
+workspace = true
+
+[features]
+serde = ["dep:serde"]
+dev = ["dep:eframe", "serde", "dep:serde_json"]
+
+[dependencies]
+egui = "0.36"
+image = { version = "0.25", default-features = false, features = ["png"] }
+thiserror = "2"
+eframe = { version = "0.36.1", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[[bin]]
+name = "preview"
+path = "src/bin/preview.rs"
+required-features = ["dev"]

@@ -11,60 +11,81 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-03 (shared-engine split decided; docs on
-`design/shared-engine-split`)
+Last updated: 2026-09-03 (M1 read stack landed on
+`feat/gd-read-stack`, smoke-verified on the real install)
 
 ## Active workstream
 
-Greenfield; the shared-engine split is **decided** (2026-09-03,
-`docs/engine-extraction.md`). grim-vault is the Grim Dawn sibling of
-tq-univault (`~/Projects/tq-univault`, GitHub
-`scottweaver/TQ-AE-Univault`): a platform-independent item-vault
-manager in Rust with an egui/eframe front-end; PROJECT.md is bound
-with `tracker: none` (personal project — the Kunai Linear workspace
-is deliberately not used here). Shared code goes to a new repo
-`univault-engine` with three crates (`univault-engine` pure formats,
-`univault-io` safe-io + watcher, `univault-ui` art-free egui kit),
-extracted by plain copy **after refactors R1–R5 land in
-tq-univault**; phase 1 is the pure modules only. GD-side contract
-(ARCHITECTURE.md): tq-univault's data flow carried over wholesale,
-except writes are a full re-encode gated by a byte-identical
-round-trip because GD saves are rolling-XOR obfuscated (cipher now
-confirmed across four implementations, `docs/format-references.md`).
-MCP server, mod forge, and `gdx3` are sanctioned but not v1. No Cargo
-workspace exists yet; the next code lands in tq-univault (R1–R5),
-not here.
+Fast track to a usable Grim Dawn tool (user decision 2026-09-03; the
+separate-repo extraction of the shared engine is deferred,
+ARCHITECTURE.md "Crate layering"). The **read stack is done** on
+`feat/gd-read-stack`: a four-crate workspace — `univault-engine`
+(tq-univault's parsers vendored, with the GD LZ4 dialect),
+`univault-io` (safe-io with post-write re-read), `univault-ui`
+(art-free egui kit), `grimvault-core` (rolling-XOR codec,
+`player.gdc` / `*.gst` parsers, layered game-data facade) — 155 tests,
+clippy pedantic clean, and the `smoke` example resolves every item in
+the user's three characters and the transfer stash to in-game names,
+rarity, and footprints with byte-identical round-trips. Two binding
+facts learned building it: **opaque save blocks cannot be re-keyed**,
+so `player.gdc` stays read-only until blocks 5–17 are typed (yagde,
+MIT, has read+write layouts for all of them) while `transfer.gst` is
+writable now; and `formulas.gst` is plaintext TQ-style, not
+obfuscated. Next: M2, the first usable loop — vault items out of the
+transfer stash into `vault-store.json` and back — then M3, the egui
+shell. grim-vault is the Grim Dawn sibling of tq-univault
+(`~/Projects/tq-univault`); PROJECT.md is bound with `tracker: none`.
 
 ## Branches in flight
 
 | Branch | Purpose | Status |
 |---|---|---|
 | `main` | trunk | at `810f7a8` (rules layer), no code |
-| `design/shared-engine-split` | engine-split proposal + GD format references (docs only) | local, one commit ahead of `main`; not pushed (foundation work per METHODOLOGIES) |
+| `design/shared-engine-split` | engine-split proposal + GD format references | docs only, one commit ahead of `main`; `feat/gd-read-stack` branched from it |
+| `feat/gd-read-stack` | workspace + read stack (M1) | local, not pushed (no remote yet); 155 tests green |
 
 ## Next up
 
-1. **In tq-univault:** refactors R1–R5 from `docs/engine-extraction.md`
-   (`ids` module; `BlockCodec` + `ArzDialect`; `pub` visibility for
-   `writer` / `stats::format` / block constants; one slicing helper;
-   `config_dir(app_name)`), each its own refactor PR answering
-   METHODOLOGIES' four questions, 274 tests green after each.
-2. Create the `univault-engine` repo (MIT OR Apache-2.0, CI mirroring
-   tq-univault's `ci.yml`), plain-copy the phase-1 modules with a
-   provenance commit, swap tq-univault to the git dependency; then
-   scaffold this workspace (`crates/grimvault-core`,
-   `crates/grimvault-gui`) against it with a local `[patch]`.
-3. Read-only GD smoke against the real install on
-   `/Volumes/scott-games`: engine ARC/ARZ with the LZ4 dialect over
-   `database.arz` + `GDX1`/`GDX2`; rolling-XOR cursor and
-   `player.gdc` / `transfer.gst` parsers in `grimvault-core` behind
-   the byte-identical round-trip gate (gdlc's `test/v11_player.gdc`
-   as a second fixture).
-4. Store + egui shell: `vault-store.json` (`grimvault-store`),
-   character and stash panes, `univault-ui` components with
-   grim-vault's own textures and fonts.
+1. **M2 — first usable loop (core, pure):** `store.rs`
+   (`vault-store.json`, format tag `grimvault-store`, monotonic
+   `StoredItemId`, entries carry the full GD `Item` DTO), `transfer.rs`
+   (move between transfer-stash tabs and the store; first-fit
+   placement via engine `grid` with footprints from `gamedata`), a
+   `TransferStash` edit + `encode` path gated by the baseline
+   round-trip; an example that vaults an item from a **copy** of
+   `transfer.gst` and puts it back, verified by re-parse. Writes go
+   through `univault_io::backup_first_write` with
+   `BackupPolicy::new("grimvault-bak", 5)`.
+2. **M3 — egui shell (`crates/grimvault-gui`):** character picker
+   (read-only inventory / equipped / personal stash), transfer-stash
+   tabs (editable), store buckets by class; drag-and-drop; autosave
+   (600 ms quiet) + external-change guard; game/save dir discovery;
+   icons via `tex::decode` (DXT unsupported — fallback tile);
+   grim-vault's own textures/fonts through `univault-ui`.
+3. **Type `player.gdc` blocks 5–17** by porting yagde (MIT,
+   `wr8fdy/yagde`, read+write for every block) so character
+   inventories become writable under the lossless gate.
+4. Deferred: extract the `univault-*` crates to their own repo and
+   re-point tq-univault (R1–R4 already done on the vendored copies).
 
 ## Most recent meaningful progress
+
+- **2026-09-03 — M1 read stack (branch `feat/gd-read-stack`, not
+  merged).** Workspace scaffolded; four crates built in parallel:
+  engine (82 tests; ARZ/ARC one parser each behind `Codec` +
+  `ArzDialect`; found ARZ records are never stored raw and GD
+  `TEX\x02` has no pad byte), io (15; backup-suffix policy +
+  post-write re-read), ui (21; art-free, one slicer), core (37;
+  cipher order XOR-then-update verified on real saves, lossless
+  blocks, `gamedata` layered facade with relic/transmuter bitmap
+  fallbacks). `smoke` example: 3 characters + transfer stash, every
+  item named with rarity and footprint, every round-trip
+  byte-identical. Why: the user chose a usable GD tool over migrating
+  tq-univault; this is the foundation every later milestone reads
+  through. Risk: opaque blocks cannot be re-keyed (ARCHITECTURE "Data
+  flow") — a write to `player.gdc` before blocks 5–17 are typed would
+  corrupt the file silently in-game; `encode` refuses, and that
+  refusal must survive the GUI work.
 
 - **2026-09-03 — Shared-engine split decided (design dialog; docs only,
   branch `design/shared-engine-split`).** Surveyed tq-univault core

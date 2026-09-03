@@ -1,0 +1,20 @@
+[package]
+name = "univault-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Game-agnostic engine formats shared by tq-univault and grim-vault: little-endian reader/writer, ARC/ARZ containers (zlib or LZ4), localization text, .tex headers, grid placement"
+
+[lints]
+workspace = true
+
+[features]
+# Exposes the synthetic-archive builders (`arc::fixture`, `arz::fixture`,
+# `tex::fixture`) so consumer crates can build ARC/ARZ/TEX images in
+# their own tests.
+test-util = []
+
+[dependencies]
+flate2 = "1"
+lz4_flex = "0.14"
+thiserror = "2"

@@ -1,0 +1,15 @@
+[package]
+name = "grimvault-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Grim Dawn file formats, item model, and vault logic (GUI-agnostic)"
+
+[lints]
+workspace = true
+
+[dependencies]
+univault-engine = { path = "../univault-engine" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
