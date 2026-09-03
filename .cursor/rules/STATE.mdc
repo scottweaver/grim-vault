@@ -11,15 +11,15 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-03 (component / crafting-material storage
-added after the first live run; awaiting user acceptance)
+Last updated: 2026-09-03 (everything landed on `main` by local
+fast-forward; no remote yet; awaiting user acceptance)
 
 ## Active workstream
 
 Fast track to a usable Grim Dawn tool (user decision 2026-09-03; the
 separate-repo extraction of the shared engine is deferred,
-ARCHITECTURE.md "Crate layering"). On `feat/gd-read-stack` **M1–M3
-are done and the app runs**: a five-crate workspace —
+ARCHITECTURE.md "Crate layering"). On `main` (landed by local fast-forward on 2026-09-03; no remote
+yet) **M1–M3 are done and the app runs**: a five-crate workspace —
 `univault-engine` (tq-univault's parsers vendored, GD LZ4 dialect),
 `univault-io` (safe-io with post-write re-read), `univault-ui`
 (art-free egui kit), `grimvault-core` (rolling-XOR codec, **every
@@ -44,9 +44,7 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at `810f7a8` (rules layer), no code |
-| `design/shared-engine-split` | engine-split proposal + GD format references | docs only, one commit ahead of `main`; `feat/gd-read-stack` branched from it |
-| `feat/gd-read-stack` | workspace, read stack (M1), vault loop (M2), GUI shell (M3), typed player.gdc, reagent storage | local, not pushed (no remote yet); 288 tests green |
+| `main` | trunk | at `54d6042` — rules layer, read stack, vault loop, GUI shell, typed `player.gdc`, reagent storage, settings fallback; 288 tests green; no remote and no GitHub repo yet |
 
 ## Next up
 
@@ -69,8 +67,21 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
    ~870 MB.
 4. Deferred: extract the `univault-*` crates to their own repo and
    re-point tq-univault (R1–R5 done on the vendored copies).
+5. Create the GitHub repo (`scottweaver/grim-vault`, PROJECT.md's
+   commented `github:` block is pre-filled) and push when ready; the
+   wrap-up routine's PR steps stay inert until then.
 
 ## Most recent meaningful progress
+
+- **2026-09-03 — Landed on `main` (local fast-forward to `54d6042`).**
+  `feat/gd-read-stack` and `design/shared-engine-split` merged linearly
+  and were deleted; no PR, no remote, `tracker: none`. Six feature
+  commits since the rules layer: engine split decided, read stack,
+  vault loop, GUI shell + typed `player.gdc`, reagent storage, CLI
+  settings fallback. Why: the work is usable and the branches were
+  pure history at this point; landing it makes `main` the thing to
+  build on. Risk: nothing is off this machine yet — a GitHub push is
+  next-up item 5.
 
 - **2026-09-03 — Component and crafting-material storage (branch
   `feat/gd-read-stack`, not merged).** User feedback from the first
