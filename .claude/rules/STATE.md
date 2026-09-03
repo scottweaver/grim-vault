@@ -6,7 +6,44 @@ are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
 Last updated: 2026-09-03 (everything landed on `main` by local
-fast-forward; no remote yet; awaiting user acceptance)
+fast-forward; no remote yet; awaiting user acceptance; checkpointed)
+
+## Session handoff
+<!-- transient; owned by the checkpoint skill -->
+
+**Resume here:** everything is on `main` at `eda25b1` (no remote; the
+user declined creating the GitHub repo for now — do not push
+unprompted, it is next-up item 5). The next action is the **user's
+acceptance run** with the game closed: vault one item from the
+transfer stash and one component, place them back, then confirm
+in-game. Nothing the app writes has been read by the game yet.
+
+- **Environment left behind:** a release build of the app launched by
+  the assistant may still be running (`pgrep -x grimvault-gui`);
+  relaunch with `cargo run --release -p grimvault-gui`. The real paths
+  are seeded in `~/Library/Application Support/grim-vault/settings.json`;
+  no `vault-store.json` exists yet (nothing vaulted).
+- **Scratch material is gone with the session:** copies of the game
+  archives and saves, and the reference clones (gdlc, yagde,
+  grim-save-parser) lived in the session scratchpad. Re-copy from
+  `/Volumes/scott-games/...` (never read live files while the game
+  runs; `cp` first) and re-clone from the URLs in
+  `docs/format-references.md` when needed. The examples accept
+  `--game` / `--save` overrides for copies.
+- **Known nits, unfiled:** a single-mastery character shows the raw
+  class tag (`tagSkillClassName10`) instead of the mastery name; the
+  store pane is a uniform tile flow, not a grid; the illusion
+  collection (`transmutes.gst`) is parsed but not shown.
+- **Unverified in the window:** drag-and-drop, autosave, and the
+  Reload/Keep-mine modal are covered by unit tests only (synthetic
+  input is banned); whether the game keeps or drops a zero-count
+  reagent entry is unknown.
+- **Skill note:** `/wrap-up` assumes a merged PR and a remote; this
+  session ran its local equivalent (fast-forward + docs branch). Worth
+  a "no remote" branch in the skill if it recurs.
+- **Live data drift:** the user is actively playing; the transfer
+  stash grew from 3 to 36 items during the session. Always reload
+  before reasoning about contents.
 
 ## Active workstream
 
