@@ -57,6 +57,12 @@ impl Rarity {
 pub struct ItemClass(String);
 
 impl ItemClass {
+    /// Wraps a `Class` value verbatim; the game's spelling is the identity.
+    #[must_use]
+    pub fn new(class: String) -> Self {
+        Self(class)
+    }
+
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

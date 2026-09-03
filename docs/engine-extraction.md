@@ -8,8 +8,8 @@ tq-univault); refactors R1–R5 land on the vendored copy here, and
 tq-univault is re-pointed at the engine only when it is extracted.
 Decisions are recorded under "Decisions" at the end. **Phase 1
 shipped 2026-09-03** in-workspace: `crates/univault-engine`,
-`crates/univault-io`, `crates/univault-ui`; R1–R4 are done on the
-vendored copies, R5 (`config_dir(app_name)`) waits for `platform`. Source: a read-only survey of tq-univault
+`crates/univault-io`, `crates/univault-ui`; R1–R5 are done on the
+vendored copies (`platform::config_dir(app_name)` included). Source: a read-only survey of tq-univault
 (`crates/univault-core` 15,631 LOC / 25 files, `crates/univault-gui`
 10,307 LOC / 13 files, at main `36e7774`) plus the Grim Dawn format
 research recorded in `format-references.md`. Line references below

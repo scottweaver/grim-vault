@@ -13,3 +13,9 @@ univault-engine = { path = "../univault-engine" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+
+# The library is IO-free by contract (ARCHITECTURE.md "Crate layering":
+# grimvault-core never depends on univault-io). The examples are shells
+# and may touch the filesystem, so the io crate is a dev-dependency only.
+[dev-dependencies]
+univault-io = { path = "../univault-io" }

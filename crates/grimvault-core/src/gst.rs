@@ -199,6 +199,17 @@ impl GstFile {
             GstBlock::Opaque(_) => None,
         })
     }
+
+    /// Block 18 for editing, when typed. Edits are written by
+    /// [`GstFile::encode`], which still refuses if an opaque block
+    /// follows the edited one.
+    #[must_use]
+    pub fn transfer_stash_mut(&mut self) -> Option<&mut TransferStash> {
+        self.blocks.iter_mut().find_map(|block| match block {
+            GstBlock::TransferStash(stash) => Some(stash),
+            GstBlock::Opaque(_) => None,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -255,6 +266,25 @@ mod tests {
         let stash = parsed.transfer_stash().unwrap();
         assert_eq!(stash.tabs.len(), 2);
         assert_eq!(stash.tabs[0].items.len(), 1);
+    }
+
+    #[test]
+    fn edits_through_transfer_stash_mut_are_encoded() {
+        let mut file = sample();
+        file.transfer_stash_mut().unwrap().tabs[1]
+            .items
+            .push(StashItem {
+                item: Item {
+                    base_name: "records/items/materia/m.dbr".into(),
+                    stack_count: 3,
+                    ..Item::default()
+                },
+                x: 0.0,
+                y: 0.0,
+            });
+        let reparsed = GstFile::parse(&file.encode().unwrap()).unwrap();
+        assert_eq!(reparsed, file);
+        assert_eq!(reparsed.transfer_stash().unwrap().tabs[1].items.len(), 1);
     }
 
     #[test]

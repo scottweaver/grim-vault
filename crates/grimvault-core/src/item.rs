@@ -19,6 +19,7 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::crypto::{DecodeError, Decoder, EncodeError, Encoder};
@@ -141,7 +142,12 @@ pub enum ItemEncodeError {
 
 /// One item as the game serializes it. Every field round-trips; see the
 /// module docs for the version policy.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// The JSON form (the vault store's) carries every field under the
+/// game's own camelCase names, so a stored item is its full identity
+/// and never depends on where it is kept.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Item {
     /// Record path of the base item.
     pub base_name: String,

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/univault-engine",
     "crates/grimvault-core",
+    "crates/grimvault-gui",
     "crates/univault-io",
     "crates/univault-ui",
 ]

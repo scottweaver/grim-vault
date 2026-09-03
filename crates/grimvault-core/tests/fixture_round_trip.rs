@@ -215,3 +215,11 @@ fn random_block_sequences_round_trip_opaquely() {
         assert_eq!(file.encode().unwrap(), bytes);
     }
 }
+
+#[test]
+fn fixture_passes_the_lossless_gate_at_load() {
+    let loaded = grimvault_core::loaded::Loaded::<PlayerFile>::load(FIXTURE.to_vec()).unwrap();
+    assert_eq!(loaded.baseline(), FIXTURE);
+    assert_eq!(loaded.model().character_name(), "Laurana");
+    assert_eq!(loaded.encode().unwrap(), FIXTURE);
+}

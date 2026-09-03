@@ -1,0 +1,317 @@
+//! Type buckets: the computed view that groups store entries by what
+//! they are. A bucket is derived from the item's base record `Class`
+//! every time it is displayed and is never persisted (ARCHITECTURE.md
+//! "Source of truth"), so nothing can be misfiled and copying an
+//! entry's bytes cannot change where it shows up.
+//!
+//! The `Class` strings are the game's, observed in the shipped record
+//! database; every observed value maps explicitly and anything else
+//! lands in [`Bucket::Misc`] rather than being guessed at.
+
+use crate::gamedata::ItemClass;
+
+/// The top level of the view, in display order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Group {
+    Weapons,
+    Armor,
+    Accessories,
+    Crafting,
+    Other,
+}
+
+impl Group {
+    /// Every group in display order.
+    pub const ALL: [Group; 5] = [
+        Group::Weapons,
+        Group::Armor,
+        Group::Accessories,
+        Group::Crafting,
+        Group::Other,
+    ];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Group::Weapons => "Weapons",
+            Group::Armor => "Armor",
+            Group::Accessories => "Accessories",
+            Group::Crafting => "Crafting",
+            Group::Other => "Other",
+        }
+    }
+}
+
+/// One bucket of the view, in display order within its [`Group`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Bucket {
+    OneHanded,
+    TwoHanded,
+    RangedOneHanded,
+    RangedTwoHanded,
+    Offhand,
+    Shield,
+    Head,
+    Chest,
+    Shoulders,
+    Hands,
+    Legs,
+    Feet,
+    Waist,
+    Amulet,
+    Ring,
+    Medal,
+    Component,
+    Relic,
+    Augment,
+    Blueprint,
+    Transmuter,
+    Consumable,
+    Quest,
+    Note,
+    Misc,
+}
+
+impl Bucket {
+    /// Every bucket in display order (grouped, groups in [`Group::ALL`]
+    /// order).
+    pub const ALL: [Bucket; 25] = [
+        Bucket::OneHanded,
+        Bucket::TwoHanded,
+        Bucket::RangedOneHanded,
+        Bucket::RangedTwoHanded,
+        Bucket::Offhand,
+        Bucket::Shield,
+        Bucket::Head,
+        Bucket::Chest,
+        Bucket::Shoulders,
+        Bucket::Hands,
+        Bucket::Legs,
+        Bucket::Feet,
+        Bucket::Waist,
+        Bucket::Amulet,
+        Bucket::Ring,
+        Bucket::Medal,
+        Bucket::Component,
+        Bucket::Relic,
+        Bucket::Augment,
+        Bucket::Blueprint,
+        Bucket::Transmuter,
+        Bucket::Consumable,
+        Bucket::Quest,
+        Bucket::Note,
+        Bucket::Misc,
+    ];
+
+    /// The bucket for a record's `Class`; [`Bucket::Misc`] for any class
+    /// this app has not mapped.
+    #[must_use]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "every observed class is named; the wildcard is the unknown-class fallback"
+    )]
+    pub fn of(class: &ItemClass) -> Bucket {
+        let class = class.as_str();
+        if class.starts_with("OneShot_") {
+            return Bucket::Consumable;
+        }
+        match class {
+            "WeaponMelee_Axe"
+            | "WeaponMelee_Dagger"
+            | "WeaponMelee_Mace"
+            | "WeaponMelee_Scepter"
+            | "WeaponMelee_Sword" => Bucket::OneHanded,
+            "WeaponMelee_Axe2h"
+            | "WeaponMelee_Mace2h"
+            | "WeaponMelee_Spear2h"
+            | "WeaponMelee_Sword2h" => Bucket::TwoHanded,
+            "WeaponHunting_Ranged1h" => Bucket::RangedOneHanded,
+            "WeaponHunting_Ranged2h" => Bucket::RangedTwoHanded,
+            "WeaponArmor_Offhand" => Bucket::Offhand,
+            "WeaponArmor_Shield" => Bucket::Shield,
+            "ArmorProtective_Head" => Bucket::Head,
+            "ArmorProtective_Chest" => Bucket::Chest,
+            "ArmorProtective_Shoulders" => Bucket::Shoulders,
+            "ArmorProtective_Hands" => Bucket::Hands,
+            "ArmorProtective_Legs" => Bucket::Legs,
+            "ArmorProtective_Feet" => Bucket::Feet,
+            "ArmorProtective_Waist" => Bucket::Waist,
+            "ArmorJewelry_Amulet" => Bucket::Amulet,
+            "ArmorJewelry_Ring" => Bucket::Ring,
+            "ArmorJewelry_Medal" => Bucket::Medal,
+            "ItemRelic" => Bucket::Component,
+            "ItemArtifact" => Bucket::Relic,
+            "ItemEnchantment" => Bucket::Augment,
+            "ItemArtifactFormula" | "ItemSetFormula" | "ItemRandomSetFormula" => Bucket::Blueprint,
+            "ItemTransmuter" | "ItemTransmuterSet" => Bucket::Transmuter,
+            "ItemUsableSkill" => Bucket::Consumable,
+            "QuestItem" => Bucket::Quest,
+            "ItemNote" => Bucket::Note,
+            "ItemFactionBooster"
+            | "ItemFactionWarrant"
+            | "ItemDifficultyUnlock"
+            | "ItemAttributeReset"
+            | "ItemDevotionReset" => Bucket::Misc,
+            _ => Bucket::Misc,
+        }
+    }
+
+    #[must_use]
+    pub const fn group(self) -> Group {
+        match self {
+            Bucket::OneHanded
+            | Bucket::TwoHanded
+            | Bucket::RangedOneHanded
+            | Bucket::RangedTwoHanded
+            | Bucket::Offhand
+            | Bucket::Shield => Group::Weapons,
+            Bucket::Head
+            | Bucket::Chest
+            | Bucket::Shoulders
+            | Bucket::Hands
+            | Bucket::Legs
+            | Bucket::Feet
+            | Bucket::Waist => Group::Armor,
+            Bucket::Amulet | Bucket::Ring | Bucket::Medal => Group::Accessories,
+            Bucket::Component
+            | Bucket::Relic
+            | Bucket::Augment
+            | Bucket::Blueprint
+            | Bucket::Transmuter => Group::Crafting,
+            Bucket::Consumable | Bucket::Quest | Bucket::Note | Bucket::Misc => Group::Other,
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Bucket::OneHanded => "One-Handed",
+            Bucket::TwoHanded => "Two-Handed",
+            Bucket::RangedOneHanded => "Ranged (One-Handed)",
+            Bucket::RangedTwoHanded => "Ranged (Two-Handed)",
+            Bucket::Offhand => "Off-Hand",
+            Bucket::Shield => "Shields",
+            Bucket::Head => "Head",
+            Bucket::Chest => "Chest",
+            Bucket::Shoulders => "Shoulders",
+            Bucket::Hands => "Hands",
+            Bucket::Legs => "Legs",
+            Bucket::Feet => "Feet",
+            Bucket::Waist => "Belts",
+            Bucket::Amulet => "Amulets",
+            Bucket::Ring => "Rings",
+            Bucket::Medal => "Medals",
+            Bucket::Component => "Components",
+            Bucket::Relic => "Relics",
+            Bucket::Augment => "Augments",
+            Bucket::Blueprint => "Blueprints",
+            Bucket::Transmuter => "Transmuters",
+            Bucket::Consumable => "Consumables",
+            Bucket::Quest => "Quest Items",
+            Bucket::Note => "Notes",
+            Bucket::Misc => "Miscellaneous",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    fn class(name: &str) -> ItemClass {
+        ItemClass::new(name.to_string())
+    }
+
+    const MAPPING: &[(&str, Bucket)] = &[
+        ("WeaponMelee_Axe", Bucket::OneHanded),
+        ("WeaponMelee_Dagger", Bucket::OneHanded),
+        ("WeaponMelee_Mace", Bucket::OneHanded),
+        ("WeaponMelee_Scepter", Bucket::OneHanded),
+        ("WeaponMelee_Sword", Bucket::OneHanded),
+        ("WeaponMelee_Axe2h", Bucket::TwoHanded),
+        ("WeaponMelee_Mace2h", Bucket::TwoHanded),
+        ("WeaponMelee_Spear2h", Bucket::TwoHanded),
+        ("WeaponMelee_Sword2h", Bucket::TwoHanded),
+        ("WeaponHunting_Ranged1h", Bucket::RangedOneHanded),
+        ("WeaponHunting_Ranged2h", Bucket::RangedTwoHanded),
+        ("WeaponArmor_Offhand", Bucket::Offhand),
+        ("WeaponArmor_Shield", Bucket::Shield),
+        ("ArmorProtective_Head", Bucket::Head),
+        ("ArmorProtective_Chest", Bucket::Chest),
+        ("ArmorProtective_Shoulders", Bucket::Shoulders),
+        ("ArmorProtective_Hands", Bucket::Hands),
+        ("ArmorProtective_Legs", Bucket::Legs),
+        ("ArmorProtective_Feet", Bucket::Feet),
+        ("ArmorProtective_Waist", Bucket::Waist),
+        ("ArmorJewelry_Amulet", Bucket::Amulet),
+        ("ArmorJewelry_Ring", Bucket::Ring),
+        ("ArmorJewelry_Medal", Bucket::Medal),
+        ("ItemRelic", Bucket::Component),
+        ("ItemArtifact", Bucket::Relic),
+        ("ItemEnchantment", Bucket::Augment),
+        ("ItemArtifactFormula", Bucket::Blueprint),
+        ("ItemSetFormula", Bucket::Blueprint),
+        ("ItemRandomSetFormula", Bucket::Blueprint),
+        ("ItemTransmuter", Bucket::Transmuter),
+        ("ItemTransmuterSet", Bucket::Transmuter),
+        ("OneShot_Potion", Bucket::Consumable),
+        ("OneShot_Scroll", Bucket::Consumable),
+        ("OneShot_", Bucket::Consumable),
+        ("ItemUsableSkill", Bucket::Consumable),
+        ("QuestItem", Bucket::Quest),
+        ("ItemNote", Bucket::Note),
+        ("ItemFactionBooster", Bucket::Misc),
+        ("ItemFactionWarrant", Bucket::Misc),
+        ("ItemDifficultyUnlock", Bucket::Misc),
+        ("ItemAttributeReset", Bucket::Misc),
+        ("ItemDevotionReset", Bucket::Misc),
+    ];
+
+    #[test]
+    fn every_observed_class_maps_to_its_bucket() {
+        for (name, expected) in MAPPING {
+            assert_eq!(Bucket::of(&class(name)), *expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn unmapped_classes_fall_back_to_misc() {
+        assert_eq!(Bucket::of(&class("ItemFromTheFuture")), Bucket::Misc);
+        assert_eq!(Bucket::of(&class("")), Bucket::Misc);
+        assert_eq!(Bucket::of(&class("weaponmelee_axe")), Bucket::Misc);
+        assert_eq!(Bucket::of(&class("OneShot")), Bucket::Misc);
+    }
+
+    #[test]
+    fn all_lists_every_bucket_once_grouped_in_group_order() {
+        let unique: HashSet<Bucket> = Bucket::ALL.iter().copied().collect();
+        assert_eq!(unique.len(), Bucket::ALL.len());
+        assert!(MAPPING.iter().all(|(_, bucket)| unique.contains(bucket)));
+        let group_order: Vec<usize> = Bucket::ALL
+            .iter()
+            .map(|bucket| {
+                Group::ALL
+                    .iter()
+                    .position(|group| *group == bucket.group())
+                    .unwrap()
+            })
+            .collect();
+        assert!(group_order.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(
+            Group::ALL
+                .iter()
+                .all(|group| { Bucket::ALL.iter().any(|bucket| bucket.group() == *group) })
+        );
+    }
+
+    #[test]
+    fn labels_are_distinct_and_non_empty() {
+        let labels: HashSet<&str> = Bucket::ALL.iter().map(|bucket| bucket.label()).collect();
+        assert_eq!(labels.len(), Bucket::ALL.len());
+        assert!(labels.iter().all(|label| !label.is_empty()));
+        let groups: HashSet<&str> = Group::ALL.iter().map(|group| group.label()).collect();
+        assert_eq!(groups.len(), Group::ALL.len());
+    }
+}

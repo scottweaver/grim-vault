@@ -12,6 +12,7 @@ pub mod codec;
 pub mod format;
 pub mod grid;
 pub mod ids;
+pub mod platform;
 pub mod reader;
 pub mod tex;
 pub mod text;
