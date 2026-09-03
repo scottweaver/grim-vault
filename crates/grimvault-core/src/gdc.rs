@@ -789,7 +789,7 @@ impl PlayerFile {
 
     block_accessor!(
         /// Block 1, when typed.
-        character_info: CharacterInfo(CharacterInfo)
+        character_info, character_info_mut: CharacterInfo(CharacterInfo)
     );
     block_accessor!(
         /// Block 2, when typed.

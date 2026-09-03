@@ -1,15 +1,17 @@
 //! The open files as the shell holds them: the transfer stash, the
 //! component / crafting-material storage, the vault store, and the
-//! read-only characters. Each writable document knows the disk stamp
-//! it was read under (the external-change guard's baseline), whether
-//! it holds unsaved edits, and whether this load's backup has been
-//! taken yet — the backup-first rule is *one backup per load*, so the
-//! first write since load takes it and later writes reuse it
-//! (ARCHITECTURE.md "Data flow").
+//! characters. Each writable document knows the disk stamp it was
+//! read under (the external-change guard's baseline), whether it
+//! holds unsaved edits, and whether this load's backup has been taken
+//! yet — the backup-first rule is *one backup per load*, so the first
+//! write since load takes it and later writes reuse it
+//! (ARCHITECTURE.md "Data flow"). That bookkeeping is one type,
+//! [`Tracking`], shared by every document.
 //!
-//! `player.gdc` is never written by this build — the vault loop edits
-//! only `transfer.gst` and `reagents.gst` — so [`CharacterDoc`] has no
-//! save path at all.
+//! A character is writable only while every block of its `player.gdc`
+//! is typed: an opaque block cannot be re-keyed, so an edit before it
+//! could never be written (ARCHITECTURE.md "Data flow"), and such a
+//! file is held read-only rather than refused.
 
 use std::fmt;
 use std::io;
@@ -89,41 +91,125 @@ pub enum SaveError {
     Encode(#[from] SaveEncodeError),
     #[error("writing {}: {source}", path.display())]
     Write { path: PathBuf, source: io::Error },
+    /// The character's file carries an opaque block, so no edit to it
+    /// can be re-keyed.
+    #[error("{} is read-only: block {block} is not typed", path.display())]
+    ReadOnly { path: PathBuf, block: BlockId },
 }
 
-/// The writable documents, for labels and the conflict list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Position of a character in the shell's list, as `main/` orders
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CharacterSlot(usize);
+
+impl CharacterSlot {
+    #[must_use]
+    pub const fn new(slot: usize) -> Self {
+        Self(slot)
+    }
+
+    #[must_use]
+    pub const fn value(self) -> usize {
+        self.0
+    }
+}
+
+/// The writable documents, for labels, the write order, and the
+/// conflict list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Doc {
     Stash,
     Store,
     Reagents,
-}
-
-impl Doc {
-    /// Every writable document.
-    pub const ALL: [Doc; 3] = [Doc::Stash, Doc::Store, Doc::Reagents];
+    Character(CharacterSlot),
 }
 
 impl fmt::Display for Doc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Stash => "transfer stash",
-            Self::Store => "vault store",
-            Self::Reagents => "component storage",
-        })
+        match self {
+            Self::Stash => f.write_str("transfer stash"),
+            Self::Store => f.write_str("vault store"),
+            Self::Reagents => f.write_str("component storage"),
+            Self::Character(slot) => write!(f, "character {}", slot.value() + 1),
+        }
     }
 }
 
-/// Backup-first on the first write since load, plain synced writes
-/// after; the backup state advances only once the write succeeded.
-fn write_document(path: &Path, bytes: &[u8], backup: &mut Backup) -> io::Result<Option<PathBuf>> {
-    match backup {
-        Backup::Armed => {
-            let taken = backup_first_write(path, bytes, BACKUPS)?;
-            *backup = Backup::Taken;
-            Ok(taken)
+/// The on-disk bookkeeping every writable document shares: where it
+/// lives, the stamp the guard compares against, whether it holds
+/// unsaved edits, and whether this load's backup has been taken.
+#[derive(Debug)]
+pub struct Tracking {
+    path: PathBuf,
+    stamp: Option<FileStamp>,
+    edits: Edits,
+    backup: Backup,
+}
+
+impl Tracking {
+    /// A freshly read file: stamped now, clean, backup armed.
+    fn fresh(path: PathBuf) -> Self {
+        let stamp = stamp_of(&path);
+        Self {
+            path,
+            stamp,
+            edits: Edits::Saved,
+            backup: Backup::Armed,
         }
-        Backup::Taken => write_synced(path, bytes).map(|()| None),
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    #[must_use]
+    pub fn stamp(&self) -> Option<FileStamp> {
+        self.stamp
+    }
+
+    #[must_use]
+    pub fn edits(&self) -> Edits {
+        self.edits
+    }
+
+    #[must_use]
+    pub fn backup(&self) -> Backup {
+        self.backup
+    }
+
+    pub fn mark_edited(&mut self) {
+        self.edits = Edits::Unsaved;
+    }
+
+    /// Writes `bytes` unless the file changed underneath: backup-first
+    /// on the first write since load, a plain synced write after; the
+    /// backup state advances only once the write succeeded, and the
+    /// edits stay unsaved on failure.
+    fn save_bytes(&mut self, bytes: &[u8]) -> Result<SaveOutcome, SaveError> {
+        if stamp_of(&self.path) != self.stamp {
+            return Ok(SaveOutcome::Conflict);
+        }
+        let written = match self.backup {
+            Backup::Armed => backup_first_write(&self.path, bytes, BACKUPS),
+            Backup::Taken => write_synced(&self.path, bytes).map(|()| None),
+        };
+        let backup = written.map_err(|source| SaveError::Write {
+            path: self.path.clone(),
+            source,
+        })?;
+        self.backup = Backup::Taken;
+        self.stamp = stamp_of(&self.path);
+        self.edits = Edits::Saved;
+        Ok(SaveOutcome::Saved { backup })
+    }
+
+    /// "Keep mine": adopts the external version's stamp and re-arms
+    /// backup-first so that version is backed up before the next save
+    /// overwrites it.
+    pub fn keep_mine(&mut self) {
+        self.stamp = stamp_of(&self.path);
+        self.backup = Backup::Armed;
     }
 }
 
@@ -177,11 +263,8 @@ impl EditableBlock for ReagentStorage {
 /// the lossless gate and carries that block.
 #[derive(Debug)]
 pub struct GstDoc<B: EditableBlock> {
-    path: PathBuf,
+    tracking: Tracking,
     loaded: Loaded<GstFile>,
-    stamp: Option<FileStamp>,
-    edits: Edits,
-    backup: Backup,
     block: PhantomData<B>,
 }
 
@@ -201,7 +284,7 @@ impl<B: EditableBlock> GstDoc<B> {
             path: path.clone(),
             source,
         })?;
-        let stamp = stamp_of(&path);
+        let tracking = Tracking::fresh(path.clone());
         let loaded = Loaded::<GstFile>::load(bytes).map_err(|source| GstOpenError::Load {
             path: path.clone(),
             source,
@@ -210,18 +293,24 @@ impl<B: EditableBlock> GstDoc<B> {
             return Err(GstOpenError::NoTypedBlock { path, block: B::ID });
         }
         Ok(Self {
-            path,
+            tracking,
             loaded,
-            stamp,
-            edits: Edits::Saved,
-            backup: Backup::Armed,
             block: PhantomData,
         })
     }
 
     #[must_use]
+    pub fn tracking(&self) -> &Tracking {
+        &self.tracking
+    }
+
+    pub fn tracking_mut(&mut self) -> &mut Tracking {
+        &mut self.tracking
+    }
+
+    #[must_use]
     pub fn path(&self) -> &Path {
-        &self.path
+        self.tracking.path()
     }
 
     /// The typed block. `open` proved it present and `GstFile` cannot
@@ -232,29 +321,11 @@ impl<B: EditableBlock> GstDoc<B> {
             .expect("open refused a file without the block and blocks cannot be removed")
     }
 
-    /// The typed block for editing; call [`Self::mark_edited`] after.
+    /// The typed block for editing; call [`Tracking::mark_edited`]
+    /// after.
     pub fn block_mut(&mut self) -> &mut B {
         B::of_mut(self.loaded.model_mut())
             .expect("open refused a file without the block and blocks cannot be removed")
-    }
-
-    pub fn mark_edited(&mut self) {
-        self.edits = Edits::Unsaved;
-    }
-
-    #[must_use]
-    pub fn edits(&self) -> Edits {
-        self.edits
-    }
-
-    #[must_use]
-    pub fn backup(&self) -> Backup {
-        self.backup
-    }
-
-    #[must_use]
-    pub fn stamp(&self) -> Option<FileStamp> {
-        self.stamp
     }
 
     /// Size of the bytes the model was proven against.
@@ -269,27 +340,8 @@ impl<B: EditableBlock> GstDoc<B> {
     /// [`SaveError`] when the encode or the write fails; the edits stay
     /// unsaved.
     pub fn save(&mut self) -> Result<SaveOutcome, SaveError> {
-        if stamp_of(&self.path) != self.stamp {
-            return Ok(SaveOutcome::Conflict);
-        }
         let bytes = self.loaded.encode()?;
-        let backup = write_document(&self.path, &bytes, &mut self.backup).map_err(|source| {
-            SaveError::Write {
-                path: self.path.clone(),
-                source,
-            }
-        })?;
-        self.stamp = stamp_of(&self.path);
-        self.edits = Edits::Saved;
-        Ok(SaveOutcome::Saved { backup })
-    }
-
-    /// "Keep mine": adopts the external version's stamp and re-arms
-    /// backup-first so that version is backed up before the next save
-    /// overwrites it.
-    pub fn keep_mine(&mut self) {
-        self.stamp = stamp_of(&self.path);
-        self.backup = Backup::Armed;
+        self.tracking.save_bytes(&bytes)
     }
 
     /// Re-reads the file, dropping in-memory edits. On failure the
@@ -298,7 +350,7 @@ impl<B: EditableBlock> GstDoc<B> {
     /// # Errors
     /// [`GstOpenError`].
     pub fn reload(&mut self) -> Result<(), GstOpenError> {
-        *self = Self::open(self.path.clone())?;
+        *self = Self::open(self.tracking.path.clone())?;
         Ok(())
     }
 }
@@ -310,7 +362,7 @@ impl StashDoc {
         self.block()
     }
 
-    /// Block 18 for editing; call [`Self::mark_edited`] after.
+    /// Block 18 for editing; call [`Tracking::mark_edited`] after.
     pub fn stash_mut(&mut self) -> &mut TransferStash {
         self.block_mut()
     }
@@ -323,7 +375,7 @@ impl ReagentDoc {
         self.block()
     }
 
-    /// Block 20 for editing; call [`Self::mark_edited`] after.
+    /// Block 20 for editing; call [`Tracking::mark_edited`] after.
     pub fn storage_mut(&mut self) -> &mut ReagentStorage {
         self.block_mut()
     }
@@ -374,7 +426,7 @@ impl Reagents {
     #[must_use]
     pub fn stamp(&self) -> Option<FileStamp> {
         match self {
-            Self::Open(doc) => doc.stamp(),
+            Self::Open(doc) => doc.tracking().stamp(),
             Self::Absent { .. } => None,
             Self::Failed { stamp, .. } => *stamp,
         }
@@ -383,7 +435,8 @@ impl Reagents {
     /// The document's edits; an absent or unusable file has none.
     #[must_use]
     pub fn edits(&self) -> Edits {
-        self.doc().map_or(Edits::Saved, GstDoc::edits)
+        self.doc()
+            .map_or(Edits::Saved, |doc| doc.tracking().edits())
     }
 
     #[must_use]
@@ -432,11 +485,8 @@ pub enum StoreOpenError {
 /// first save creates it.
 #[derive(Debug)]
 pub struct StoreDoc {
-    path: PathBuf,
+    tracking: Tracking,
     store: VaultStore,
-    stamp: Option<FileStamp>,
-    edits: Edits,
-    backup: Backup,
 }
 
 impl StoreDoc {
@@ -446,32 +496,36 @@ impl StoreDoc {
     /// [`StoreOpenError`] when the file exists but cannot be read or
     /// parsed.
     pub fn open(path: PathBuf) -> Result<Self, StoreOpenError> {
-        let (store, stamp) = if path.is_file() {
+        let store = if path.is_file() {
             let bytes = read_verified(&path).map_err(|source| StoreOpenError::Read {
                 path: path.clone(),
                 source,
             })?;
-            let stamp = stamp_of(&path);
-            let store = VaultStore::from_json(&bytes).map_err(|source| StoreOpenError::Parse {
+            VaultStore::from_json(&bytes).map_err(|source| StoreOpenError::Parse {
                 path: path.clone(),
                 source,
-            })?;
-            (store, stamp)
+            })?
         } else {
-            (VaultStore::new(), None)
+            VaultStore::new()
         };
         Ok(Self {
-            path,
+            tracking: Tracking::fresh(path),
             store,
-            stamp,
-            edits: Edits::Saved,
-            backup: Backup::Armed,
         })
     }
 
     #[must_use]
+    pub fn tracking(&self) -> &Tracking {
+        &self.tracking
+    }
+
+    pub fn tracking_mut(&mut self) -> &mut Tracking {
+        &mut self.tracking
+    }
+
+    #[must_use]
     pub fn path(&self) -> &Path {
-        &self.path
+        self.tracking.path()
     }
 
     #[must_use]
@@ -479,28 +533,9 @@ impl StoreDoc {
         &self.store
     }
 
-    /// The store for editing; call [`Self::mark_edited`] after.
+    /// The store for editing; call [`Tracking::mark_edited`] after.
     pub fn store_mut(&mut self) -> &mut VaultStore {
         &mut self.store
-    }
-
-    pub fn mark_edited(&mut self) {
-        self.edits = Edits::Unsaved;
-    }
-
-    #[must_use]
-    pub fn edits(&self) -> Edits {
-        self.edits
-    }
-
-    #[must_use]
-    pub fn backup(&self) -> Backup {
-        self.backup
-    }
-
-    #[must_use]
-    pub fn stamp(&self) -> Option<FileStamp> {
-        self.stamp
     }
 
     /// Writes the store unless the file changed underneath, creating
@@ -509,27 +544,14 @@ impl StoreDoc {
     /// # Errors
     /// [`SaveError::Write`]; the edits stay unsaved.
     pub fn save(&mut self) -> Result<SaveOutcome, SaveError> {
-        if stamp_of(&self.path) != self.stamp {
-            return Ok(SaveOutcome::Conflict);
-        }
-        let backup = self
-            .path
-            .parent()
+        let path = self.tracking.path();
+        path.parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| write_document(&self.path, &self.store.to_json(), &mut self.backup))
             .map_err(|source| SaveError::Write {
-                path: self.path.clone(),
+                path: path.to_path_buf(),
                 source,
             })?;
-        self.stamp = stamp_of(&self.path);
-        self.edits = Edits::Saved;
-        Ok(SaveOutcome::Saved { backup })
-    }
-
-    /// See [`GstDoc::keep_mine`].
-    pub fn keep_mine(&mut self) {
-        self.stamp = stamp_of(&self.path);
-        self.backup = Backup::Armed;
+        self.tracking.save_bytes(&self.store.to_json())
     }
 
     /// See [`GstDoc::reload`].
@@ -537,7 +559,7 @@ impl StoreDoc {
     /// # Errors
     /// [`StoreOpenError`].
     pub fn reload(&mut self) -> Result<(), StoreOpenError> {
-        *self = Self::open(self.path.clone())?;
+        *self = Self::open(self.tracking.path.clone())?;
         Ok(())
     }
 }
@@ -551,12 +573,22 @@ pub enum CharacterOpenError {
     Load(#[from] LoadError<GdcError, SaveEncodeError>),
 }
 
-/// A character, read-only: this build has no write path for
-/// `player.gdc`.
+/// Whether a character's file can be written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Writable {
+    /// Every block is typed: any edit re-keys correctly.
+    Yes,
+    /// The first opaque block; nothing before it can be edited, so the
+    /// whole file is held read-only.
+    OpaqueBlock(BlockId),
+}
+
+/// A character's `player.gdc`, gated lossless and stamped; editable
+/// only while [`Writable::Yes`].
 #[derive(Debug)]
 pub struct CharacterDoc {
-    path: PathBuf,
-    file: PlayerFile,
+    tracking: Tracking,
+    loaded: Loaded<PlayerFile>,
 }
 
 impl CharacterDoc {
@@ -566,26 +598,88 @@ impl CharacterDoc {
     /// [`CharacterOpenError`].
     pub fn open(path: PathBuf) -> Result<Self, CharacterOpenError> {
         let bytes = read_verified(&path)?;
+        let tracking = Tracking::fresh(path);
         let loaded = Loaded::<PlayerFile>::load(bytes)?;
-        Ok(Self {
-            path,
-            file: loaded.model().clone(),
-        })
+        Ok(Self { tracking, loaded })
+    }
+
+    #[must_use]
+    pub fn tracking(&self) -> &Tracking {
+        &self.tracking
+    }
+
+    pub fn tracking_mut(&mut self) -> &mut Tracking {
+        &mut self.tracking
     }
 
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.path
+        self.tracking.path()
     }
 
     #[must_use]
     pub fn file(&self) -> &PlayerFile {
-        &self.file
+        self.loaded.model()
     }
 
     #[must_use]
     pub fn name(&self) -> &str {
-        self.file.character_name()
+        self.file().character_name()
+    }
+
+    #[must_use]
+    pub fn writable(&self) -> Writable {
+        self.file()
+            .blocks()
+            .iter()
+            .find(|block| block.is_opaque())
+            .map_or(Writable::Yes, |block| Writable::OpaqueBlock(block.id()))
+    }
+
+    /// The file for editing, refused while read-only; call
+    /// [`Tracking::mark_edited`] after.
+    ///
+    /// # Errors
+    /// [`SaveError::ReadOnly`] naming the opaque block.
+    pub fn file_mut(&mut self) -> Result<&mut PlayerFile, SaveError> {
+        match self.writable() {
+            Writable::Yes => Ok(self.loaded.model_mut()),
+            Writable::OpaqueBlock(block) => Err(SaveError::ReadOnly {
+                path: self.tracking.path.clone(),
+                block,
+            }),
+        }
+    }
+
+    /// Size of the bytes the model was proven against.
+    #[must_use]
+    pub fn baseline_len(&self) -> usize {
+        self.loaded.baseline().len()
+    }
+
+    /// Writes the character unless the file changed underneath.
+    ///
+    /// # Errors
+    /// [`SaveError::ReadOnly`] for a file with an opaque block, or a
+    /// failed encode or write; the edits stay unsaved.
+    pub fn save(&mut self) -> Result<SaveOutcome, SaveError> {
+        if let Writable::OpaqueBlock(block) = self.writable() {
+            return Err(SaveError::ReadOnly {
+                path: self.tracking.path.clone(),
+                block,
+            });
+        }
+        let bytes = self.loaded.encode()?;
+        self.tracking.save_bytes(&bytes)
+    }
+
+    /// See [`GstDoc::reload`].
+    ///
+    /// # Errors
+    /// [`CharacterOpenError`].
+    pub fn reload(&mut self) -> Result<(), CharacterOpenError> {
+        *self = Self::open(self.tracking.path.clone())?;
+        Ok(())
     }
 }
 
@@ -593,13 +687,24 @@ impl CharacterDoc {
 #[derive(Debug)]
 pub enum CharacterEntry {
     Loaded(CharacterDoc),
+    /// Present but unreadable; `stamp` is the file as it was found, so
+    /// the guard only reacts when it changes again.
     Failed {
         path: PathBuf,
+        stamp: Option<FileStamp>,
         error: CharacterOpenError,
     },
 }
 
 impl CharacterEntry {
+    fn open(path: PathBuf) -> Self {
+        let stamp = stamp_of(&path);
+        match CharacterDoc::open(path.clone()) {
+            Ok(doc) => Self::Loaded(doc),
+            Err(error) => Self::Failed { path, stamp, error },
+        }
+    }
+
     /// The character's name, or the folder's when the file is
     /// unreadable.
     #[must_use]
@@ -610,6 +715,59 @@ impl CharacterEntry {
                 || path.display().to_string(),
                 |name| name.to_string_lossy().trim_start_matches('_').to_string(),
             ),
+        }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Loaded(doc) => doc.path(),
+            Self::Failed { path, .. } => path,
+        }
+    }
+
+    #[must_use]
+    pub fn stamp(&self) -> Option<FileStamp> {
+        match self {
+            Self::Loaded(doc) => doc.tracking().stamp(),
+            Self::Failed { stamp, .. } => *stamp,
+        }
+    }
+
+    /// The document's edits; an unreadable file has none.
+    #[must_use]
+    pub fn edits(&self) -> Edits {
+        self.doc()
+            .map_or(Edits::Saved, |doc| doc.tracking().edits())
+    }
+
+    #[must_use]
+    pub fn doc(&self) -> Option<&CharacterDoc> {
+        match self {
+            Self::Loaded(doc) => Some(doc),
+            Self::Failed { .. } => None,
+        }
+    }
+
+    pub fn doc_mut(&mut self) -> Option<&mut CharacterDoc> {
+        match self {
+            Self::Loaded(doc) => Some(doc),
+            Self::Failed { .. } => None,
+        }
+    }
+
+    /// See [`Reagents::reload`].
+    ///
+    /// # Errors
+    /// [`CharacterOpenError`] when a loaded character could not be
+    /// re-read.
+    pub fn reload(&mut self) -> Result<(), CharacterOpenError> {
+        match self {
+            Self::Loaded(doc) => doc.reload(),
+            Self::Failed { path, .. } => {
+                *self = Self::open(path.clone());
+                Ok(())
+            }
         }
     }
 }
@@ -630,10 +788,7 @@ pub fn open_characters(save_dir: &SaveDir) -> Vec<CharacterEntry> {
         .into_iter()
         .map(|folder| folder.join("player.gdc"))
         .filter(|path| path.is_file())
-        .map(|path| match CharacterDoc::open(path.clone()) {
-            Ok(doc) => CharacterEntry::Loaded(doc),
-            Err(error) => CharacterEntry::Failed { path, error },
-        })
+        .map(CharacterEntry::open)
         .collect()
 }
 
@@ -643,6 +798,8 @@ mod tests {
     use grimvault_core::gst::ReagentEntry;
 
     use super::*;
+
+    const FIXTURE: &[u8] = include_bytes!("../../grimvault-core/tests/fixtures/v11_player.gdc");
 
     struct Scratch(PathBuf);
 
@@ -698,21 +855,21 @@ mod tests {
         let path = scratch.0.join("nested").join("vault-store.json");
         let mut doc = StoreDoc::open(path.clone()).unwrap();
         assert!(doc.store().is_empty());
-        assert_eq!(doc.stamp(), None);
-        assert_eq!(doc.backup(), Backup::Armed);
+        assert_eq!(doc.tracking().stamp(), None);
+        assert_eq!(doc.tracking().backup(), Backup::Armed);
 
-        doc.mark_edited();
-        assert_eq!(doc.edits(), Edits::Unsaved);
+        doc.tracking_mut().mark_edited();
+        assert_eq!(doc.tracking().edits(), Edits::Unsaved);
         assert!(matches!(
             doc.save().unwrap(),
             SaveOutcome::Saved { backup: None }
         ));
-        assert_eq!(doc.edits(), Edits::Saved);
-        assert_eq!(doc.backup(), Backup::Taken);
-        assert_eq!(doc.stamp(), stamp_of(&path));
+        assert_eq!(doc.tracking().edits(), Edits::Saved);
+        assert_eq!(doc.tracking().backup(), Backup::Taken);
+        assert_eq!(doc.tracking().stamp(), stamp_of(&path));
         assert_eq!(backups_of(&path), 0);
 
-        doc.mark_edited();
+        doc.tracking_mut().mark_edited();
         assert!(matches!(
             doc.save().unwrap(),
             SaveOutcome::Saved { backup: None }
@@ -720,7 +877,7 @@ mod tests {
         assert_eq!(backups_of(&path), 0);
 
         let mut reopened = StoreDoc::open(path.clone()).unwrap();
-        reopened.mark_edited();
+        reopened.tracking_mut().mark_edited();
         let outcome = reopened.save().unwrap();
         assert!(
             matches!(outcome, SaveOutcome::Saved { backup: Some(_) }),
@@ -734,7 +891,7 @@ mod tests {
         let scratch = Scratch::new("conflict");
         let path = scratch.0.join("vault-store.json");
         let mut doc = StoreDoc::open(path.clone()).unwrap();
-        doc.mark_edited();
+        doc.tracking_mut().mark_edited();
         doc.save().unwrap();
 
         std::fs::write(&path, VaultStore::new().to_json()).unwrap();
@@ -745,12 +902,12 @@ mod tests {
             .unwrap()
             .set_modified(external + std::time::Duration::from_secs(5))
             .unwrap();
-        doc.mark_edited();
+        doc.tracking_mut().mark_edited();
         assert_eq!(doc.save().unwrap(), SaveOutcome::Conflict);
-        assert_eq!(doc.edits(), Edits::Unsaved);
+        assert_eq!(doc.tracking().edits(), Edits::Unsaved);
 
-        doc.keep_mine();
-        assert_eq!(doc.backup(), Backup::Armed);
+        doc.tracking_mut().keep_mine();
+        assert_eq!(doc.tracking().backup(), Backup::Armed);
         let outcome = doc.save().unwrap();
         assert!(
             matches!(outcome, SaveOutcome::Saved { backup: Some(_) }),
@@ -763,12 +920,12 @@ mod tests {
         let scratch = Scratch::new("reload");
         let path = scratch.0.join("vault-store.json");
         let mut doc = StoreDoc::open(path.clone()).unwrap();
-        doc.mark_edited();
+        doc.tracking_mut().mark_edited();
         doc.save().unwrap();
-        doc.mark_edited();
+        doc.tracking_mut().mark_edited();
         std::fs::write(&path, b"{ not json").unwrap();
         assert!(doc.reload().is_err());
-        assert_eq!(doc.edits(), Edits::Unsaved);
+        assert_eq!(doc.tracking().edits(), Edits::Unsaved);
     }
 
     #[test]
@@ -805,14 +962,14 @@ mod tests {
             record: "records/items/questitems/scrapmetal.dbr".into(),
             count: 80,
         });
-        doc.mark_edited();
+        doc.tracking_mut().mark_edited();
         let outcome = doc.save().unwrap();
         assert!(
             matches!(outcome, SaveOutcome::Saved { backup: Some(_) }),
             "{outcome:?}"
         );
         assert_eq!(backups_of(&path), 1);
-        assert_eq!(doc.edits(), Edits::Saved);
+        assert_eq!(doc.tracking().edits(), Edits::Saved);
         let written = GstFile::parse(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(written.reagent_storage().unwrap().entries.len(), 2);
 
@@ -849,11 +1006,84 @@ mod tests {
     }
 
     #[test]
+    fn a_character_edits_saves_backup_first_and_re_reads_typed() {
+        let scratch = Scratch::new("character");
+        let folder = scratch.0.join("main").join("_Laurana");
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("player.gdc");
+        std::fs::write(&path, FIXTURE).unwrap();
+
+        let mut doc = CharacterDoc::open(path.clone()).unwrap();
+        assert_eq!(doc.name(), "Laurana");
+        assert_eq!(doc.writable(), Writable::Yes);
+        assert_eq!(doc.baseline_len(), FIXTURE.len());
+        assert_eq!(doc.tracking().backup(), Backup::Armed);
+
+        let before = doc.file().character_info().unwrap().money;
+        doc.file_mut().unwrap().character_info_mut().unwrap().money = before + 1;
+        doc.tracking_mut().mark_edited();
+        let outcome = doc.save().unwrap();
+        assert!(
+            matches!(outcome, SaveOutcome::Saved { backup: Some(_) }),
+            "{outcome:?}"
+        );
+        assert_eq!(backups_of(&path), 1);
+        assert_eq!(doc.tracking().edits(), Edits::Saved);
+
+        let written = PlayerFile::parse(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(written.is_fully_typed());
+        assert_eq!(written.character_info().unwrap().money, before + 1);
+        assert_eq!(written.blocks().len(), doc.file().blocks().len());
+
+        std::fs::write(&path, FIXTURE).unwrap();
+        doc.reload().unwrap();
+        assert_eq!(doc.file().character_info().unwrap().money, before);
+    }
+
+    #[test]
+    fn a_character_with_an_opaque_block_is_read_only() {
+        let scratch = Scratch::new("character-opaque");
+        let path = scratch.0.join("player.gdc");
+        let mut enc = Encoder::new(0x0BAD_F00D);
+        enc.write_u32(u32::from_le_bytes(*b"GDCX"));
+        enc.write_u32(2);
+        enc.write_wstring("Sif").unwrap();
+        enc.write_bool(false);
+        enc.write_string("").unwrap();
+        enc.write_u32(1);
+        enc.write_bool(false);
+        enc.write_u8(7);
+        enc.write_zero_marker();
+        enc.write_u32(8);
+        enc.write_bytes(&[0; 16]);
+        enc.write_block(BlockId::new(99), |enc| {
+            enc.write_u32(1);
+            enc.write_string("records/x")?;
+            Ok::<(), EncodeError>(())
+        })
+        .unwrap();
+        std::fs::write(&path, enc.finish()).unwrap();
+
+        let mut doc = CharacterDoc::open(path).unwrap();
+        assert_eq!(doc.name(), "Sif");
+        assert_eq!(doc.writable(), Writable::OpaqueBlock(BlockId::new(99)));
+        assert!(matches!(
+            doc.file_mut(),
+            Err(SaveError::ReadOnly { block, .. }) if block == BlockId::new(99)
+        ));
+        assert!(matches!(doc.save(), Err(SaveError::ReadOnly { .. })));
+        assert_eq!(backups_of(doc.path()), 0);
+    }
+
+    #[test]
     fn character_labels_fall_back_to_the_folder_name() {
         let entry = CharacterEntry::Failed {
             path: PathBuf::from("/saves/main/_Sif/player.gdc"),
+            stamp: None,
             error: CharacterOpenError::Read(io::Error::other("nope")),
         };
         assert_eq!(entry.label(), "Sif");
+        assert_eq!(entry.edits(), Edits::Saved);
+        assert!(entry.doc().is_none());
     }
 }

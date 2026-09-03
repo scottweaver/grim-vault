@@ -18,12 +18,13 @@ use grimvault_core::block::StashTab;
 use grimvault_core::gamedata::{GameData, Rarity};
 use grimvault_core::gdc::Sack;
 use grimvault_core::item::Item;
-use grimvault_core::transfer::{Footprints, ItemIndex, TabIndex};
+use grimvault_core::transfer::{Footprints, ItemIndex};
 use univault_engine::grid::CellRect;
 use univault_engine::ids::GridPos;
 use univault_ui::theme::Palette;
 
-use crate::drag::{self, DragSource, DragState, DropTarget, Fit};
+use crate::documents::CharacterSlot;
+use crate::drag::{self, Container, DragSource, DragState, DropTarget, Fit, Mode};
 use crate::facts::FactsCache;
 use crate::grid::{FootprintSource, GridGeometry, cells_of, footprint_or_unit, occupant_at};
 use crate::icons::{Icon, IconCache};
@@ -36,6 +37,9 @@ pub struct PaneCtx<'a> {
     pub icons: &'a mut IconCache,
     pub palette: &'a Palette,
     pub drag: Option<&'a DragState>,
+    /// Whether a drop this frame would move or copy, from the
+    /// modifier keys held.
+    pub mode: Mode,
 }
 
 /// Where a drop would land this frame, as the surface under the
@@ -52,14 +56,16 @@ pub struct DragFrame {
     pub begin: Option<DragState>,
     pub candidate: Option<DropCandidate>,
     pub double_click: Option<DragSource>,
+    /// A character's iron bits, as the user set them.
+    pub set_money: Option<(CharacterSlot, u32)>,
 }
 
 /// How a grid takes part in drag-and-drop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Interaction {
-    /// A transfer-stash tab: a drag source and a drop target.
-    Editable { tab: TabIndex },
-    /// A character container: hover and tooltips only.
+    /// A writable container: a drag source and a drop target.
+    Editable(Container),
+    /// Hover and tooltips only.
     ReadOnly,
 }
 
@@ -168,7 +174,7 @@ pub fn grid_surface(
     } = spec;
     let size = GridGeometry::fit(Pos2::ZERO, available, cols, rows).size();
     let sense = match interaction {
-        Interaction::Editable { .. } => Sense::click_and_drag(),
+        Interaction::Editable(_) => Sense::click_and_drag(),
         Interaction::ReadOnly => Sense::hover(),
     };
     let (rect, response) = ui.allocate_exact_size(size, sense);
@@ -189,8 +195,8 @@ pub fn grid_surface(
     for (slot, entry) in entries.iter().enumerate() {
         let tile = geometry.cell_rect(entry.cells).shrink(1.0);
         let source = match interaction {
-            Interaction::Editable { tab } => Some(DragSource::Stash {
-                tab,
+            Interaction::Editable(container) => Some(DragSource::Grid {
+                container,
                 index: entry.index,
             }),
             Interaction::ReadOnly => None,
@@ -215,18 +221,27 @@ pub fn grid_surface(
             .show(|ui| item_tooltip(ui, cx, item));
     }
 
-    if let Interaction::Editable { tab } = interaction {
-        report_gestures(ui, &response, &geometry, &rects, entries, tab, cx, frame);
+    if let Interaction::Editable(container) = interaction {
+        report_gestures(
+            ui, &response, &geometry, &rects, entries, container, cx, frame,
+        );
         if let Some(drag) = cx.drag
             && let Some(pointer) = ui.ctx().pointer_latest_pos()
             && rect.contains(pointer)
         {
             let cell = geometry.snap(pointer - drag.grab, drag.footprint);
-            let lifted_index = match drag.source {
-                DragSource::Stash { tab: from, index } if from == tab => Some(index),
-                DragSource::Stash { .. } | DragSource::Store(_) | DragSource::Reagent { .. } => {
-                    None
-                }
+            let lifted_index = match (drag.source, cx.mode) {
+                (
+                    DragSource::Grid {
+                        container: from,
+                        index,
+                    },
+                    Mode::Move,
+                ) if from == container => Some(index),
+                (
+                    DragSource::Grid { .. } | DragSource::Store(_) | DragSource::Reagent { .. },
+                    Mode::Move | Mode::Copy,
+                ) => None,
             };
             let others = entries
                 .iter()
@@ -244,12 +259,48 @@ pub fn grid_surface(
                 fit,
             );
             frame.candidate = Some(DropCandidate {
-                target: DropTarget::StashCell { tab, cell },
+                target: DropTarget::Cell { container, cell },
                 fit,
             });
         }
     }
     response
+}
+
+/// A container's tab button: selects it when clicked and, while a
+/// drag is in flight, takes the drop as a first fit into that
+/// container.
+pub fn container_tab(
+    ui: &mut Ui,
+    selected: bool,
+    label: String,
+    container: Container,
+    cx: &PaneCtx<'_>,
+    frame: &mut DragFrame,
+) -> Response {
+    let response = ui.selectable_label(selected, label);
+    if cx.drag.is_some() && response.contains_pointer() {
+        outline(ui, response.rect, Fit::Fits);
+        frame.candidate = Some(DropCandidate {
+            target: DropTarget::Container(container),
+            fit: Fit::Fits,
+        });
+    }
+    response
+}
+
+/// The drop verdict drawn around a tab button.
+pub fn outline(ui: &Ui, rect: Rect, fit: Fit) {
+    let colour = match fit {
+        Fit::Fits => FITS,
+        Fit::Blocked | Fit::Unresolvable => BLOCKED,
+    };
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(2),
+        Stroke::new(2.0, colour),
+        StrokeKind::Outside,
+    );
 }
 
 #[expect(
@@ -262,7 +313,7 @@ fn report_gestures(
     geometry: &GridGeometry,
     rects: &[CellRect],
     entries: &[GridEntry<'_>],
-    tab: TabIndex,
+    container: Container,
     cx: &mut PaneCtx<'_>,
     frame: &mut DragFrame,
 ) {
@@ -282,8 +333,8 @@ fn report_gestures(
         let entry = &entries[slot];
         let (footprint, _) = footprint_or_unit(cx.facts.footprint(entry.item));
         frame.begin = Some(DragState {
-            source: DragSource::Stash {
-                tab,
+            source: DragSource::Grid {
+                container,
                 index: entry.index,
             },
             item: entry.item.clone(),
@@ -298,8 +349,8 @@ fn report_gestures(
             .and_then(|pointer| geometry.cell_at(pointer))
             .and_then(|cell| occupant_at(rects, cell))
     {
-        frame.double_click = Some(DragSource::Stash {
-            tab,
+        frame.double_click = Some(DragSource::Grid {
+            container,
             index: entries[slot].index,
         });
     }

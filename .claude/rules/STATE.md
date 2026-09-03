@@ -5,18 +5,23 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-03 (everything landed on `main` by local
-fast-forward; no remote yet; awaiting user acceptance; checkpointed)
+Last updated: 2026-09-03 (M4 character editing built on
+`feat/character-editing`, unmerged; no remote yet; awaiting user
+acceptance of both the stash loop and the character loop)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
 
-**Resume here:** everything is on `main` at `eda25b1` (no remote; the
+**Resume here:** `main` is at `9abc5fe`; branch
+`feat/character-editing` holds M4 (characters editable: sack and
+own-stash moves in every direction, copy with Alt/⌘/Ctrl, iron bits)
+and is ready to fast-forward once the user accepts it. No remote; the
 user declined creating the GitHub repo for now — do not push
-unprompted, it is next-up item 5). The next action is the **user's
-acceptance run** with the game closed: vault one item from the
-transfer stash and one component, place them back, then confirm
-in-game. Nothing the app writes has been read by the game yet.
+unprompted, it is next-up item 5. The next action is the **user's
+acceptance run** with the game closed: vault an item from the
+transfer stash and one from a character's sack, place them back, set
+the iron bits, then confirm in-game. Nothing the app writes has been
+read by the game yet — `player.gdc` least of all.
 
 - **Environment left behind:** a release build of the app launched by
   the assistant may still be running (`pgrep -x grimvault-gui`);
@@ -33,11 +38,15 @@ in-game. Nothing the app writes has been read by the game yet.
 - **Known nits, unfiled:** a single-mastery character shows the raw
   class tag (`tagSkillClassName10`) instead of the mastery name; the
   store pane is a uniform tile flow, not a grid; the illusion
-  collection (`transmutes.gst`) is parsed but not shown.
-- **Unverified in the window:** drag-and-drop, autosave, and the
-  Reload/Keep-mine modal are covered by unit tests only (synthetic
-  input is banned); whether the game keeps or drops a zero-count
-  reagent entry is unknown.
+  collection (`transmutes.gst`) is parsed but not shown; equipped
+  items are display-only (no unequip / equip); a copy keeps the
+  original's seed, so duplicates roll identically.
+- **Unverified in the window:** drag-and-drop, autosave, the copy
+  modifier, the iron-bits field, and the Reload/Keep-mine modal are
+  covered by unit tests only (synthetic input is banned); whether the
+  game keeps or drops a zero-count reagent entry is unknown; whether
+  the game accepts a `player.gdc` this app wrote is unknown (the CLI
+  round trip on a copy of Zark re-reads lossless and fully typed).
 - **Skill note:** `/wrap-up` assumes a merged PR and a remote; this
   session ran its local equivalent (fast-forward + docs branch). Worth
   a "no remote" branch in the skill if it recurs.
@@ -50,7 +59,8 @@ in-game. Nothing the app writes has been read by the game yet.
 Fast track to a usable Grim Dawn tool (user decision 2026-09-03; the
 separate-repo extraction of the shared engine is deferred,
 ARCHITECTURE.md "Crate layering"). On `main` (landed by local fast-forward on 2026-09-03; no remote
-yet) **M1–M3 are done and the app runs**: a five-crate workspace —
+yet) **M1–M3 are done and the app runs**, and **M4 (characters editable)
+is built on `feat/character-editing`**: a five-crate workspace —
 `univault-engine` (tq-univault's parsers vendored, GD LZ4 dialect),
 `univault-io` (safe-io with post-write re-read), `univault-ui`
 (art-free egui kit), `grimvault-core` (rolling-XOR codec, **every
@@ -60,38 +70,45 @@ transfer ops, the `Loaded` lossless gate, and — after the user's
 first live run — the account-wide component / crafting-material
 storage `reagents.gst` typed and writable), and `grimvault-gui` (the
 egui shell: setup with dir candidates, background load with progress,
-transfer-stash grids with icons, store by Group/Bucket, read-only
-characters, drag-and-drop and double-click moves through
-`transfer`, autosave 600 ms quiet with backup-first once per load,
-external-change guard with a Reload/Keep-mine modal, `--check`
-headless mode) — 261 tests, clippy pedantic clean. Verified on
-scratch copies of the user's install and saves; screenshot reviewed.
-**Not yet verified: the game reading a `transfer.gst` this app
-wrote** — the next step is the user's acceptance run on the real
-install with the game closed. grim-vault is the Grim Dawn sibling of
-tq-univault; PROJECT.md is bound with `tracker: none`.
+transfer-stash grids with icons, store by Group/Bucket, characters
+with editable sacks and own-stash tabs when every block is typed
+(read-only badge otherwise), one generic move — lift into a scratch
+store, place out of it, restore the source on refusal — for every
+pairing of transfer stash / sacks / own stash / store / component
+storage, copy by holding Alt or ⌘/Ctrl on the drop, an iron-bits
+field, autosave 600 ms quiet with backup-first once per load across
+every document, external-change guard with a Reload/Keep-mine modal
+that now watches every `player.gdc`, `--check` headless mode) — 293
+tests, clippy pedantic clean. Verified on scratch copies of the
+user's install and saves. **Not yet verified: the game reading any
+file this app wrote** — the next step is the user's acceptance run
+on the real install with the game closed. grim-vault is the Grim
+Dawn sibling of tq-univault; PROJECT.md is bound with `tracker:
+none`.
 
 ## Branches in flight
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at `54d6042` — rules layer, read stack, vault loop, GUI shell, typed `player.gdc`, reagent storage, settings fallback; 288 tests green; no remote and no GitHub repo yet |
+| `main` | trunk | at `9abc5fe` — rules layer, read stack, vault loop, GUI shell, typed `player.gdc`, reagent storage, settings fallback; 288 tests green; no remote and no GitHub repo yet |
+| `feat/character-editing` | M4: characters editable, copy, iron bits | one commit ahead of `main`; 293 tests, clippy clean; CLI round trip on a copy of the user's saves re-reads lossless; awaiting the user's acceptance run before fast-forwarding |
 
 ## Next up
 
 1. **User acceptance on the real install** (game closed): launch
-   `cargo run --release -p grimvault-gui`, point Setup at
+   `cargo run --release -p grimvault-gui` from
+   `feat/character-editing`, point Setup at
    `/Volumes/scott-games/steamapps/common/Grim Dawn` and
    `/Volumes/scott-games/Grim Dawn Saves/remote/save`, vault an item
-   out of the transfer stash, place it back, then confirm in-game.
-   Watch load time over SMB (the three `Items.arc` are ~740 MB).
-2. **M4 — characters editable in the GUI:** the core already
-   supports it (`transfer::{vault_from_sack, place_in_sack(_at)}`,
-   `PlayerFile::inventory_mut`, full typing); the shell needs a
-   `CharacterDoc` save path with the same autosave / backup-first /
-   guard treatment as the stash, sack grids as drag sources and
-   targets, and `ItemOrigin::Character` on vaulted items. Keep the
-   read-only badge for any file with an opaque block.
+   out of the transfer stash and one out of a sack, place them back,
+   Alt-drop one to copy it, set the iron bits, then confirm in-game.
+   Watch load time over SMB (the three `Items.arc` are ~740 MB; 9 s
+   this session). Fast-forward `main` once accepted.
+2. **M4 follow-ups:** equipment slots as drag ends (unequip to a
+   sack / the store, equip from one — needs the slot-to-class rule);
+   further block-1 / block-2 edits (level, attributes, skill points)
+   through the same `CharacterDoc` path; a fresh seed on copy as an
+   option.
 3. **Game-data cache** under the config dir (names, rarity, class,
    footprint, icon RGBA per referenced record), stamp-keyed to the
    archives, so launches over the network mount stop re-reading
@@ -103,6 +120,32 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
    wrap-up routine's PR steps stay inert until then.
 
 ## Most recent meaningful progress
+
+- **2026-09-03 — M4 characters editable (branch
+  `feat/character-editing`, not merged).** Core: `ItemOrigin` now
+  records the sack (`Character { name, sack }`) or own-stash tab
+  (`CharacterStash { name, tab }`); `transfer` gained
+  `vault_from_player_stash` / `place_in_player_stash(_at)` over the
+  same tab helpers as the transfer stash and lost the three direct
+  storage↔stash ops; `PlayerFile::character_info_mut` exposes the
+  iron bits; `vault_cli` gained `characters`, `vault-sack`,
+  `place-sack`, `money`; the fixture gate now also edits the iron
+  bits and duplicates an own-stash item, on the fixture and on the
+  three real saves. GUI: one `Tracking` (stamp / edits / backup)
+  shared by every document; `CharacterDoc` is writable behind
+  `Writable::{Yes, OpaqueBlock}`; `drag` is one shape — `Move {
+  source, target, mode }` applied as lift-into-scratch-store then
+  place, source restored on refusal, `Mode::Copy` seeding the
+  scratch with a clone instead of lifting — so every container
+  pairing works without pairwise code; `Doc::Character(slot)` joins
+  autosave, the write order (now a `Vec`), the watcher, and the
+  conflict modal; the character pane's tabs are drop targets and its
+  header carries a `DragValue` for the iron bits reported through
+  `DragFrame`. 293 tests. Why: the user asked for moving and copying
+  items to and from characters and for gold edits; the read-only
+  limit was the last thing making characters second-class. Risk: no
+  `player.gdc` this app wrote has been loaded by the game; the copy
+  keeps the seed; GD's own duplicate detection (if any) is unknown.
 
 - **2026-09-03 — Landed on `main` (local fast-forward to `54d6042`).**
   `feat/gd-read-stack` and `design/shared-engine-split` merged linearly

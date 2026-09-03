@@ -1,20 +1,23 @@
 //! The character section: a picker over `main/*/player.gdc`, and the
-//! chosen character's sacks, equipped items, and personal stash as
-//! read-only surfaces: this build never writes `player.gdc` — the
-//! vault loop edits only `transfer.gst`, and a block the parser cannot
-//! type cannot be re-keyed (ARCHITECTURE.md "Data flow") — so nothing
-//! here is a drag source or target.
+//! chosen character's sacks, equipped items, and personal stash. A
+//! character whose every block is typed is editable — its sacks and
+//! stash tabs are drag sources and drop targets, and its iron bits can
+//! be set — while one with an opaque block is shown read-only, since
+//! an edit before that block could never be re-keyed (ARCHITECTURE.md
+//! "Data flow"). Equipped items are shown but never moved.
 
 use egui::{RichText, Ui, Vec2};
 use grimvault_core::gdc::{EquippedItem, InventoryState, PlayerFile};
+use grimvault_core::transfer::{SackIndex, TabIndex};
 use univault_ui::theme::Theme;
 
 use super::{
-    DragFrame, GridEntry, GridSpec, Interaction, PaneCtx, extent, grid_surface, item_tooltip,
-    sack_entries, stash_entries,
+    DragFrame, GridEntry, GridSpec, Interaction, PaneCtx, container_tab, extent, grid_surface,
+    item_tooltip, sack_entries, stash_entries,
 };
-use crate::documents::{CharacterDoc, CharacterEntry};
-use crate::theme::{UNKNOWN_RARITY, rarity_color};
+use crate::documents::{Backup, CharacterDoc, CharacterEntry, CharacterSlot, Edits, Writable};
+use crate::drag::Container;
+use crate::theme::{FITS, UNKNOWN_RARITY, rarity_color};
 
 /// Which of the character's containers is showing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,12 +43,6 @@ impl Default for CharacterView {
     }
 }
 
-/// The game's inventory bag sizes: the main bag and each purchased
-/// bag. The file carries neither, and a sack whose items reach past
-/// these edges is grown to fit rather than clipped.
-pub const MAIN_SACK: (i32, i32) = (12, 8);
-pub const EXTRA_SACK: (i32, i32) = (8, 8);
-
 /// Equipment slots in file order — GD Stash's order, checked against
 /// the classes of the items the user's characters wear.
 pub const EQUIPMENT_SLOTS: [&str; 12] = [
@@ -65,18 +62,20 @@ pub const EQUIPMENT_SLOTS: [&str; 12] = [
 /// The two slots of each weapon set.
 pub const WEAPON_SLOTS: [&str; 2] = ["Main hand", "Off hand"];
 
-/// The rendered size of a sack: its fixed size, grown to its
-/// contents.
+/// The rendered size of a sack: the game's fixed size for that bag,
+/// grown to its contents rather than clipped.
 #[must_use]
-pub fn sack_dims(index: usize, entries: &[GridEntry<'_>]) -> (i32, i32) {
-    let (cols, rows) = if index == 0 { MAIN_SACK } else { EXTRA_SACK };
+pub fn sack_dims(sack: SackIndex, entries: &[GridEntry<'_>]) -> (i32, i32) {
+    let dims = sack.dimensions();
+    let cols = i32::try_from(dims.width).unwrap_or(0);
+    let rows = i32::try_from(dims.height).unwrap_or(0);
     let (used_cols, used_rows) = extent(entries);
     (cols.max(used_cols), rows.max(used_rows))
 }
 
-const READ_ONLY_WHY: &str = "Characters are read-only: this build never writes player.gdc. The vault loop edits \
-     only transfer.gst, and a save block the parser cannot type makes a re-encode of that file unsafe, \
-     so nothing here is a drag source or a drop target.";
+const EDITABLE_WHY: &str = "Every block of this player.gdc is typed, so edits re-key correctly. Moves and the iron \
+     bits are written by autosave, backup-first, and verified by re-reading. Close the game before \
+     editing a character: the game overwrites player.gdc when it saves.";
 
 pub fn show(
     ui: &mut Ui,
@@ -106,22 +105,57 @@ pub fn show(
         if view.selected != before {
             view.tab = CharacterTab::Sack(0);
         }
-        ui.label(RichText::new("read-only").small().color(cx.palette.warn))
-            .on_hover_text(READ_ONLY_WHY);
+        if let Some(CharacterEntry::Loaded(doc)) = characters.get(view.selected) {
+            access_badge(ui, doc, cx);
+        }
     });
     match characters.get(view.selected) {
         None => {
             ui.weak("No characters under main/.");
         }
-        Some(CharacterEntry::Failed { path, error }) => {
+        Some(CharacterEntry::Failed { path, error, .. }) => {
             ui.colored_label(cx.palette.error, format!("{}: {error}", path.display()));
         }
-        Some(CharacterEntry::Loaded(doc)) => body(ui, doc, view, theme, cx, frame),
+        Some(CharacterEntry::Loaded(doc)) => body(
+            ui,
+            CharacterSlot::new(view.selected),
+            doc,
+            view,
+            theme,
+            cx,
+            frame,
+        ),
+    }
+}
+
+fn access_badge(ui: &mut Ui, doc: &CharacterDoc, cx: &PaneCtx<'_>) {
+    match doc.writable() {
+        Writable::Yes => {
+            let state = match (doc.tracking().edits(), doc.tracking().backup()) {
+                (Edits::Unsaved, _) => "editable · unsaved",
+                (Edits::Saved, Backup::Taken) => "editable · backed up",
+                (Edits::Saved, Backup::Armed) => "editable",
+            };
+            ui.label(RichText::new(state).small().color(FITS))
+                .on_hover_text(EDITABLE_WHY);
+        }
+        Writable::OpaqueBlock(block) => {
+            ui.label(
+                RichText::new(format!("read-only: block {block} is not typed"))
+                    .small()
+                    .color(cx.palette.warn),
+            )
+            .on_hover_text(
+                "A save block the parser cannot type cannot be re-keyed, so nothing before it can \
+                 be edited; this character is shown but never written.",
+            );
+        }
     }
 }
 
 fn body(
     ui: &mut Ui,
+    slot: CharacterSlot,
     doc: &CharacterDoc,
     view: &mut CharacterView,
     theme: &Theme,
@@ -129,8 +163,10 @@ fn body(
     frame: &mut DragFrame,
 ) {
     let file = doc.file();
+    let editable = doc.writable() == Writable::Yes;
     ui.horizontal_wrapped(|ui| {
         ui.label(header_line(file, cx));
+        money_field(ui, slot, file, editable, frame);
         ui.label(theme.path_text(doc.path().display().to_string()));
     });
     let sacks = file
@@ -138,9 +174,25 @@ fn body(
         .map_or(&[][..], |inventory| inventory.sacks());
     let stash_tabs = file.stash().map_or(&[][..], |stash| &stash.tabs[..]);
     ui.horizontal_wrapped(|ui| {
-        for (slot, sack) in sacks.iter().enumerate() {
-            let label = format!("Sack {} ({})", slot + 1, sack.items.len());
-            ui.selectable_value(&mut view.tab, CharacterTab::Sack(slot), label);
+        for (index, sack) in sacks.iter().enumerate() {
+            let label = format!("Sack {} ({})", index + 1, sack.items.len());
+            let container =
+                editable
+                    .then(|| sack_index(index))
+                    .flatten()
+                    .map(|sack| Container::Sack {
+                        character: slot,
+                        sack,
+                    });
+            container_or_plain_tab(
+                ui,
+                view,
+                CharacterTab::Sack(index),
+                label,
+                container,
+                cx,
+                frame,
+            );
         }
         let worn = file
             .inventory()
@@ -150,48 +202,159 @@ fn body(
             CharacterTab::Equipped,
             format!("Equipped ({worn})"),
         );
-        for (slot, tab) in stash_tabs.iter().enumerate() {
-            let label = format!("Stash {} ({})", slot + 1, tab.items.len());
-            ui.selectable_value(&mut view.tab, CharacterTab::Stash(slot), label);
+        for (index, stash_tab) in stash_tabs.iter().enumerate() {
+            let label = format!("Stash {} ({})", index + 1, stash_tab.items.len());
+            let container =
+                editable
+                    .then(|| tab_index(index))
+                    .flatten()
+                    .map(|tab| Container::CharacterStash {
+                        character: slot,
+                        tab,
+                    });
+            container_or_plain_tab(
+                ui,
+                view,
+                CharacterTab::Stash(index),
+                label,
+                container,
+                cx,
+                frame,
+            );
         }
     });
+    show_container(ui, slot, file, editable, view.tab, cx, frame);
+}
+
+/// The selected container: a sack or own-stash tab as a grid, editable
+/// when the character is, or the equipment list.
+fn show_container(
+    ui: &mut Ui,
+    slot: CharacterSlot,
+    file: &PlayerFile,
+    editable: bool,
+    tab: CharacterTab,
+    cx: &mut PaneCtx<'_>,
+    frame: &mut DragFrame,
+) {
+    let sacks = file
+        .inventory()
+        .map_or(&[][..], |inventory| inventory.sacks());
+    let stash_tabs = file.stash().map_or(&[][..], |stash| &stash.tabs[..]);
     let available: Vec2 = ui.available_size();
     egui::ScrollArea::both()
         .auto_shrink([false, false])
-        .show(ui, |ui| match view.tab {
-            CharacterTab::Sack(slot) => match sacks.get(slot) {
-                Some(sack) => {
+        .show(ui, |ui| match tab {
+            CharacterTab::Sack(index) => match (sacks.get(index), sack_index(index)) {
+                (Some(sack), Some(sack_index)) => {
                     let entries = sack_entries(sack, cx);
-                    let (cols, rows) = sack_dims(slot, &entries);
+                    let (cols, rows) = sack_dims(sack_index, &entries);
                     let spec = GridSpec {
                         available,
                         cols,
                         rows,
                     };
-                    grid_surface(ui, spec, &entries, Interaction::ReadOnly, cx, frame);
+                    let interaction = if editable {
+                        Interaction::Editable(Container::Sack {
+                            character: slot,
+                            sack: sack_index,
+                        })
+                    } else {
+                        Interaction::ReadOnly
+                    };
+                    grid_surface(ui, spec, &entries, interaction, cx, frame);
                 }
-                None => {
+                (None, _) | (_, None) => {
                     ui.weak("This character has never entered the game, so it has no inventory yet.");
                 }
             },
             CharacterTab::Equipped => equipped(ui, file, cx),
-            CharacterTab::Stash(slot) => match stash_tabs.get(slot) {
-                Some(tab) => {
-                    let entries = stash_entries(tab, cx);
-                    let cols = i32::try_from(tab.width).unwrap_or(0);
-                    let rows = i32::try_from(tab.height).unwrap_or(0);
+            CharacterTab::Stash(index) => match (stash_tabs.get(index), tab_index(index)) {
+                (Some(stash_tab), Some(tab_index)) => {
+                    let entries = stash_entries(stash_tab, cx);
+                    let cols = i32::try_from(stash_tab.width).unwrap_or(0);
+                    let rows = i32::try_from(stash_tab.height).unwrap_or(0);
                     let spec = GridSpec {
                         available,
                         cols,
                         rows,
                     };
-                    grid_surface(ui, spec, &entries, Interaction::ReadOnly, cx, frame);
+                    let interaction = if editable {
+                        Interaction::Editable(Container::CharacterStash {
+                            character: slot,
+                            tab: tab_index,
+                        })
+                    } else {
+                        Interaction::ReadOnly
+                    };
+                    grid_surface(ui, spec, &entries, interaction, cx, frame);
                 }
-                None => {
+                (None, _) | (_, None) => {
                     ui.weak("No such stash tab.");
                 }
             },
         });
+}
+
+/// A container's tab button — a drop target when the container is
+/// editable, a plain selector otherwise.
+fn container_or_plain_tab(
+    ui: &mut Ui,
+    view: &mut CharacterView,
+    tab: CharacterTab,
+    label: String,
+    container: Option<Container>,
+    cx: &PaneCtx<'_>,
+    frame: &mut DragFrame,
+) {
+    let selected = view.tab == tab;
+    let clicked = match container {
+        Some(container) => container_tab(ui, selected, label, container, cx, frame).clicked(),
+        None => ui.selectable_label(selected, label).clicked(),
+    };
+    if clicked {
+        view.tab = tab;
+    }
+}
+
+fn sack_index(index: usize) -> Option<SackIndex> {
+    u32::try_from(index).ok().map(SackIndex::new)
+}
+
+fn tab_index(index: usize) -> Option<TabIndex> {
+    u32::try_from(index).ok().map(TabIndex::new)
+}
+
+/// The iron bits: a number the user can drag or type into for an
+/// editable character, reported through the frame rather than written
+/// here.
+fn money_field(
+    ui: &mut Ui,
+    slot: CharacterSlot,
+    file: &PlayerFile,
+    editable: bool,
+    frame: &mut DragFrame,
+) {
+    let Some(info) = file.character_info() else {
+        return;
+    };
+    ui.separator();
+    ui.label("iron bits:");
+    if !editable {
+        ui.label(info.money.to_string());
+        return;
+    }
+    let mut money = info.money;
+    let response = ui
+        .add(
+            egui::DragValue::new(&mut money)
+                .range(0..=u32::MAX)
+                .speed(250.0),
+        )
+        .on_hover_text("Drag, or click and type, to set the character's iron bits.");
+    if response.changed() {
+        frame.set_money = Some((slot, money));
+    }
 }
 
 fn header_line(file: &PlayerFile, cx: &PaneCtx<'_>) -> String {
@@ -218,6 +381,7 @@ fn equipped(ui: &mut Ui, file: &PlayerFile, cx: &mut PaneCtx<'_>) {
         ui.weak("This character has never entered the game.");
         return;
     };
+    ui.weak("Equipped items are shown only; unequip in-game to move them.");
     egui::Grid::new("equipped")
         .num_columns(3)
         .spacing([12.0, 4.0])
@@ -258,11 +422,18 @@ fn equipped_row(ui: &mut Ui, label: &str, slot: &EquippedItem, cx: &mut PaneCtx<
 #[cfg(test)]
 mod tests {
     use grimvault_core::item::Item;
-    use grimvault_core::transfer::ItemIndex;
+    use grimvault_core::transfer::{EXTRA_SACK, ItemIndex, MAIN_SACK};
     use univault_engine::grid::CellRect;
 
     use super::*;
     use crate::grid::FootprintSource;
+
+    fn dims(sack: grimvault_core::transfer::SackDimensions) -> (i32, i32) {
+        (
+            i32::try_from(sack.width).unwrap(),
+            i32::try_from(sack.height).unwrap(),
+        )
+    }
 
     #[test]
     fn sacks_keep_their_fixed_size_unless_the_items_reach_past_it() {
@@ -278,9 +449,10 @@ mod tests {
             footprint: FootprintSource::Known,
             index: ItemIndex::new(0),
         }];
-        assert_eq!(sack_dims(0, &inside), MAIN_SACK);
-        assert_eq!(sack_dims(1, &inside), (12, 8));
-        assert_eq!(sack_dims(1, &[]), EXTRA_SACK);
+        let extra = SackIndex::new(1);
+        assert_eq!(sack_dims(SackIndex::MAIN, &inside), dims(MAIN_SACK));
+        assert_eq!(sack_dims(extra, &inside), (12, 8));
+        assert_eq!(sack_dims(extra, &[]), dims(EXTRA_SACK));
         let past = [GridEntry {
             item: &item,
             cells: CellRect {
@@ -292,6 +464,6 @@ mod tests {
             footprint: FootprintSource::Known,
             index: ItemIndex::new(0),
         }];
-        assert_eq!(sack_dims(0, &past), (13, 10));
+        assert_eq!(sack_dims(SackIndex::MAIN, &past), (13, 10));
     }
 }

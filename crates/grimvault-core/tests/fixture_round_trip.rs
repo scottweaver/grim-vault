@@ -106,15 +106,37 @@ fn fixture_later_blocks_carry_their_contents() {
     assert!(file.tokens().is_some());
 }
 
-/// The three edits that change the key for every block after the
-/// inventory; each returns `false` when the file has nothing to edit.
+/// The edits the app makes — each changes the key for every block
+/// after the one edited; each returns `false` when the file has
+/// nothing to edit.
 type Edit = fn(&mut PlayerFile) -> bool;
 
-const EDITS: [(&str, Edit); 3] = [
+const EDITS: [(&str, Edit); 5] = [
+    ("change the iron bits", set_money),
     ("remove one sack item", remove_sack_item),
     ("add one sack item", add_sack_item),
     ("move one sack item to stash tab 0", move_sack_item_to_stash),
+    ("duplicate one own-stash item", duplicate_stash_item),
 ];
+
+fn set_money(file: &mut PlayerFile) -> bool {
+    file.character_info_mut()
+        .map(|info| info.money = info.money.wrapping_add(250_000))
+        .is_some()
+}
+
+fn duplicate_stash_item(file: &mut PlayerFile) -> bool {
+    let Some(tab) = file
+        .stash_mut()
+        .and_then(|stash| stash.tabs.iter_mut().find(|tab| !tab.items.is_empty()))
+    else {
+        return false;
+    };
+    let mut copy = tab.items[0].clone();
+    copy.y += 1.0;
+    tab.items.push(copy);
+    true
+}
 
 fn remove_sack_item(file: &mut PlayerFile) -> bool {
     file.inventory_mut()

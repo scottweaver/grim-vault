@@ -4,19 +4,19 @@
 //! buttons double as drop targets — first fit in a stash tab, merge by
 //! record in a storage tab — while a drag is in flight.
 
-use egui::{CornerRadius, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Ui, Vec2};
 use grimvault_core::block::StashTab;
 use grimvault_core::reagents::ReagentKind;
 use grimvault_core::transfer::TabIndex;
 use univault_ui::theme::Theme;
 
 use super::{
-    DragFrame, DropCandidate, GridSpec, Interaction, PaneCtx, grid_surface, reagents, stash_entries,
+    DragFrame, DropCandidate, GridSpec, Interaction, PaneCtx, container_tab, grid_surface, outline,
+    reagents, stash_entries,
 };
 use crate::documents::{Reagents, StashDoc};
-use crate::drag::{self, DropTarget, Fit};
+use crate::drag::{self, Container, DropTarget, Fit};
 use crate::grid::FootprintSource;
-use crate::theme::{BLOCKED, FITS};
 
 /// Which surface the pane shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,17 +68,17 @@ pub fn show(
                 continue;
             };
             let selected = view.showing == Showing::Stash && view.tab == index;
-            let response = ui.selectable_label(selected, tab_label(slot, tab));
+            let response = container_tab(
+                ui,
+                selected,
+                tab_label(slot, tab),
+                Container::TransferStash(index),
+                cx,
+                frame,
+            );
             if response.clicked() {
                 view.tab = index;
                 view.showing = Showing::Stash;
-            }
-            if cx.drag.is_some() && response.contains_pointer() {
-                outline(ui, response.rect, Fit::Fits);
-                frame.candidate = Some(DropCandidate {
-                    target: DropTarget::StashTab(index),
-                    fit: Fit::Fits,
-                });
             }
         }
         ui.separator();
@@ -159,24 +159,11 @@ fn show_tab(
                     rows,
                 },
                 &entries,
-                Interaction::Editable { tab: view.tab },
+                Interaction::Editable(Container::TransferStash(view.tab)),
                 cx,
                 frame,
             );
         });
-}
-
-fn outline(ui: &Ui, rect: egui::Rect, fit: Fit) {
-    let colour = match fit {
-        Fit::Fits => FITS,
-        Fit::Blocked | Fit::Unresolvable => BLOCKED,
-    };
-    ui.painter().rect_stroke(
-        rect,
-        CornerRadius::same(2),
-        Stroke::new(2.0, colour),
-        StrokeKind::Outside,
-    );
 }
 
 fn tab_label(slot: usize, tab: &StashTab) -> String {

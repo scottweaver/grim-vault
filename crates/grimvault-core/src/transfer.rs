@@ -10,10 +10,11 @@
 //! data the caller supplies through [`Footprints`] — normally the
 //! layered [`GameData`] — because the save file does not carry them.
 //!
-//! A character's inventory sacks (`player.gdc` block 3) work the same
-//! way with integer cells ([`SackItem`]), except that the save stores
-//! no sack dimensions: they come from the game's UI records, recorded
-//! once in [`SackDimensions`].
+//! A character's own stash (`player.gdc` block 4) is a list of the same
+//! tabs, and its inventory sacks (block 3) work the same way with
+//! integer cells ([`SackItem`]), except that the save stores no sack
+//! dimensions: they come from the game's UI records, recorded once in
+//! [`SackDimensions`].
 //!
 //! The component / crafting-material storage (`reagents.gst`,
 //! [`ReagentStorage`]) has no grid at all: it holds one counted entry
@@ -21,6 +22,11 @@
 //! count — that is all the game keeps — and is allowed only for a
 //! record the database flags as storable ([`ReagentKinds`]); moving
 //! out of it creates a plain item of that record with the count taken.
+//!
+//! Every move goes through the store: a container-to-container move
+//! is a vault into a store followed by a placement out of it, which is
+//! why there is one vault and one placement per container and no
+//! pairwise operations.
 
 use std::fmt;
 
@@ -284,18 +290,10 @@ pub enum TransferError {
     /// database).
     #[error("stored item {id} ({base_name:?}) is not a component or crafting material")]
     NotAReagent { id: StoredItemId, base_name: String },
-    /// The stash item's record is not one the game keeps in the
-    /// storage.
-    #[error("tab {tab} item {index} ({base_name:?}) is not a component or crafting material")]
-    StashItemNotAReagent {
-        tab: TabIndex,
-        index: ItemIndex,
-        base_name: String,
-    },
-    /// The entry's record has no known footprint, so it cannot be laid
-    /// out on a grid.
-    #[error("storage entry {index} ({record:?}) has no known footprint")]
-    UnknownReagentFootprint { index: ReagentIndex, record: String },
+    /// The character's own stash block is not typed, so its tabs
+    /// cannot be reached.
+    #[error("the character's stash is not typed")]
+    NoPlayerStash,
 }
 
 /// The cells every item in `tab` occupies, in item order.
@@ -358,11 +356,7 @@ pub fn vault_from_stash(
     store: &mut VaultStore,
     at: Timestamp,
 ) -> Result<StoredItemId, TransferError> {
-    let tab_ref = tab_mut(stash, tab)?;
-    if index.value() >= tab_ref.items.len() {
-        return Err(TransferError::NoSuchItem { tab, index });
-    }
-    let placed = tab_ref.items.remove(index.value());
+    let placed = take_from_tabs(&mut stash.tabs, tab, index)?;
     Ok(store.add(placed.item, ItemOrigin::TransferStash { tab }, at))
 }
 
@@ -378,11 +372,7 @@ pub fn place_in_stash(
     tab: TabIndex,
     footprints: &impl Footprints,
 ) -> Result<GridPos, TransferError> {
-    let footprint = stored_footprint(store, id, footprints)?;
-    let pos = find_slot(tab_ref(stash, tab)?, footprint, footprints)?
-        .ok_or(TransferError::NoRoom { tab, footprint })?;
-    move_into_tab(store, id, stash, tab, pos)?;
-    Ok(pos)
+    place_in_tabs(store, id, &mut stash.tabs, tab, footprints)
 }
 
 /// Moves stored item `id` into `tab` at exactly `pos`.
@@ -399,8 +389,104 @@ pub fn place_in_stash_at(
     pos: GridPos,
     footprints: &impl Footprints,
 ) -> Result<(), TransferError> {
+    place_in_tabs_at(store, id, &mut stash.tabs, tab, pos, footprints)
+}
+
+/// Removes item `index` from tab `tab` of `player`'s own stash and
+/// stores it with [`ItemOrigin::CharacterStash`].
+///
+/// # Errors
+/// [`TransferError::NoPlayerStash`], [`TransferError::NoSuchTab`] or
+/// [`TransferError::NoSuchItem`]; the store and player are unchanged
+/// on error.
+pub fn vault_from_player_stash(
+    player: &mut PlayerFile,
+    tab: TabIndex,
+    index: ItemIndex,
+    store: &mut VaultStore,
+    at: Timestamp,
+) -> Result<StoredItemId, TransferError> {
+    let name = player.character_name().to_owned();
+    let placed = take_from_tabs(player_tabs_mut(player)?, tab, index)?;
+    Ok(store.add(placed.item, ItemOrigin::CharacterStash { name, tab }, at))
+}
+
+/// Moves stored item `id` into the first free spot of tab `tab` of
+/// `player`'s own stash, returning where it landed.
+///
+/// # Errors
+/// Any [`TransferError`]; the store and player are unchanged on error.
+pub fn place_in_player_stash(
+    store: &mut VaultStore,
+    id: StoredItemId,
+    player: &mut PlayerFile,
+    tab: TabIndex,
+    footprints: &impl Footprints,
+) -> Result<GridPos, TransferError> {
+    place_in_tabs(store, id, player_tabs_mut(player)?, tab, footprints)
+}
+
+/// Moves stored item `id` into tab `tab` of `player`'s own stash at
+/// exactly `pos`.
+///
+/// # Errors
+/// [`TransferError::OutOfBounds`] or [`TransferError::Occupied`] when
+/// the cells are not free, or any other [`TransferError`]; the store
+/// and player are unchanged on error.
+pub fn place_in_player_stash_at(
+    store: &mut VaultStore,
+    id: StoredItemId,
+    player: &mut PlayerFile,
+    tab: TabIndex,
+    pos: GridPos,
+    footprints: &impl Footprints,
+) -> Result<(), TransferError> {
+    place_in_tabs_at(store, id, player_tabs_mut(player)?, tab, pos, footprints)
+}
+
+fn player_tabs_mut(player: &mut PlayerFile) -> Result<&mut [StashTab], TransferError> {
+    player
+        .stash_mut()
+        .map(|stash| stash.tabs.as_mut_slice())
+        .ok_or(TransferError::NoPlayerStash)
+}
+
+fn take_from_tabs(
+    tabs: &mut [StashTab],
+    tab: TabIndex,
+    index: ItemIndex,
+) -> Result<StashItem, TransferError> {
+    let tab_ref = tab_mut(tabs, tab)?;
+    if index.value() >= tab_ref.items.len() {
+        return Err(TransferError::NoSuchItem { tab, index });
+    }
+    Ok(tab_ref.items.remove(index.value()))
+}
+
+fn place_in_tabs(
+    store: &mut VaultStore,
+    id: StoredItemId,
+    tabs: &mut [StashTab],
+    tab: TabIndex,
+    footprints: &impl Footprints,
+) -> Result<GridPos, TransferError> {
     let footprint = stored_footprint(store, id, footprints)?;
-    let grid = grid(tab_ref(stash, tab)?, footprints)?;
+    let pos = find_slot(tab_ref(tabs, tab)?, footprint, footprints)?
+        .ok_or(TransferError::NoRoom { tab, footprint })?;
+    move_into_tab(store, id, tabs, tab, pos)?;
+    Ok(pos)
+}
+
+fn place_in_tabs_at(
+    store: &mut VaultStore,
+    id: StoredItemId,
+    tabs: &mut [StashTab],
+    tab: TabIndex,
+    pos: GridPos,
+    footprints: &impl Footprints,
+) -> Result<(), TransferError> {
+    let footprint = stored_footprint(store, id, footprints)?;
+    let grid = grid(tab_ref(tabs, tab)?, footprints)?;
     check_placement(&grid, rect_at(pos, footprint)).map_err(|blocked| match blocked {
         Blocked::OutOfBounds => TransferError::OutOfBounds {
             tab,
@@ -409,7 +495,7 @@ pub fn place_in_stash_at(
         },
         Blocked::Occupied => TransferError::Occupied { tab, pos },
     })?;
-    move_into_tab(store, id, stash, tab, pos)
+    move_into_tab(store, id, tabs, tab, pos)
 }
 
 /// The cells every item in sack `sack` occupies, in item order.
@@ -483,7 +569,7 @@ pub fn vault_from_sack(
         return Err(TransferError::NoSuchSackItem { sack, index });
     }
     let placed = contents.items.remove(index.value());
-    Ok(store.add(placed.item, ItemOrigin::Character { name }, at))
+    Ok(store.add(placed.item, ItemOrigin::Character { name, sack }, at))
 }
 
 /// Moves stored item `id` into the first free spot of sack `sack`,
@@ -593,135 +679,6 @@ pub fn place_in_reagents(
     let stored = store.take(id).ok_or(TransferError::NoSuchStoredItem(id))?;
     merge_into_storage(storage, stored.into_item());
     Ok(())
-}
-
-/// Moves item `index` of stash tab `tab` into the storage, merging its
-/// stack count into the entry for its record or appending one.
-///
-/// # Errors
-/// [`TransferError::StashItemNotAReagent`] when the record is not
-/// storable, [`TransferError::ReagentCountOverflow`] when the merged
-/// count would not fit, or [`TransferError::NoSuchTab`] /
-/// [`TransferError::NoSuchItem`]; the stash and storage are unchanged
-/// on error.
-pub fn stash_to_reagents(
-    stash: &mut TransferStash,
-    tab: TabIndex,
-    index: ItemIndex,
-    storage: &mut ReagentStorage,
-    kinds: &impl ReagentKinds,
-) -> Result<(), TransferError> {
-    let placed = tab_ref(stash, tab)?
-        .items
-        .get(index.value())
-        .ok_or(TransferError::NoSuchItem { tab, index })?;
-    if kinds.reagent_kind(&placed.item).is_none() {
-        return Err(TransferError::StashItemNotAReagent {
-            tab,
-            index,
-            base_name: placed.item.base_name.clone(),
-        });
-    }
-    check_merge(storage, &placed.item)?;
-    let placed = tab_mut(stash, tab)?.items.remove(index.value());
-    merge_into_storage(storage, placed.item);
-    Ok(())
-}
-
-/// Takes `count` of storage entry `index` into the first free spot of
-/// stash tab `tab` as one stack, returning where it landed.
-///
-/// # Errors
-/// [`TransferError::UnknownReagentFootprint`] when the record's
-/// footprint is unknown, [`TransferError::NoRoom`], or any other
-/// [`TransferError`]; the stash and storage are unchanged on error.
-pub fn reagents_to_stash(
-    storage: &mut ReagentStorage,
-    index: ReagentIndex,
-    count: u32,
-    stash: &mut TransferStash,
-    tab: TabIndex,
-    footprints: &impl Footprints,
-) -> Result<GridPos, TransferError> {
-    let (item, footprint) = reagent_stack(storage, index, count, footprints)?;
-    let pos = find_slot(tab_ref(stash, tab)?, footprint, footprints)?
-        .ok_or(TransferError::NoRoom { tab, footprint })?;
-    tab_mut(stash, tab)?.items.push(StashItem {
-        item,
-        x: cell_to_f32(pos.x),
-        y: cell_to_f32(pos.y),
-    });
-    take_from_entry(storage, index, count);
-    Ok(pos)
-}
-
-/// Takes `count` of storage entry `index` into stash tab `tab` at
-/// exactly `pos` as one stack.
-///
-/// # Errors
-/// [`TransferError::OutOfBounds`] or [`TransferError::Occupied`] when
-/// the cells are not free, or any other [`TransferError`]; the stash
-/// and storage are unchanged on error.
-pub fn reagents_to_stash_at(
-    storage: &mut ReagentStorage,
-    index: ReagentIndex,
-    count: u32,
-    stash: &mut TransferStash,
-    tab: TabIndex,
-    pos: GridPos,
-    footprints: &impl Footprints,
-) -> Result<(), TransferError> {
-    let (item, footprint) = reagent_stack(storage, index, count, footprints)?;
-    let grid = grid(tab_ref(stash, tab)?, footprints)?;
-    check_placement(&grid, rect_at(pos, footprint)).map_err(|blocked| match blocked {
-        Blocked::OutOfBounds => TransferError::OutOfBounds {
-            tab,
-            pos,
-            footprint,
-        },
-        Blocked::Occupied => TransferError::Occupied { tab, pos },
-    })?;
-    tab_mut(stash, tab)?.items.push(StashItem {
-        item,
-        x: cell_to_f32(pos.x),
-        y: cell_to_f32(pos.y),
-    });
-    take_from_entry(storage, index, count);
-    Ok(())
-}
-
-/// The stack `count` of entry `index` would become, with its
-/// footprint; every refusal happens here, before anything moves.
-fn reagent_stack(
-    storage: &ReagentStorage,
-    index: ReagentIndex,
-    count: u32,
-    footprints: &impl Footprints,
-) -> Result<(Item, Footprint), TransferError> {
-    let entry = reagent_ref(storage, index)?;
-    if count == 0 {
-        return Err(TransferError::ZeroReagentCount(index));
-    }
-    if count > entry.count {
-        return Err(TransferError::ReagentCountExceeded {
-            index,
-            requested: count,
-            available: entry.count,
-        });
-    }
-    let item = Item {
-        base_name: entry.record.clone(),
-        stack_count: count,
-        ..Item::default()
-    };
-    let footprint =
-        footprints
-            .footprint(&item)
-            .ok_or_else(|| TransferError::UnknownReagentFootprint {
-                index,
-                record: entry.record.clone(),
-            })?;
-    Ok((item, footprint))
 }
 
 /// The count an item contributes to the storage: its stack, and one
@@ -978,11 +935,11 @@ fn stored_footprint(
 fn move_into_tab(
     store: &mut VaultStore,
     id: StoredItemId,
-    stash: &mut TransferStash,
+    tabs: &mut [StashTab],
     tab: TabIndex,
     pos: GridPos,
 ) -> Result<(), TransferError> {
-    let tab_ref = tab_mut(stash, tab)?;
+    let tab_ref = tab_mut(tabs, tab)?;
     let stored = store.take(id).ok_or(TransferError::NoSuchStoredItem(id))?;
     tab_ref.items.push(StashItem {
         item: stored.into_item(),
@@ -992,15 +949,15 @@ fn move_into_tab(
     Ok(())
 }
 
-fn tab_ref(stash: &TransferStash, tab: TabIndex) -> Result<&StashTab, TransferError> {
+fn tab_ref(tabs: &[StashTab], tab: TabIndex) -> Result<&StashTab, TransferError> {
     tab.slot()
-        .and_then(|slot| stash.tabs.get(slot))
+        .and_then(|slot| tabs.get(slot))
         .ok_or(TransferError::NoSuchTab(tab))
 }
 
-fn tab_mut(stash: &mut TransferStash, tab: TabIndex) -> Result<&mut StashTab, TransferError> {
+fn tab_mut(tabs: &mut [StashTab], tab: TabIndex) -> Result<&mut StashTab, TransferError> {
     tab.slot()
-        .and_then(|slot| stash.tabs.get_mut(slot))
+        .and_then(|slot| tabs.get_mut(slot))
         .ok_or(TransferError::NoSuchTab(tab))
 }
 
@@ -1489,161 +1446,6 @@ mod tests {
         }
 
         #[test]
-        fn stash_items_move_into_the_storage_by_record() {
-            let mut stash = stash(vec![tab(
-                10,
-                19,
-                vec![placed(LEGS, 0.0, 0.0), placed(CLUSTER, 5.0, 5.0)],
-            )]);
-            stash.tabs[0].items[1].item.stack_count = 7;
-            let mut storage = storage(vec![entry(CLUSTER, 1)]);
-
-            stash_to_reagents(&mut stash, TAB0, ItemIndex::new(1), &mut storage, &Kinds).unwrap();
-            assert_eq!(storage.entries, vec![entry(CLUSTER, 8)]);
-            assert_eq!(stash.tabs[0].items, vec![placed(LEGS, 0.0, 0.0)]);
-
-            let before = (stash.clone(), storage.clone());
-            assert_eq!(
-                stash_to_reagents(&mut stash, TAB0, ItemIndex::new(0), &mut storage, &Kinds),
-                Err(TransferError::StashItemNotAReagent {
-                    tab: TAB0,
-                    index: ItemIndex::new(0),
-                    base_name: LEGS.into()
-                })
-            );
-            assert_eq!(
-                stash_to_reagents(&mut stash, TAB0, ItemIndex::new(4), &mut storage, &Kinds),
-                Err(TransferError::NoSuchItem {
-                    tab: TAB0,
-                    index: ItemIndex::new(4)
-                })
-            );
-            assert_eq!(
-                stash_to_reagents(
-                    &mut stash,
-                    TabIndex::new(2),
-                    ItemIndex::new(0),
-                    &mut storage,
-                    &Kinds
-                ),
-                Err(TransferError::NoSuchTab(TabIndex::new(2)))
-            );
-            assert_eq!((stash, storage), before);
-        }
-
-        #[test]
-        fn storage_entries_land_in_the_stash_at_first_fit_or_an_exact_cell() {
-            let footprints = table();
-            let mut stash = stash(vec![tab(4, 4, vec![placed(LEGS, 0.0, 0.0)])]);
-            let mut storage = storage(vec![entry(CLUSTER, 10)]);
-
-            let pos =
-                reagents_to_stash(&mut storage, FIRST, 4, &mut stash, TAB0, &footprints).unwrap();
-            assert_eq!(pos, at(2, 0));
-            assert_eq!(stash.tabs[0].items[1].item, stack(CLUSTER, 4));
-            assert_eq!(storage.entries, vec![entry(CLUSTER, 6)]);
-
-            reagents_to_stash_at(
-                &mut storage,
-                FIRST,
-                6,
-                &mut stash,
-                TAB0,
-                at(3, 2),
-                &footprints,
-            )
-            .unwrap();
-            assert_eq!(stash.tabs[0].items[2].item, stack(CLUSTER, 6));
-            assert_eq!(
-                (stash.tabs[0].items[2].x, stash.tabs[0].items[2].y),
-                (3.0, 2.0)
-            );
-            assert!(storage.entries.is_empty());
-        }
-
-        #[test]
-        fn refused_stash_placements_leave_the_storage_and_stash_unchanged() {
-            let footprints = table();
-            let mut stash = stash(vec![tab(2, 3, vec![placed(LEGS, 0.0, 0.0)])]);
-            let mut storage = storage(vec![entry(CLUSTER, 2), entry(MYSTERY, 1)]);
-            let before = (stash.clone(), storage.clone());
-            let cluster = footprints.footprint(&item(CLUSTER)).unwrap();
-
-            assert_eq!(
-                reagents_to_stash(&mut storage, FIRST, 1, &mut stash, TAB0, &footprints),
-                Err(TransferError::NoRoom {
-                    tab: TAB0,
-                    footprint: cluster
-                })
-            );
-            assert_eq!(
-                reagents_to_stash(
-                    &mut storage,
-                    ReagentIndex::new(1),
-                    1,
-                    &mut stash,
-                    TAB0,
-                    &footprints
-                ),
-                Err(TransferError::UnknownReagentFootprint {
-                    index: ReagentIndex::new(1),
-                    record: MYSTERY.into()
-                })
-            );
-            assert_eq!(
-                reagents_to_stash(&mut storage, FIRST, 3, &mut stash, TAB0, &footprints),
-                Err(TransferError::ReagentCountExceeded {
-                    index: FIRST,
-                    requested: 3,
-                    available: 2
-                })
-            );
-            assert_eq!(
-                reagents_to_stash_at(
-                    &mut storage,
-                    FIRST,
-                    1,
-                    &mut stash,
-                    TAB0,
-                    at(0, 0),
-                    &footprints
-                ),
-                Err(TransferError::Occupied {
-                    tab: TAB0,
-                    pos: at(0, 0)
-                })
-            );
-            assert_eq!(
-                reagents_to_stash_at(
-                    &mut storage,
-                    FIRST,
-                    1,
-                    &mut stash,
-                    TAB0,
-                    at(1, 2),
-                    &footprints
-                ),
-                Err(TransferError::OutOfBounds {
-                    tab: TAB0,
-                    pos: at(1, 2),
-                    footprint: cluster
-                })
-            );
-            assert_eq!(
-                reagents_to_stash(
-                    &mut storage,
-                    FIRST,
-                    1,
-                    &mut stash,
-                    TabIndex::new(5),
-                    &footprints
-                ),
-                Err(TransferError::NoSuchTab(TabIndex::new(5)))
-            );
-            assert_eq!((stash, storage), before);
-        }
-
-        #[test]
         fn vault_then_place_restores_the_storage_exactly() {
             let mut storage = storage(vec![entry(SHARD, 15), entry(CLUSTER, 20)]);
             let before = storage.clone();
@@ -1655,14 +1457,16 @@ mod tests {
         }
     }
 
-    mod sacks {
+    mod characters {
         use super::*;
         use crate::gdc::{
-            Block, CharacterInfo, Inventory, InventoryContents, InventoryState, PlayerHeader, Sex,
+            Block, CharacterInfo, Inventory, InventoryContents, InventoryState, PlayerHeader,
+            PlayerStash, Sex,
         };
 
         const MAIN: SackIndex = SackIndex::MAIN;
         const EXTRA: SackIndex = SackIndex::new(1);
+        const FIRST: ItemIndex = ItemIndex::new(0);
 
         fn in_sack(base_name: &str, x: u32, y: u32) -> SackItem {
             SackItem {
@@ -1677,6 +1481,10 @@ mod tests {
         }
 
         fn player(sacks: Vec<Sack>) -> PlayerFile {
+            player_with_stash(sacks, vec![])
+        }
+
+        fn player_with_stash(sacks: Vec<Sack>, tabs: Vec<StashTab>) -> PlayerFile {
             let inventory = Inventory {
                 version: ContainerVersion::new(11).unwrap(),
                 flag: 0,
@@ -1721,12 +1529,99 @@ mod tests {
                         loot_filter: vec![],
                     }),
                     Block::Inventory(inventory),
+                    Block::Stash(PlayerStash {
+                        version: ContainerVersion::new(11).unwrap(),
+                        tabs,
+                    }),
                 ],
             )
         }
 
         fn sacks_of(player: &PlayerFile) -> &[Sack] {
             player.inventory().unwrap().sacks()
+        }
+
+        fn stash_tabs_of(player: &PlayerFile) -> &[StashTab] {
+            &player.stash().unwrap().tabs
+        }
+
+        #[test]
+        fn own_stash_vault_then_place_round_trips_the_item() {
+            let footprints = table();
+            let mut player =
+                player_with_stash(vec![], vec![tab(8, 16, vec![placed(CLUSTER, 1.0, 6.0)])]);
+            let mut store = VaultStore::new();
+
+            let id = vault_from_player_stash(&mut player, TAB0, FIRST, &mut store, NOW).unwrap();
+            assert!(stash_tabs_of(&player)[0].items.is_empty());
+            assert_eq!(
+                store.get(id).unwrap().origin(),
+                &ItemOrigin::CharacterStash {
+                    name: "Sif".into(),
+                    tab: TAB0
+                }
+            );
+
+            let pos =
+                place_in_player_stash(&mut store, id, &mut player, TAB0, &footprints).unwrap();
+            assert_eq!(pos, at(0, 0));
+            assert!(store.is_empty());
+            assert_eq!(
+                stash_tabs_of(&player)[0].items,
+                vec![placed(CLUSTER, 0.0, 0.0)]
+            );
+
+            let id = vault_from_player_stash(&mut player, TAB0, FIRST, &mut store, NOW).unwrap();
+            place_in_player_stash_at(&mut store, id, &mut player, TAB0, at(3, 4), &footprints)
+                .unwrap();
+            assert_eq!(
+                stash_tabs_of(&player)[0].items,
+                vec![placed(CLUSTER, 3.0, 4.0)]
+            );
+        }
+
+        #[test]
+        fn own_stash_refusals_leave_the_store_and_player_unchanged() {
+            let footprints = table();
+            let mut player =
+                player_with_stash(vec![], vec![tab(2, 2, vec![placed(CLUSTER, 0.0, 0.0)])]);
+            let mut store = VaultStore::new();
+            let id = store.add(item(LEGS), ItemOrigin::Unknown, NOW);
+            let before = (player.clone(), store.clone());
+            assert_eq!(
+                vault_from_player_stash(&mut player, TabIndex::new(1), FIRST, &mut store, NOW),
+                Err(TransferError::NoSuchTab(TabIndex::new(1)))
+            );
+            assert_eq!(
+                vault_from_player_stash(&mut player, TAB0, ItemIndex::new(1), &mut store, NOW),
+                Err(TransferError::NoSuchItem {
+                    tab: TAB0,
+                    index: ItemIndex::new(1)
+                })
+            );
+            assert!(matches!(
+                place_in_player_stash(&mut store, id, &mut player, TAB0, &footprints),
+                Err(TransferError::NoRoom { tab: TAB0, .. })
+            ));
+            assert_eq!(
+                place_in_player_stash_at(&mut store, id, &mut player, TAB0, at(0, 0), &footprints),
+                Err(TransferError::OutOfBounds {
+                    tab: TAB0,
+                    pos: at(0, 0),
+                    footprint: footprints.footprint(&item(LEGS)).unwrap()
+                })
+            );
+            assert_eq!((&player, &store), (&before.0, &before.1));
+
+            let mut untyped = PlayerFile::from_parts(7, player.header().clone(), vec![]);
+            assert_eq!(
+                vault_from_player_stash(&mut untyped, TAB0, FIRST, &mut store, NOW),
+                Err(TransferError::NoPlayerStash)
+            );
+            assert_eq!(
+                place_in_player_stash(&mut store, id, &mut untyped, TAB0, &footprints),
+                Err(TransferError::NoPlayerStash)
+            );
         }
 
         #[test]
@@ -1765,7 +1660,10 @@ mod tests {
             assert_eq!(stored.item(), &item(CLUSTER));
             assert_eq!(
                 stored.origin(),
-                &ItemOrigin::Character { name: "Sif".into() }
+                &ItemOrigin::Character {
+                    name: "Sif".into(),
+                    sack: MAIN
+                }
             );
 
             let pos = place_in_sack(&mut store, id, &mut player, MAIN, &footprints).unwrap();

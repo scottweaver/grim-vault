@@ -13,11 +13,12 @@ use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::InventoryState;
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
+use grimvault_core::transfer::SackIndex;
 
-use crate::documents::{CharacterEntry, Reagents};
+use crate::documents::{CharacterDoc, CharacterEntry, Reagents, Writable};
 use crate::facts::FactsCache;
 use crate::loader::{LoadStep, WorldPaths, load_world};
-use crate::panes::character::{EQUIPMENT_SLOTS, EXTRA_SACK, MAIN_SACK, WEAPON_SLOTS};
+use crate::panes::character::{EQUIPMENT_SLOTS, WEAPON_SLOTS};
 use crate::settings::ConfigDir;
 use crate::setup::{GameDir, SaveDir};
 
@@ -111,8 +112,8 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
     let mut problems = 0;
     for entry in &world.characters {
         match entry {
-            CharacterEntry::Loaded(doc) => print_character(doc.file(), &mut facts, &world.game),
-            CharacterEntry::Failed { path, error } => {
+            CharacterEntry::Loaded(doc) => print_character(doc, &mut facts, &world.game),
+            CharacterEntry::Failed { path, error, .. } => {
                 println!("  FAILED {}: {error}", path.display());
                 problems += 1;
             }
@@ -170,27 +171,32 @@ fn print_reagents(reagents: &Reagents, facts: &mut FactsCache, game: &GameData) 
     }
 }
 
-fn print_character(
-    file: &grimvault_core::gdc::PlayerFile,
-    facts: &mut FactsCache,
-    game: &GameData,
-) {
+fn print_character(doc: &CharacterDoc, facts: &mut FactsCache, game: &GameData) {
+    let file = doc.file();
     let header = file.header();
     let class = game
         .tag_text(&header.class_tag)
         .map_or_else(|| header.class_tag.clone(), str::to_string);
+    let access = match doc.writable() {
+        Writable::Yes => "editable".to_string(),
+        Writable::OpaqueBlock(block) => format!("read-only: block {block} not typed"),
+    };
     println!(
-        "  {} — level {}, {}{}",
+        "  {} — level {}, {}{}; {} iron bits; {} bytes, lossless; {access}",
         header.name,
         header.level,
         if class.is_empty() { "no class" } else { &class },
-        if header.hardcore { ", hardcore" } else { "" }
+        if header.hardcore { ", hardcore" } else { "" },
+        file.character_info().map_or(0, |info| info.money),
+        doc.baseline_len()
     );
     match file.inventory() {
         None => println!("    inventory: block 3 not typed"),
         Some(inventory) => {
             for (slot, sack) in inventory.sacks().iter().enumerate() {
-                let (cols, rows) = if slot == 0 { MAIN_SACK } else { EXTRA_SACK };
+                let dims = SackIndex::new(u32::try_from(slot).unwrap_or(u32::MAX)).dimensions();
+                let cols = i32::try_from(dims.width).unwrap_or(0);
+                let rows = i32::try_from(dims.height).unwrap_or(0);
                 let (width, height) = sack.items.iter().fold((0, 0), |(width, height), placed| {
                     let footprint = facts.base(game, &placed.item).footprint;
                     let (w, h) = footprint.map_or((1, 1), |f| (f.width, f.height));

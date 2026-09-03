@@ -11,7 +11,7 @@ use univault_ui::theme::Theme;
 
 use super::{DragFrame, DropCandidate, PaneCtx, TileLook, item_tooltip, paint_tile};
 use crate::documents::StoreDoc;
-use crate::drag::{DragSource, DragState, DropTarget, Fit};
+use crate::drag::{self, DragSource, DragState, DropTarget, Fit};
 use crate::grid::{CELL_PX, footprint_or_unit};
 use crate::theme::FITS;
 
@@ -93,10 +93,7 @@ pub fn show(
         && let Some(pointer) = ui.ctx().pointer_latest_pos()
         && zone.contains(pointer)
     {
-        let fit = match drag.source {
-            DragSource::Stash { .. } | DragSource::Reagent { .. } => Fit::Fits,
-            DragSource::Store(_) => Fit::Blocked,
-        };
+        let fit = drag::fit_in_store(drag.source, cx.mode);
         if fit == Fit::Fits {
             ui.painter().rect_stroke(
                 zone.shrink(1.0),

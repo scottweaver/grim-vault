@@ -40,7 +40,7 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::item::Item;
-use crate::transfer::TabIndex;
+use crate::transfer::{SackIndex, TabIndex};
 
 /// The `format` tag every store file carries.
 pub const FORMAT_TAG: &str = "grimvault-store";
@@ -101,8 +101,10 @@ impl Timestamp {
 pub enum ItemOrigin {
     /// A tab of `transfer.gst`.
     TransferStash { tab: TabIndex },
-    /// A character's own inventory or stash.
-    Character { name: String },
+    /// A sack of a character's inventory (`player.gdc` block 3).
+    Character { name: String, sack: SackIndex },
+    /// A tab of a character's own stash (`player.gdc` block 4).
+    CharacterStash { name: String, tab: TabIndex },
     /// The component / crafting-material storage, `reagents.gst`.
     ReagentStorage,
     /// Provenance not recorded.
@@ -145,6 +147,13 @@ impl StoredItem {
     #[must_use]
     pub fn into_item(self) -> Item {
         self.item
+    }
+
+    /// The game item and its provenance, leaving the store identity
+    /// behind.
+    #[must_use]
+    pub fn into_parts(self) -> (Item, ItemOrigin) {
+        (self.item, self.origin)
     }
 }
 
@@ -487,10 +496,21 @@ mod tests {
 
     #[test]
     fn origins_are_tagged_by_kind() {
-        let character = ItemOrigin::Character { name: "Sif".into() };
+        let character = ItemOrigin::Character {
+            name: "Sif".into(),
+            sack: SackIndex::new(2),
+        };
         assert_eq!(
             serde_json::to_value(&character).unwrap(),
-            json!({ "kind": "character", "name": "Sif" })
+            json!({ "kind": "character", "name": "Sif", "sack": 2 })
+        );
+        let stash = ItemOrigin::CharacterStash {
+            name: "Sif".into(),
+            tab: TabIndex::new(1),
+        };
+        assert_eq!(
+            serde_json::to_value(&stash).unwrap(),
+            json!({ "kind": "characterStash", "name": "Sif", "tab": 1 })
         );
         assert_eq!(
             serde_json::to_value(ItemOrigin::Unknown).unwrap(),
