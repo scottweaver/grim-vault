@@ -234,9 +234,27 @@ Q&A). Items marked TBD are open questions, not decisions.
   each**, shared with tq-univault and parametrized by codec (zlib vs
   raw LZ4 block) and ARZ dialect; a forked GD copy is structural.
   (2026-09-03, engine-extraction dialog)
-- Import/export interchange with GD Stash or GD Item Assistant files
-  is TBD (2026-09-03): not a boundary until a format is chosen and
-  recorded here.
+- **GD Stash's export file (`.gds`) is a read-only import boundary**
+  (2026-09-06, resolving the 2026-09-03 TBD; FEATURES.md item 3):
+  versions 1–3 as laid out in `docs/format-references.md`, guarded
+  by `grimvault-core::gds` — `parse` turns the bytes into a typed
+  `GdsExport` once, refusing the whole file on any malformed byte,
+  and `import` adds its entries to the store under
+  `ItemOrigin::GdStashExport { file, mode, owner }`, the export's
+  file name, the softcore/hardcore mode, and the soulbound owner —
+  the facts only that file records, carried by every imported entry
+  so it never depends on which file it came from. This app **never
+  writes `.gds`**: the store stays the authority, facts flow in and
+  nothing flows back. Duplicate identity is the whole exported fact
+  (every item field, stack count included, plus mode and owner), so
+  importing a file twice adds nothing and a changed stack is a new
+  entry, never a silent reconciliation; an entry whose base record
+  no database layer defines is imported and named in the report,
+  never dropped. GD Item Assistant's `.ias` is recorded in
+  `docs/format-references.md` but not implemented; reading it is a
+  boundary of the same kind and gets its own entry here first.
+  Falsifiable: no `.gds` writer exists anywhere in the workspace,
+  and `gds::import` only ever calls `VaultStore::add`.
 - No network services, no telemetry, no online features. stdio IPC
   for the planned MCP surface is not a network service.
   (2026-09-03)
@@ -315,6 +333,8 @@ cleanup:
 - `crates/grimvault-core/src/*.rs` format modules (save/stash codec,
   ARZ/ARC layering, store, platform) — boundary contracts, the
   lossless-model rule, and the platform-confinement rule
+- `crates/grimvault-core/src/gds.rs` — the `.gds` import stays
+  read-only (a writer or an `.ias` reader is a new boundary entry)
 - Any module implementing the save/write-back path — backup-first,
   refuse-on-mismatch, and the game's-rotation-is-untouchable rules
 - `crates/grimvault-gui/src/main.rs` — entry point / framework choice

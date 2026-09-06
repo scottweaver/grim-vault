@@ -420,24 +420,54 @@ so the next reader can find the spot; nothing below is a transcription.
   generator (16807, 2³¹ − 1, Schrage's split) used to mint new item
   seeds; its own docs say the seed → stat-roll mapping is unknown to
   it. A fresh seed on copy can be any `i32`.
-- **`.gds` (GD Stash export) — layout recorded; not yet a boundary**
-  (ARCHITECTURE.md "External boundaries" keeps interchange TBD).
-  Plain little-endian, unobfuscated: `u32 version` (v1.90a writes
-  3; 1 and 2 are read), `u32 count`, then per item — strings are
-  `u8 length + UTF-8 bytes`, 0 = absent — `itemID, prefixID,
-  suffixID, modifierID, transmuteID, i32 seed, relicID,
-  relicBonusID, i32 relicSeed, enchantmentID (augment), i32
-  enchantmentLevel, i32 enchantmentSeed, [v ≥ 2: ascendantID,
-  ascendant2hID], i32 var1 (relic completion level), i32 stackCount,
-  [v ≥ 2: i32 rerollsUsed], [v ≥ 3: i32 affixRerollsUsed], u8
-  hardcore, charname` (the soulbound owner, absent otherwise).
-  Verified 2026-09-06 against the first entries of the user's
-  `gd-stash-export.gds` (version 3, 3,205 items; first entry
-  `records/items/enchants/a07a_enchant.dbr` × 40, owner "Zark") and
-  `reagent-export.gds` (version 3, 589 entries). The `.ias` (Item
-  Assistant) reader beside it takes versions 1–7 with the same
-  string encoding, `var1` as `i16`, then `hardcore`, an expansion
-  byte, a mod name, and version-gated extras.
+- **`.gds` (GD Stash export) — a read-only import boundary since
+  2026-09-06** (ARCHITECTURE.md "External boundaries";
+  `grimvault-core::gds`, never written by this app). Plain
+  little-endian, unobfuscated: `u32 version` (v1.90a writes 3; 1
+  and 2 are read), `u32 count`, then per item — strings are `u8
+  length + UTF-8 bytes`, 0 = absent — `itemID, prefixID, suffixID,
+  modifierID, transmuteID, i32 seed, relicID, relicBonusID, i32
+  relicSeed, enchantmentID (augment), i32 enchantmentLevel, i32
+  enchantmentSeed, [v ≥ 2: ascendantID, ascendant2hID], i32 var1
+  (relic completion level), i32 stackCount, [v ≥ 2: i32
+  rerollsUsed], [v ≥ 3: i32 affixRerollsUsed], u8 hardcore,
+  charname` (the soulbound owner, absent otherwise). The item
+  fields are the game's own record in wire order (`Item`), the
+  `i32`s being Java's reading of the same four bytes this crate
+  keeps as `u32`; `enchantmentLevel` lands in `Item::unknown`,
+  `var1` in `relic_completion_level`. `hardcore` is written as 0 or
+  1 (GD Stash reads any non-zero as true; this crate refuses other
+  values, since one means the entry was not read where it starts).
+  Verified 2026-09-06 end to end on the user's own exports — every
+  byte consumed, nothing trailing: `gd-stash-export.gds` (version 3,
+  3,205 entries; first `records/items/enchants/a07a_enchant.dbr` ×
+  40, seed `0x1c4c23f4`, softcore, owner "Zark"; 300 entries with
+  seed 0, 392 stacks above 1, 79 soulbound to Zark, every one
+  softcore, every one distinct as a whole record; `enchantmentLevel`,
+  `var1`, both reroll counts, and both ascendant records are 0 /
+  empty throughout) and `reagent-export.gds` (version 3, 589
+  entries; the same first augment as a stack of 5; only 149
+  distinct by base record + seed, so the same seed recurs with
+  different stack counts; 22 entries identical to ones in the
+  collection export). Against the layered database (base, `gdx1`,
+  `gdx2`, `gdx3`, two mods) every record in both files resolves.
+  **GD Stash's own duplicate rule** (`DBStashItem.storeItem` →
+  `isStored`): a non-stackable item is "already in the stash" when
+  every field — base, prefix, suffix, modifier, transmute, seed,
+  relic, relic bonus, relic seed, augment, augment level, augment
+  seed, both ascendant records, `var1`, stack count, hardcore, and
+  owner — matches; a stackable one (`isStackable`: a complete
+  component, or the record's own stackable flag) is never a
+  duplicate and instead merges its count into the row with the same
+  base, `var1`, hardcore, and owner, so importing its own export
+  twice doubles every stack there. This crate adopts the
+  non-stackable identity for every entry — stack count included —
+  because it is the only rule under which the reagent export's 589
+  entries survive (149 would under any count-free key) and a
+  re-import adds nothing. The `.ias` (Item Assistant) reader beside
+  it takes versions 1–7 with the same string encoding, `var1` as
+  `i16`, then `hardcore`, an expansion byte, a mod name, and
+  version-gated extras; recorded, not implemented.
 
 ## Rust prior art (2026-09-03)
 
@@ -459,7 +489,8 @@ nine observed); GD
 ARZ/ARC header and entry layouts, LZ4-block compression, the extra
 decompressed-size field; TQ zlib + 2-byte ARC skip; the full XOR
 scheme and block/checksum semantics; GD item field order including
-the v8/v11 additions; no relevant crates.io crates.
+the v8/v11 additions; the `.gds` version-3 layout end to end on both
+of the user's exports; no relevant crates.io crates.
 
 **Unverified:** whether the 8-byte ARZ entry trailer is a FILETIME or
 padding (preserved verbatim either way); whether block 20's zero word
@@ -476,5 +507,6 @@ groups" string-table loop in gdlc/lib-gddb reflects real files or
 defensive coding; the fields the block-typing pass could not name
 (the v8 per-skill byte, the two v12 stats words, the six shrine
 lists, `Factions::faction`); skills v7 and stats v8/v10 layouts (no
-sample); the `Sex` mapping (0 female / 1 male, inferred from
-character names only).
+sample); the `.gds` version-1 and version-2 layouts (read by GD
+Stash's version gates; no sample — v1.90a writes only 3); the `Sex`
+mapping (0 female / 1 male, inferred from character names only).
