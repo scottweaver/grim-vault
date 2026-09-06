@@ -534,8 +534,8 @@ impl World {
             ui.weak("hold Alt or ⌘/Ctrl while dropping to copy");
             ui.separator();
             ui.weak(format!(
-                "game data: {} layers, {} item archives",
-                self.report.databases, self.report.item_archives
+                "game data: {} layers, {} item archives, {} mods",
+                self.report.databases, self.report.item_archives, self.report.mods
             ));
             if let Some(error) = toasts.last_error() {
                 ui.separator();

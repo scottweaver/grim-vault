@@ -58,10 +58,10 @@ Q&A). Items marked TBD are open questions, not decisions.
   TBD (2026-09-06): each mod also keeps its own stash and storage
   under `save/<Mod>/` (`transfer.gst`, `reagents.gst`,
   `formulas.gst`, `transmutes.gst`, the mod name inside each file)
-  and its own record overlay `mods/<Mod>/database/<Mod>.arz`; the
-  app reads neither yet, so a mod-only item shows as an unknown
-  record. Reading them is a design dialog: which mod's stash a pane
-  shows, and where the mod overlay sits in the database layer order.
+  (its record database is read as a fill layer, see "ARZ/ARC
+  archives" below); the app does not read a mod's stash folder yet.
+  Reading it is a design dialog: which mod's stash a pane shows, and
+  how it relates to the base stash and the store.
 - The game keeps its own backup rotation (`transfer.t00`–`.t09`,
   `player.g00`/`.g01`). Those slots are the game's: the app never
   writes, renames, or deletes them, and never treats one as a write
@@ -85,7 +85,17 @@ Q&A). Items marked TBD are open questions, not decisions.
   `gdx1/database/GDX1.arz`, then `gdx2/database/GDX2.arz` (then
   `gdx3` when present), later layers overriding earlier records by
   record path. `database/templates.arc` and `resources/*.arc` follow
-  the same base-then-expansion order. (2026-09-03)
+  the same base-then-expansion order. (2026-09-03) **Installed mods
+  are fill layers** (user decision 2026-09-06): every
+  `mods/<Mod>/database/*.arz` with the `Text_EN.arc` and `Items.arc`
+  beside it is read, in folder-name order, *below* the shipped
+  layers — a record, tag, or bitmap resolves from a mod only when no
+  shipped layer defines it, so a mod's override of a shipped record
+  never changes how the app shows a base-game item. Nothing selects
+  a mod: a character file does not name one, and the game shows
+  every `user/` character under every mod. The derived cache, when
+  built, fingerprints the mod layers with the shipped ones.
+  (2026-09-06)
 - Nothing held in memory is authoritative: a mutation exists only
   once explicitly serialized to disk. (2026-09-03)
 - A derived local cache of item reference data (names, footprints,
@@ -269,7 +279,10 @@ contract recorded here binds from the first commit.
   modified; a composed bundle is always a new folder, deletable
   without trace. (2026-09-03)
 - **Fangs of Asterkarn (`gdx3`)**: a further overlay layer in the
-  order recorded under "Source of truth". (2026-09-03)
+  order recorded under "Source of truth". (2026-09-03) Read since
+  2026-09-06 whenever `gdx3/database/GDX3.arz` exists — the user's
+  install has it, and its records (the Asterkarn quest items, for
+  one) were the "unknown records" seen on the mod character.
 
 ## Audit triggers
 

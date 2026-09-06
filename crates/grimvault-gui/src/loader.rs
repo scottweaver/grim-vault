@@ -1,10 +1,11 @@
 //! The Loading phase: reading the layered game data exactly as
-//! `grimvault-core`'s examples do (three database layers, three
-//! `Text_EN.arc`, three `Items.arc`, missing expansion files skipped),
-//! then opening the transfer stash, the component / crafting-material
-//! storage, the vault store, and every character. [`load_world`] is the whole path as one function, so the
-//! window and the headless `--check` run the same code; [`start`] moves
-//! it onto a thread and reports progress over a channel.
+//! `grimvault-core`'s examples do (the shipped layers, missing
+//! expansion files skipped, then every installed mod under `mods/` as
+//! a fill layer), then opening the transfer stash, the component /
+//! crafting-material storage, the vault store, and every character.
+//! [`load_world`] is the whole path as one function, so the window
+//! and the headless `--check` run the same code; [`start`] moves it
+//! onto a thread and reports progress over a channel.
 
 use std::fmt;
 use std::io;
@@ -12,7 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use grimvault_core::gamedata::{GameData, text_from_archives};
+use grimvault_core::gamedata::{
+    GameData, LayerFiles, LayerSet, ModListing, mod_layers, shipped_layers,
+};
 use thiserror::Error;
 use univault_engine::arc::{ArcError, ArcFile};
 use univault_engine::arz::{ArzDialect, ArzError, ArzFile};
@@ -22,22 +25,6 @@ use crate::documents::{
     CharacterEntry, GstOpenError, Reagents, StashDoc, StoreDoc, StoreOpenError, open_characters,
 };
 use crate::setup::{GameDir, SaveDir};
-
-const DATABASES: [&str; 3] = [
-    "database/database.arz",
-    "gdx1/database/GDX1.arz",
-    "gdx2/database/GDX2.arz",
-];
-const TEXT_ARCHIVES: [&str; 3] = [
-    "resources/Text_EN.arc",
-    "gdx1/resources/Text_EN.arc",
-    "gdx2/resources/Text_EN.arc",
-];
-const ITEM_ARCHIVES: [&str; 3] = [
-    "resources/Items.arc",
-    "gdx1/resources/Items.arc",
-    "gdx2/resources/Items.arc",
-];
 
 /// Where everything lives, validated.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,9 +37,9 @@ pub struct WorldPaths {
 /// One step of the load, reported as it starts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoadStep {
-    Database(&'static str),
-    TextArchive(&'static str),
-    ItemArchive(&'static str),
+    Database(PathBuf),
+    TextArchive(PathBuf),
+    ItemArchive(PathBuf),
     Localization,
     Stash,
     Reagents,
@@ -63,9 +50,15 @@ pub enum LoadStep {
 impl fmt::Display for LoadStep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Database(relative) => write!(f, "reading record database {relative}"),
-            Self::TextArchive(relative) => write!(f, "reading text archive {relative}"),
-            Self::ItemArchive(relative) => write!(f, "reading item archive {relative}"),
+            Self::Database(relative) => {
+                write!(f, "reading record database {}", relative.display())
+            }
+            Self::TextArchive(relative) => {
+                write!(f, "reading text archive {}", relative.display())
+            }
+            Self::ItemArchive(relative) => {
+                write!(f, "reading item archive {}", relative.display())
+            }
             Self::Localization => f.write_str("building the localization table"),
             Self::Stash => f.write_str("opening transfer.gst"),
             Self::Reagents => f.write_str("opening reagents.gst"),
@@ -75,12 +68,14 @@ impl fmt::Display for LoadStep {
     }
 }
 
-/// What the game-data half of the load found.
+/// What the game-data half of the load found: the shipped layers by
+/// kind, and how many mods contributed a database.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoadReport {
     pub databases: usize,
     pub text_archives: usize,
     pub item_archives: usize,
+    pub mods: usize,
     pub elapsed: Duration,
 }
 
@@ -123,29 +118,17 @@ pub fn load_world(
 ) -> Result<LoadedWorld, LoadFailure> {
     let started = Instant::now();
     let game_dir = paths.game.path();
-    let mut databases = Vec::new();
-    for relative in DATABASES {
-        let path = game_dir.join(relative);
-        if !path.is_file() {
-            continue;
-        }
-        progress(LoadStep::Database(relative));
-        let bytes = read(&path)?;
-        let database = ArzFile::parse(bytes, ArzDialect::grim_dawn())
-            .map_err(|source| LoadFailure::Database { path, source })?;
-        databases.push(database);
-    }
-    let text_archives = load_archives(game_dir, &TEXT_ARCHIVES, progress, LoadStep::TextArchive)?;
-    let item_archives = load_archives(game_dir, &ITEM_ARCHIVES, progress, LoadStep::ItemArchive)?;
+    let shipped = load_layers(game_dir, &shipped_layers(), progress)?;
+    let mods = load_layers(game_dir, &mod_layers(list_mods(game_dir)), progress)?;
     progress(LoadStep::Localization);
-    let text = text_from_archives(&text_archives).map_err(LoadFailure::Localization)?;
     let report = LoadReport {
-        databases: databases.len(),
-        text_archives: text_archives.len(),
-        item_archives: item_archives.len(),
+        databases: shipped.databases.len(),
+        text_archives: shipped.text_archives.len(),
+        item_archives: shipped.item_archives.len(),
+        mods: mods.databases.len(),
         elapsed: started.elapsed(),
     };
-    let game = GameData::from_parts(databases, text, item_archives);
+    let game = GameData::layered(shipped, mods).map_err(LoadFailure::Localization)?;
 
     progress(LoadStep::Stash);
     let stash = StashDoc::open(paths.save.transfer_stash())?;
@@ -165,25 +148,97 @@ pub fn load_world(
     })
 }
 
-fn load_archives(
+/// Reads whichever of each layer's files exist, in layer order.
+fn load_layers(
     game_dir: &Path,
-    relatives: &[&'static str],
+    layers: &[LayerFiles],
     progress: &mut dyn FnMut(LoadStep),
-    step: fn(&'static str) -> LoadStep,
-) -> Result<Vec<ArcFile>, LoadFailure> {
-    let mut archives = Vec::new();
-    for relative in relatives {
-        let path = game_dir.join(relative);
-        if !path.is_file() {
-            continue;
+) -> Result<LayerSet, LoadFailure> {
+    let mut set = LayerSet::default();
+    for layer in layers {
+        if let Some(bytes) =
+            read_if_present(game_dir, &layer.database, progress, LoadStep::Database)?
+        {
+            let database = ArzFile::parse(bytes, ArzDialect::grim_dawn()).map_err(|source| {
+                LoadFailure::Database {
+                    path: game_dir.join(&layer.database),
+                    source,
+                }
+            })?;
+            set.databases.push(database);
         }
-        progress(step(relative));
-        let bytes = read(&path)?;
-        let archive = ArcFile::parse(bytes, Codec::Lz4Block)
-            .map_err(|source| LoadFailure::Archive { path, source })?;
-        archives.push(archive);
+        if let Some(archive) = read_archive(game_dir, &layer.text, progress, LoadStep::TextArchive)?
+        {
+            set.text_archives.push(archive);
+        }
+        if let Some(archive) =
+            read_archive(game_dir, &layer.items, progress, LoadStep::ItemArchive)?
+        {
+            set.item_archives.push(archive);
+        }
     }
-    Ok(archives)
+    Ok(set)
+}
+
+fn read_archive(
+    game_dir: &Path,
+    relative: &Path,
+    progress: &mut dyn FnMut(LoadStep),
+    step: fn(PathBuf) -> LoadStep,
+) -> Result<Option<ArcFile>, LoadFailure> {
+    read_if_present(game_dir, relative, progress, step)?
+        .map(|bytes| {
+            ArcFile::parse(bytes, Codec::Lz4Block).map_err(|source| LoadFailure::Archive {
+                path: game_dir.join(relative),
+                source,
+            })
+        })
+        .transpose()
+}
+
+/// The bytes of `relative` under the game directory, reported as a
+/// step; `None` when the file is not there (an expansion or mod
+/// resource that does not exist is not an error).
+fn read_if_present(
+    game_dir: &Path,
+    relative: &Path,
+    progress: &mut dyn FnMut(LoadStep),
+    step: fn(PathBuf) -> LoadStep,
+) -> Result<Option<Vec<u8>>, LoadFailure> {
+    let path = game_dir.join(relative);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    progress(step(relative.to_path_buf()));
+    read(&path).map(Some)
+}
+
+/// Every folder under `mods/` with the names its `database/` and
+/// `resources/` hold; an absent `mods/` is simply no mods.
+fn list_mods(game_dir: &Path) -> Vec<ModListing> {
+    let Ok(folders) = std::fs::read_dir(game_dir.join("mods")) else {
+        return Vec::new();
+    };
+    folders
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| ModListing {
+            folder: entry.file_name().to_string_lossy().into_owned(),
+            database_files: file_names(&entry.path().join("database")),
+            resource_files: file_names(&entry.path().join("resources")),
+        })
+        .collect()
+}
+
+fn file_names(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Archives are read-only reference data on a possibly stale mount:

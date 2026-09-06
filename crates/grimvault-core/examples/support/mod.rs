@@ -1,13 +1,15 @@
 //! Shared by the examples: loading the layered game data from an
-//! install (three database layers, three text archives, three item
-//! archives) and describing an item with resolved names.
+//! install (the shipped layers, then every installed mod as a fill
+//! layer) and describing an item with resolved names.
 
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use grimvault_core::gamedata::{GameData, text_from_archives};
+use grimvault_core::gamedata::{
+    GameData, LayerFiles, LayerSet, ModListing, mod_layers, shipped_layers,
+};
 use grimvault_core::item::Item;
 use grimvault_core::settings::{ConfigDir, Settings};
 use univault_engine::arc::ArcFile;
@@ -15,50 +17,75 @@ use univault_engine::arz::{ArzDialect, ArzFile};
 use univault_engine::codec::Codec;
 use univault_engine::ids::RecordId;
 
-const DATABASES: [&str; 3] = [
-    "database/database.arz",
-    "gdx1/database/GDX1.arz",
-    "gdx2/database/GDX2.arz",
-];
-const TEXT_ARCHIVES: [&str; 3] = [
-    "resources/Text_EN.arc",
-    "gdx1/resources/Text_EN.arc",
-    "gdx2/resources/Text_EN.arc",
-];
-const ITEM_ARCHIVES: [&str; 3] = [
-    "resources/Items.arc",
-    "gdx1/resources/Items.arc",
-    "gdx2/resources/Items.arc",
-];
-
 pub fn load_game_data(game_dir: &Path) -> Result<GameData, Box<dyn Error>> {
     let started = Instant::now();
-    let databases = DATABASES
-        .iter()
-        .map(|relative| game_dir.join(relative))
-        .filter(|path| path.is_file())
-        .map(|path| Ok(ArzFile::parse(fs::read(path)?, ArzDialect::grim_dawn())?))
-        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
-    let text_archives = load_archives(game_dir, &TEXT_ARCHIVES)?;
-    let item_archives = load_archives(game_dir, &ITEM_ARCHIVES)?;
-    let text = text_from_archives(&text_archives)?;
+    let shipped = load_layers(game_dir, &shipped_layers())?;
+    let mods = load_layers(game_dir, &mod_layers(list_mods(game_dir)))?;
     println!(
-        "game data: {} database layers, {} text archives, {} item archives, loaded in {:.1?}",
-        databases.len(),
-        text_archives.len(),
-        item_archives.len(),
+        "game data: {} database layers, {} text archives, {} item archives, {} mod layers, \
+         loaded in {:.1?}",
+        shipped.databases.len(),
+        shipped.text_archives.len(),
+        shipped.item_archives.len(),
+        mods.databases.len(),
         started.elapsed()
     );
-    Ok(GameData::from_parts(databases, text, item_archives))
+    Ok(GameData::layered(shipped, mods)?)
 }
 
-fn load_archives(game_dir: &Path, relatives: &[&str]) -> Result<Vec<ArcFile>, Box<dyn Error>> {
-    relatives
-        .iter()
-        .map(|relative| game_dir.join(relative))
-        .filter(|path| path.is_file())
-        .map(|path| Ok(ArcFile::parse(fs::read(path)?, Codec::Lz4Block)?))
+fn load_layers(game_dir: &Path, layers: &[LayerFiles]) -> Result<LayerSet, Box<dyn Error>> {
+    let mut set = LayerSet::default();
+    for layer in layers {
+        if let Some(bytes) = read_if_present(game_dir, &layer.database)? {
+            set.databases
+                .push(ArzFile::parse(bytes, ArzDialect::grim_dawn())?);
+        }
+        if let Some(bytes) = read_if_present(game_dir, &layer.text)? {
+            set.text_archives
+                .push(ArcFile::parse(bytes, Codec::Lz4Block)?);
+        }
+        if let Some(bytes) = read_if_present(game_dir, &layer.items)? {
+            set.item_archives
+                .push(ArcFile::parse(bytes, Codec::Lz4Block)?);
+        }
+    }
+    Ok(set)
+}
+
+fn read_if_present(game_dir: &Path, relative: &Path) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    let path = game_dir.join(relative);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    Ok(Some(fs::read(path)?))
+}
+
+/// Every folder under `mods/` with the names its `database/` and
+/// `resources/` hold; an absent `mods/` is simply no mods.
+fn list_mods(game_dir: &Path) -> Vec<ModListing> {
+    let Ok(folders) = fs::read_dir(game_dir.join("mods")) else {
+        return Vec::new();
+    };
+    folders
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| ModListing {
+            folder: entry.file_name().to_string_lossy().into_owned(),
+            database_files: file_names(&entry.path().join("database")),
+            resource_files: file_names(&entry.path().join("resources")),
+        })
         .collect()
+}
+
+fn file_names(dir: &Path) -> Vec<String> {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// `Prefix Base Suffix xN [Rarity WxH]`, with what the database cannot

@@ -49,10 +49,12 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
     let world = load_world(&paths, &mut progress)?;
     let mut facts = FactsCache::default();
     println!(
-        "game data: {} database layers, {} text archives, {} item archives, loaded in {:.1?}",
+        "game data: {} database layers, {} text archives, {} item archives, {} mod layers, \
+         loaded in {:.1?}",
         world.report.databases,
         world.report.text_archives,
         world.report.item_archives,
+        world.report.mods,
         world.report.elapsed
     );
 

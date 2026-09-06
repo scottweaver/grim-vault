@@ -51,11 +51,15 @@ cargo run --release -p grimvault-gui
 
 On first run the app asks for two directories:
 
-- **Game dir** — the Grim Dawn install (contains `database/database.arz`).
+- **Game dir** — the Grim Dawn install (contains `database/database.arz`);
+  the databases of any mods under its `mods/` folder are read too, so
+  mod-only items show their names and sizes.
 - **Save dir** — the folder holding `transfer.gst` and `main/`
-  (mod characters under `user/` are listed too)
-  (`Documents/My Games/Grim Dawn/save`, or Steam cloud:
-  `<Steam>/userdata/<account>/219990/remote/save`).
+  (mod characters under `user/` are listed too):
+  `Documents/My Games/Grim Dawn/save`, or with Steam Cloud enabled
+  `<Steam>/userdata/<account>/219990/remote/save`. Editing saves that
+  Steam Cloud also syncs invites conflicts; disabling cloud saves for
+  Grim Dawn keeps them in the local folder.
 
 Settings and the vault store (`vault-store.json`) live in the app's
 config directory: `~/Library/Application Support/grim-vault` (macOS),

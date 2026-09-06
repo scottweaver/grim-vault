@@ -3,8 +3,13 @@
 //! by path), the localization tags, and the item bitmap archives,
 //! resolved into the facts the app needs about an item base or affix
 //! record — display name, rarity, class, level requirement, and grid
-//! footprint. Read-only reference data per ARCHITECTURE.md; nothing
-//! here writes.
+//! footprint. Installed mods (`mods/<Mod>/`) are **fill** layers:
+//! consulted only for what no shipped layer has, so a mod's override
+//! of a shipped record never changes how a base-game item shows
+//! ([`GameData::layered`]). Read-only reference data per
+//! ARCHITECTURE.md; nothing here writes, and nothing here touches the
+//! filesystem — [`shipped_layers`] and [`mod_layers`] name the files
+//! and a shell reads them.
 //!
 //! Variable names follow the game's templates as observed in the real
 //! database and in gdlc (MIT): `itemNameTag` (or `description` for
@@ -17,6 +22,7 @@
 //! transmuters (see [`BITMAP_VARIABLES`]).
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use univault_engine::arc::{ArcError, ArcFile};
 use univault_engine::arz::{ArzError, ArzFile, DbRecord};
@@ -143,6 +149,94 @@ pub enum GameDataError {
     Tex(#[from] TexError),
 }
 
+/// The files of one game-data layer, relative to the game directory.
+/// Any may be absent on disk (an expansion not installed, a mod
+/// without text or icons); a loader skips what is not there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerFiles {
+    pub database: PathBuf,
+    pub text: PathBuf,
+    pub items: PathBuf,
+}
+
+/// The shipped layers in overlay order: the base game, then each
+/// expansion (`gdx1`, `gdx2`, and `gdx3` once installed).
+#[must_use]
+pub fn shipped_layers() -> Vec<LayerFiles> {
+    let base = LayerFiles {
+        database: PathBuf::from("database/database.arz"),
+        text: PathBuf::from("resources/Text_EN.arc"),
+        items: PathBuf::from("resources/Items.arc"),
+    };
+    let expansions = ["gdx1", "gdx2", "gdx3"].into_iter().map(|root| LayerFiles {
+        database: Path::new(root)
+            .join("database")
+            .join(format!("{}.arz", root.to_uppercase())),
+        text: Path::new(root).join("resources/Text_EN.arc"),
+        items: Path::new(root).join("resources/Items.arc"),
+    });
+    std::iter::once(base).chain(expansions).collect()
+}
+
+/// What a shell found in one folder under `mods/`: its name and the
+/// file names inside its `database/` and `resources/` sub-folders.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModListing {
+    pub folder: String,
+    pub database_files: Vec<String>,
+    pub resource_files: Vec<String>,
+}
+
+/// The layer of every installed mod that ships a database, in
+/// folder-name order so two mods defining the same record resolve the
+/// same way every launch. File names match case-insensitively: a
+/// mod's archives need not follow the shipped spelling
+/// (`mods/survivalmode/database/SurvivalMode.arz`), and a mod with
+/// several databases contributes the first by name.
+#[must_use]
+pub fn mod_layers(mods: impl IntoIterator<Item = ModListing>) -> Vec<LayerFiles> {
+    let mut mods: Vec<ModListing> = mods.into_iter().collect();
+    mods.sort_by(|a, b| a.folder.cmp(&b.folder));
+    mods.iter().filter_map(mod_layer).collect()
+}
+
+fn mod_layer(listing: &ModListing) -> Option<LayerFiles> {
+    let database = listing
+        .database_files
+        .iter()
+        .filter(|name| has_extension(name, "arz"))
+        .min()?;
+    let root = Path::new("mods").join(&listing.folder);
+    let resource = |canonical: &str| {
+        let found = listing
+            .resource_files
+            .iter()
+            .find(|name| name.eq_ignore_ascii_case(canonical))
+            .map_or(canonical, String::as_str);
+        root.join("resources").join(found)
+    };
+    Some(LayerFiles {
+        database: root.join("database").join(database),
+        text: resource("Text_EN.arc"),
+        items: resource("Items.arc"),
+    })
+}
+
+fn has_extension(name: &str, extension: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .is_some_and(|found| found.eq_ignore_ascii_case(extension))
+}
+
+/// The archives of one origin — the shipped game, or the installed
+/// mods — each list in overlay order (base first).
+#[derive(Default)]
+pub struct LayerSet {
+    pub databases: Vec<ArzFile>,
+    pub text_archives: Vec<ArcFile>,
+    pub item_archives: Vec<ArcFile>,
+}
+
 /// The layered game data. Layers are in overlay order (base first);
 /// every lookup walks them from the last to the first so an expansion
 /// record or tag overrides the base game's.
@@ -160,6 +254,33 @@ impl GameData {
             text,
             item_archives,
         }
+    }
+
+    /// Composes the game data: `shipped` layers override each other
+    /// base-first, and `mods` are fill layers below them all, so a
+    /// record, tag, or bitmap resolves from a mod only when no
+    /// shipped layer has it (ARCHITECTURE.md "Source of truth").
+    ///
+    /// # Errors
+    /// The first text archive entry that fails to inflate.
+    pub fn layered(shipped: LayerSet, mods: LayerSet) -> Result<Self, ArcError> {
+        let text_archives: Vec<ArcFile> = mods
+            .text_archives
+            .into_iter()
+            .chain(shipped.text_archives)
+            .collect();
+        let text = text_from_archives(&text_archives)?;
+        Ok(Self::from_parts(
+            mods.databases
+                .into_iter()
+                .chain(shipped.databases)
+                .collect(),
+            text,
+            mods.item_archives
+                .into_iter()
+                .chain(shipped.item_archives)
+                .collect(),
+        ))
     }
 
     /// The record from the topmost layer that has it.
@@ -316,6 +437,158 @@ fn strip_caret_codes(label: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shipped_layers_run_base_then_each_expansion() {
+        let layers = shipped_layers();
+        let databases: Vec<&Path> = layers
+            .iter()
+            .map(|layer| layer.database.as_path())
+            .collect();
+        assert_eq!(
+            databases,
+            [
+                Path::new("database/database.arz"),
+                Path::new("gdx1/database/GDX1.arz"),
+                Path::new("gdx2/database/GDX2.arz"),
+                Path::new("gdx3/database/GDX3.arz"),
+            ]
+        );
+        assert_eq!(layers[0].text, Path::new("resources/Text_EN.arc"));
+        assert_eq!(layers[2].items, Path::new("gdx2/resources/Items.arc"));
+    }
+
+    #[test]
+    fn mod_layers_take_each_mods_database_by_name_in_folder_order() {
+        let listed = |folder: &str, databases: &[&str], resources: &[&str]| ModListing {
+            folder: folder.into(),
+            database_files: databases.iter().map(|s| (*s).to_string()).collect(),
+            resource_files: resources.iter().map(|s| (*s).to_string()).collect(),
+        };
+        let layers = mod_layers([
+            listed(
+                "survivalmode",
+                &["SurvivalMode.arz"],
+                &["Items.arc", "text_en.arc"],
+            ),
+            listed(
+                "LootAscension",
+                &["readme.txt", "LootAscension.arz"],
+                &["Quests.arc"],
+            ),
+            listed("Empty", &[], &["Items.arc"]),
+        ]);
+        assert_eq!(
+            layers,
+            vec![
+                LayerFiles {
+                    database: PathBuf::from("mods/LootAscension/database/LootAscension.arz"),
+                    text: PathBuf::from("mods/LootAscension/resources/Text_EN.arc"),
+                    items: PathBuf::from("mods/LootAscension/resources/Items.arc"),
+                },
+                LayerFiles {
+                    database: PathBuf::from("mods/survivalmode/database/SurvivalMode.arz"),
+                    text: PathBuf::from("mods/survivalmode/resources/text_en.arc"),
+                    items: PathBuf::from("mods/survivalmode/resources/Items.arc"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_mod_with_several_databases_contributes_the_first_by_name() {
+        let layers = mod_layers([ModListing {
+            folder: "twin".into(),
+            database_files: vec!["b.arz".into(), "A.ARZ".into()],
+            resource_files: vec![],
+        }]);
+        assert_eq!(
+            layers[0].database,
+            PathBuf::from("mods/twin/database/A.ARZ")
+        );
+    }
+
+    #[test]
+    fn mods_fill_only_what_no_shipped_layer_defines() {
+        use univault_engine::arc::fixture::ArcBuilder;
+        use univault_engine::arz::ArzDialect;
+        use univault_engine::arz::fixture::{ArzBuilder, Values};
+        use univault_engine::codec::Codec;
+        use univault_engine::tex::fixture::tex;
+
+        const SHARED: &str = "records/items/gear/shared.dbr";
+        const MOD_ONLY: &str = "records/items/gear/modonly.dbr";
+        let database = |records: &[(&str, &str, &str)]| {
+            let mut builder = ArzBuilder::new(ArzDialect::grim_dawn());
+            for (id, name_tag, bitmap) in records {
+                builder.record(
+                    id,
+                    "ArmorProtective_Head",
+                    &[
+                        ("itemNameTag", Values::Strings(&[name_tag])),
+                        ("bitmap", Values::Strings(&[bitmap])),
+                    ],
+                );
+            }
+            ArzFile::parse(builder.build(), ArzDialect::grim_dawn()).unwrap()
+        };
+        let archive = |entries: &[(&str, &[u8])]| {
+            let mut builder = ArcBuilder::new(Codec::Lz4Block);
+            for (name, bytes) in entries {
+                builder.stored(name, bytes);
+            }
+            ArcFile::parse(builder.build(), Codec::Lz4Block).unwrap()
+        };
+        let shipped = LayerSet {
+            databases: vec![database(&[(SHARED, "tagShared", "items/gear/shared.tex")])],
+            text_archives: vec![archive(&[("tags.txt", b"tagShared=Shipped Name\n")])],
+            item_archives: vec![archive(&[("gear/shared.tex", &tex(64, 64))])],
+        };
+        let mods = LayerSet {
+            databases: vec![database(&[
+                (SHARED, "tagModded", "items/gear/shared.tex"),
+                (MOD_ONLY, "tagModOnly", "items/gear/modonly.tex"),
+            ])],
+            text_archives: vec![archive(&[(
+                "tags.txt",
+                b"tagShared=Mod Override\ntagModded=Modded\ntagModOnly=Mod Only\n",
+            )])],
+            item_archives: vec![archive(&[
+                ("gear/shared.tex", &tex(32, 32)),
+                ("gear/modonly.tex", &tex(32, 96)),
+            ])],
+        };
+        let game = GameData::layered(shipped, mods).unwrap();
+        let info = |id: &str| {
+            game.item_info(&RecordId::parse(id.to_string()).unwrap())
+                .unwrap()
+                .unwrap()
+        };
+        let footprint = |info: &ItemInfo| {
+            game.footprint(info.bitmap.as_ref().unwrap())
+                .unwrap()
+                .unwrap()
+        };
+
+        let shared = info(SHARED);
+        assert_eq!(shared.name, "Shipped Name");
+        assert_eq!(
+            footprint(&shared),
+            Footprint {
+                width: 2,
+                height: 2
+            }
+        );
+        let mod_only = info(MOD_ONLY);
+        assert_eq!(mod_only.name, "Mod Only");
+        assert_eq!(
+            footprint(&mod_only),
+            Footprint {
+                width: 1,
+                height: 3
+            }
+        );
+    }
 
     #[test]
     fn rarity_parses_case_insensitively_and_rejects_unknown() {
