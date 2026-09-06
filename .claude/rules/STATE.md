@@ -11,7 +11,7 @@ on `feat/mod-characters`, stacked on the unmerged M4 branch; both
 await the user's acceptance run)
 
 ## Session handoff
-**Resume here:** check out `feat/mod-characters` (eight commits ahead
+**Resume here:** check out `feat/mod-characters` (stacked ahead
 of `feat/character-editing`, which is one ahead of `main` at
 `9abc5fe`). It holds M5: custom-game (mod) characters under
 `save/user/` are listed, editable, and their vaulted items record the
