@@ -17,6 +17,9 @@
 //! in the game's component / crafting-material storage, [`transfer`]
 //! the pure moves between the transfer stash, that storage, and the
 //! store, and [`gds`] the read-only import of GD Stash's exports.
+//! [`respec`] is the full attribute and mastery refund on a
+//! character, under the same rules the game reads from its own
+//! records.
 
 pub mod block;
 pub mod blocks;
@@ -31,6 +34,7 @@ pub mod item;
 pub mod loaded;
 pub mod platform;
 pub mod reagents;
+pub mod respec;
 pub mod settings;
 pub mod store;
 pub mod transfer;

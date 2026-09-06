@@ -812,6 +812,13 @@ impl PlayerFile {
         &self.header
     }
 
+    /// The fixed header for editing; `level` duplicates block 2's and
+    /// `class_tag` is derived from block 8's masteries, so an edit
+    /// here keeps them in step.
+    pub fn header_mut(&mut self) -> &mut PlayerHeader {
+        &mut self.header
+    }
+
     /// The character's name.
     #[must_use]
     pub fn character_name(&self) -> &str {
@@ -842,7 +849,7 @@ impl PlayerFile {
     );
     block_accessor!(
         /// Block 2, when typed.
-        bio: Bio(Bio)
+        bio, bio_mut: Bio(Bio)
     );
     block_accessor!(
         /// Block 3, when typed.
@@ -870,7 +877,7 @@ impl PlayerFile {
     );
     block_accessor!(
         /// Block 8, when typed.
-        skills: Skills(Skills)
+        skills, skills_mut: Skills(Skills)
     );
     block_accessor!(
         /// Block 12, when typed.
