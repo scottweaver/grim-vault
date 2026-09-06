@@ -106,6 +106,14 @@ first parser PR merges.
 - **Files:** `database/templates.arc`, `resources/*.arc`
   (`Items.arc`, `Text_EN.arc`, `UI.arc`, …), expansions under
   `gdx1/resources/`, `gdx2/resources/`.
+- **Two ways to read one:** whole (`ArcFile`, as `Items.arc` and
+  `Text_EN.arc` are read), or by entry (`ArcHeader` → the table
+  region → `ArcIndex`, whose `locate` yields the absolute byte ranges
+  of an entry's parts and whose `assemble` rebuilds the file from
+  them). The shell reads `UI.arc` the second way for the eleven tile
+  symbols (2026-09-06): the parts lie between the 28-byte header and
+  the table offset, the tables run from the table offset to the end
+  of the file.
 
 ### Save encoding (`player.gdc`, `*.gst`) — GD-only codec
 
@@ -324,6 +332,101 @@ materia combines), stackCount`. **Versioned additions:**
 `seedRerolls` after `stackCount` (≥ 8); `affixRerolls` (≥ 11). IAGD's
 export format carries the same fields
 (`AscendantAffixNameRecord`, `RerollsUsed`, `AffixRerollsUsed`).
+
+### Item facets (monster infrequent, double rare, ascension)
+
+Established 2026-09-06 on the user's install (base + `gdx1`–`gdx3` +
+the two mods) and the 794 items of the user's transfer stashes and
+five characters; `grimvault-core::facets`, gated by
+`tests/facets_real.rs` when `$GRIMVAULT_GAME_DIR` / `$GRIMVAULT_SAVE_DIR`
+are set. GD Stash (eyes-only) pointed at the records; every fact
+below was read from the real database.
+
+- **The game's own indicators.** `records/game/gameiteminfo.dbr`
+  (template `gameiteminfo.tpl`, no `Class`) names eleven inventory
+  tile symbols: `monsterInfrequentSymbol`, `doubleRareSymbol`,
+  `doubleRareMonsterInfrequentSymbol`, `commonAscendedSymbol`,
+  `magicalAscendedSymbol`, `rareAscendedSymbol`,
+  `doubleRareAscendedSymbol`, `monsterDoubleRareAscendedSymbol`,
+  `epicAscendedSymbol`, `legendaryAscendedSymbol`, and
+  `awakenedItemSymbol`, each a `ui/character/item_*.tex` path
+  (`item_monsterinfrequent.tex`, `item_doublerare.tex`,
+  `item_doubleraremonsterinfrequent.tex`, `item_ascended_common.tex`,
+  `item_ascended_magic.tex`, `item_ascended_rare.tex`,
+  `item_ascended_doublerare.tex`, `item_ascended_doubleraremi.tex`,
+  `item_ascended_epic.tex`, `item_ascended_legendary.tex`,
+  `item_awakened.tex`). All eleven live in the **base**
+  `resources/UI.arc` (entry names without the `ui/` prefix, the same
+  convention as `items/` for `Items.arc`), 32 × 32, uncompressed
+  32-bit, 4,236 bytes each, decodable by `tex::decode`; the
+  expansion and mod `UI.arc` files hold none. The same record also
+  carries the rarity colours (`rareItemColor` etc.), the loot beams,
+  and `doubleRareItemColor` / `monsterDoubleRareItemColor` (both the
+  rare green) for reference. The shell reads `UI.arc` **by entry**
+  (`ArcIndex` + ranged reads): the base archive is 243 MB, `gdx3`'s
+  125 MB, so reading them whole for 44 KB of textures was declined.
+- **Monster infrequent.** No record variable names the notion. A
+  monster infrequent's base record has `itemClassification = Rare`
+  and an equipment `Class` (armor, jewellery, belt, weapon, shield,
+  off-hand); the skill modifiers on many of them point at
+  `records/skills/itemskills*/skillmodifiers/monsterinfrequents/` (or
+  `.../mi/` for `gdx2`), and their `FileDescription` is the monster
+  type ("Wendigo Ancient", "Swamp Golem"). **Faction-vendor gear**
+  (`records/items/faction/`, 481 `Rare` records) shares the
+  classification but carries `soulbound = true` (598 `faction/`
+  records carry the flag, 588 of them `true`; the ten `false` are the
+  old unsuffixed `f00x_*` faction weapons and shields) and
+  `itemStyleTag = tagStyleFactionTier2`; no `gear*/` record is
+  soulbound (one `gearaccessories/` record carries the flag, `false`). `factionSource` exists only on the 338 `ItemEnchantment`
+  augments. `Rare` components (`materia/compb_*`, 28), augments
+  (151), relics (`gearrelic/b*`, 21), boosters and blueprints are not
+  equipment. **Rule adopted:** `Rare` classification ∧ equipment
+  class ∧ not `soulbound` ⇒ monster infrequent. Assumption: the game
+  excludes faction gear the same way (the 1.2 notes say the icon
+  "separates monster infrequents from standard Rare items"; the
+  engine's test is not readable from the data). The six quest-reward
+  rares under `records/storyelements/rewards/` (Slith ring and
+  necklace at three levels) and the ten unbound `f00x` faction
+  weapons would be marked under this rule.
+- **Double rare.** Affix records (`LootRandomizer`) carry
+  `itemClassification` — `Magical` (3,281), `Rare` (3,418, e.g.
+  `lootaffixes/suffix/b_ar033_ar_f.dbr` "Scorched Ends",
+  `lootRandomizerCost` 29,808), `Epic` (22), `Broken` (5). An item is
+  double rare when its prefix **and** suffix records are `Rare`. A
+  `Rare` base with two rare affixes is both facets at once (the
+  game's `doubleRareMonsterInfrequentSymbol`). Ascendant affixes
+  (`records/items/lootaffixes/ascended/`, `lootRandomizerCost`
+  12,000, no `itemClassification`, no `lootRandomizerName`) never
+  count.
+- **Ascension (Fangs of Asterkarn).**
+  `records/ui/itemascension/itemascension_table.dbr` (template
+  `ingameui/itemascensionwindow.tpl`) names one recipe per base
+  rarity — `commonRecipe`, `rareRecipe`, `epicRecipe`,
+  `legendaryRecipe` → `records/items/crafting/blueprints/ascension/
+  craft_ascended_{common,rare,epic,legendary}.dbr` (`Class`
+  `ItemAscensionFormula`; `creationCost` 100,000 / 250,000 / 150,000
+  / 250,000; `affixWeight` / `masteryWeight` 400 / 600 or 600 / 400;
+  five reagents). There is **no magical recipe** — a Common base with
+  magical affixes ascends through the common one — and no item-level
+  opt-out: `allowAscension` (609 records) is a
+  `LootItemTable_DynWeight` flag for pre-ascended drops. Each recipe
+  lists affix and mastery tables per equipment category —
+  `{accessory,armor,offhand,oneHandMelee,oneHandRanged,shield,
+  twoHandMelee,twoHandRanged}Tables{Affix,Mastery}` — all sixteen
+  populated in all four recipes; belts are accessories, the six
+  armor slots are armor. **Rule adopted:** an item with
+  `ascendantRecord` or `ascendantRecord2h` set is *ascended*;
+  otherwise it is *eligible* when the table has a recipe for its base
+  rarity whose `<category>TablesAffix` is non-empty; the table absent
+  means no ascension in this install. Unverified: whether the game
+  gates ascension on item level, and the symbol shown for an ascended
+  monster infrequent without two rare affixes (no dedicated variable
+  exists; this app shows `rareAscendedSymbol`, its displayed rarity).
+- **The user's items (2026-09-06):** 794 classified, every record
+  resolved: 191 monster infrequents (175 plain, 16 with two rare
+  affixes), 42 double rares (26 on common bases), 472 eligible for
+  ascension, **no ascended item** — the ascended rules are proven on
+  hand-built items only.
 
 ### `.tex` (item bitmaps)
 
@@ -664,4 +767,8 @@ defensive coding; the fields the block-typing pass could not name
 lists, `Factions::faction`); skills v7 and stats v8/v10 layouts (no
 sample); the `.gds` version-1 and version-2 layouts (read by GD
 Stash's version gates; no sample — v1.90a writes only 3); the `Sex`
-mapping (0 female / 1 male, inferred from character names only).
+mapping (0 female / 1 male, inferred from character names only);
+whether the game's monster-infrequent symbol excludes soulbound
+(faction) rares the way this app's rule does, and whether item
+ascension is gated on item level (no data names either; "Item facets"
+above).
