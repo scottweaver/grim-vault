@@ -524,8 +524,9 @@ pub fn paint_fit_preview(painter: &Painter, preview: Rect, fit: Fit) {
 }
 
 /// Item details on hover: name in its rarity colour, the facets the
-/// game would mark, then rarity, class, level gate and stack, then
-/// the base record in a muted monospace.
+/// game would mark, then rarity, class, level gate and stack, the stat
+/// blocks with the set and the requirements, then the base record in a
+/// muted monospace.
 pub fn item_tooltip(ui: &mut Ui, cx: &mut PaneCtx<'_>, item: &Item) {
     let facts = cx.facts.facts(cx.game, item);
     let colour = facts.base.rarity.map_or(UNKNOWN_RARITY, rarity_color);
@@ -553,6 +554,7 @@ pub fn item_tooltip(ui: &mut Ui, cx: &mut PaneCtx<'_>, item: &Item) {
     if !details.is_empty() {
         ui.label(details.join(" · "));
     }
+    crate::stat_lines::stat_body(ui, cx.game, cx.palette, item);
     ui.label(
         RichText::new(&item.base_name)
             .monospace()

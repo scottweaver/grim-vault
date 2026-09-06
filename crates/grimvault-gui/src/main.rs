@@ -21,6 +21,7 @@ mod panes;
 mod search;
 mod settings;
 mod setup;
+mod stat_lines;
 mod theme;
 mod watch;
 
