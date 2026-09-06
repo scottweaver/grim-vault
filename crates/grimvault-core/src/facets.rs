@@ -24,9 +24,13 @@
 //!
 //! The symbol a tile carries ([`Facets::symbol`]) follows
 //! `records/game/gameiteminfo.dbr`'s eleven `*Symbol` variables
-//! ([`Symbol`]): ascended items show their displayed rarity's symbol,
-//! with double-rare and monster-infrequent double-rare variants; the
-//! rest show the monster-infrequent, double-rare, or combined mark.
+//! ([`Symbol`]): the monster-infrequent, double-rare, or combined mark
+//! when either facet holds; otherwise an item that is ascended *or
+//! eligible for ascension* shows its displayed rarity's symbol
+//! (ascended double rares their own variants). The game marks
+//! eligible, unascended items — the user's stash tab of plain epics
+//! carries the mark in-game (2026-09-06) — while rares keep their
+//! monster-infrequent mark.
 
 use std::collections::HashSet;
 
@@ -438,27 +442,25 @@ impl Facets {
     }
 
     /// The symbol the game draws on the tile, from the facets known to
-    /// hold; `None` for an item the game leaves unmarked.
+    /// hold; `None` for an item the game leaves unmarked. The
+    /// monster-infrequent and double-rare marks outrank the ascension
+    /// mark, which an item carries once ascended or while eligible.
     #[must_use]
     pub fn symbol(&self) -> Option<Symbol> {
         let monster = self.monster_infrequent == MonsterInfrequent::Yes;
         let double = self.double_rare == DoubleRare::Yes;
-        if self.ascension == Ascension::Ascended {
-            return Some(match (monster && double, double, self.displayed) {
-                (true, _, _) => Symbol::MonsterDoubleRareAscended,
-                (false, true, _) => Symbol::DoubleRareAscended,
-                (false, false, Some(Rarity::Common) | None) => Symbol::CommonAscended,
-                (false, false, Some(Rarity::Magical)) => Symbol::MagicalAscended,
-                (false, false, Some(Rarity::Rare | Rarity::Quest)) => Symbol::RareAscended,
-                (false, false, Some(Rarity::Epic)) => Symbol::EpicAscended,
-                (false, false, Some(Rarity::Legendary)) => Symbol::LegendaryAscended,
-            });
-        }
+        let ascended = self.ascension == Ascension::Ascended;
         match (monster, double) {
+            (true, true) if ascended => Some(Symbol::MonsterDoubleRareAscended),
             (true, true) => Some(Symbol::DoubleRareMonsterInfrequent),
-            (true, false) => Some(Symbol::MonsterInfrequent),
+            (false, true) if ascended => Some(Symbol::DoubleRareAscended),
             (false, true) => Some(Symbol::DoubleRare),
-            (false, false) => None,
+            (true, false) if ascended => Some(rarity_symbol(self.displayed)),
+            (true, false) => Some(Symbol::MonsterInfrequent),
+            (false, false) => match self.ascension {
+                Ascension::Ascended | Ascension::Eligible => Some(rarity_symbol(self.displayed)),
+                Ascension::Ineligible | Ascension::Unresolved => None,
+            },
         }
     }
 
@@ -490,6 +492,18 @@ impl Facets {
         self.monster_infrequent != MonsterInfrequent::Unresolved
             && self.double_rare != DoubleRare::Unresolved
             && self.ascension != Ascension::Unresolved
+    }
+}
+
+/// The ascension symbol for the rarity an item displays as; an
+/// unresolved rarity takes the common one, the game's plainest mark.
+fn rarity_symbol(displayed: Option<Rarity>) -> Symbol {
+    match displayed {
+        Some(Rarity::Common) | None => Symbol::CommonAscended,
+        Some(Rarity::Magical) => Symbol::MagicalAscended,
+        Some(Rarity::Rare | Rarity::Quest) => Symbol::RareAscended,
+        Some(Rarity::Epic) => Symbol::EpicAscended,
+        Some(Rarity::Legendary) => Symbol::LegendaryAscended,
     }
 }
 
@@ -739,7 +753,11 @@ mod tests {
             };
             Facets::of(&game, &table, &candidate).symbol()
         };
-        assert_eq!(symbol(COMMON, "", "", ""), None);
+        assert_eq!(symbol(COMMON, "", "", ""), Some(Symbol::CommonAscended));
+        assert_eq!(
+            symbol(COMMON, "", MAGIC_SUFFIX, ""),
+            Some(Symbol::MagicalAscended)
+        );
         assert_eq!(symbol(MI, "", "", ""), Some(Symbol::MonsterInfrequent));
         assert_eq!(
             symbol(COMMON, RARE_PREFIX, RARE_SUFFIX, ""),
@@ -775,6 +793,19 @@ mod tests {
             Some(Symbol::DoubleRare)
         );
         assert_eq!(symbol("records/missing.dbr", "", "", ""), None);
+    }
+
+    #[test]
+    fn without_an_ascension_table_an_unmarked_item_stays_unmarked() {
+        let game = database(false);
+        let table = AscensionTable::read(&game);
+        let facets = Facets::of(&game, &table, &item(COMMON, "", ""));
+        assert_eq!(facets.ascension, Ascension::Ineligible);
+        assert_eq!(facets.symbol(), None);
+        assert_eq!(
+            Facets::of(&game, &table, &item(MI, "", "")).symbol(),
+            Some(Symbol::MonsterInfrequent)
+        );
     }
 
     #[test]

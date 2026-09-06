@@ -418,10 +418,22 @@ below was read from the real database.
   `ascendantRecord` or `ascendantRecord2h` set is *ascended*;
   otherwise it is *eligible* when the table has a recipe for its base
   rarity whose `<category>TablesAffix` is non-empty; the table absent
-  means no ascension in this install. Unverified: whether the game
-  gates ascension on item level, and the symbol shown for an ascended
-  monster infrequent without two rare affixes (no dedicated variable
-  exists; this app shows `rareAscendedSymbol`, its displayed rarity).
+  means no ascension in this install. **Symbol rule (corrected
+  2026-09-06 from the user's game):** the game marks *eligible*
+  items, not only ascended ones — the user's LootAscension stash tab 8
+  holds 23 plain epics (`c1xx`–`c3xx` bases, several from
+  `records/items/upgraded/`), none with an ascendant affix, and every
+  one carries the ascension mark in-game — so this app shows the
+  displayed rarity's `*AscendedSymbol` for eligible and ascended items
+  alike, while the monster-infrequent and double-rare marks outrank
+  it (the user's rares keep their monster-infrequent mark). The
+  `magicalAscendedSymbol` fits this reading: a common base with a
+  magical affix is eligible through the common recipe and displays as
+  Magical. Unverified: whether the game marks eligible commons and
+  eligible rares that are not monster infrequents; whether it gates
+  ascension on item level; and the symbol of an ascended monster
+  infrequent without two rare affixes (no dedicated variable exists;
+  this app shows `rareAscendedSymbol`, its displayed rarity).
 - **The user's items (2026-09-06):** 794 classified, every record
   resolved: 191 monster infrequents (175 plain, 16 with two rare
   affixes), 42 double rares (26 on common bases), 472 eligible for
