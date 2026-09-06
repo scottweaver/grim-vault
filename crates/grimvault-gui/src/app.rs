@@ -447,7 +447,7 @@ impl World {
             store: loaded.store,
             characters: loaded.characters,
             facts: FactsCache::default(),
-            icons: IconCache::default(),
+            icons: IconCache::with_symbols(loaded.symbols),
             stash_view: StashView::default(),
             store_view: StoreView::default(),
             character_view: CharacterView::default(),
@@ -642,8 +642,12 @@ impl World {
             ui.weak("hold Alt or ⌘/Ctrl while dropping to copy");
             ui.separator();
             ui.weak(format!(
-                "game data: {} layers, {} item archives, {} mods",
-                self.report.databases, self.report.item_archives, self.report.mods
+                "game data: {} layers, {} item archives, {} mods, {} of {} tile symbols",
+                self.report.databases,
+                self.report.item_archives,
+                self.report.mods,
+                self.report.symbols,
+                grimvault_core::facets::Symbol::ALL.len()
             ));
             if let Some(error) = toasts.last_error() {
                 ui.separator();

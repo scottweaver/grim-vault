@@ -20,3 +20,6 @@ grimvault-core = { path = "../grimvault-core" }
 univault-engine = { path = "../univault-engine" }
 univault-io = { path = "../univault-io" }
 univault-ui = { path = "../univault-ui" }
+
+[dev-dependencies]
+univault-engine = { path = "../univault-engine", features = ["test-util"] }

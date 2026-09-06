@@ -1,25 +1,30 @@
 //! The vault store pane: a Group → Bucket selector over the computed
-//! type view, then the selected bucket's items as a flow of tiles.
-//! The whole pane is a drop target for stash items and storage rows.
+//! type view, a search bar, then the selected bucket's matching items
+//! as a flow of tiles. The whole pane is a drop target for stash items
+//! and storage rows.
 
 use std::collections::HashMap;
 
 use egui::{CornerRadius, FontId, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use grimvault_core::bucket::{Bucket, Group};
+use grimvault_core::search::{Query, Subject, Verdict};
 use grimvault_core::store::StoredItem;
 use univault_ui::theme::Theme;
 
 use super::{DragFrame, DropCandidate, PaneCtx, TileLook, item_tooltip, paint_tile};
+use crate::badges::Badge;
 use crate::documents::StoreDoc;
 use crate::drag::{self, DragSource, DragState, DropTarget, Fit};
 use crate::grid::{CELL_PX, footprint_or_unit};
+use crate::search;
 use crate::theme::FITS;
 
-/// Which bucket the pane shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Which bucket the pane shows, and the query filtering it.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreView {
     pub group: Group,
     pub bucket: Bucket,
+    pub query: Query,
 }
 
 impl Default for StoreView {
@@ -27,6 +32,7 @@ impl Default for StoreView {
         Self {
             group: Group::Weapons,
             bucket: Bucket::OneHanded,
+            query: Query::default(),
         }
     }
 }
@@ -34,19 +40,55 @@ impl Default for StoreView {
 const TILE: egui::Vec2 = vec2(96.0, 108.0);
 const ICON_BOX: f32 = 64.0;
 
-pub fn show(
-    ui: &mut Ui,
-    doc: &StoreDoc,
-    view: &mut StoreView,
-    theme: &Theme,
-    cx: &mut PaneCtx<'_>,
-    frame: &mut DragFrame,
-) {
+/// The selected bucket's items that answer the query, by name, and
+/// what the query hid: the bucket's size and how many of its items a
+/// required facet could not be decided for.
+struct Filtered<'a> {
+    shown: Vec<(String, &'a StoredItem)>,
+    in_bucket: usize,
+    unresolved: usize,
+}
+
+fn filtered<'a>(items: &'a [StoredItem], view: &StoreView, cx: &mut PaneCtx<'_>) -> Filtered<'a> {
+    let mut in_bucket = 0;
+    let mut unresolved = 0;
+    let mut shown: Vec<(String, &StoredItem)> = items
+        .iter()
+        .filter_map(|stored| {
+            let facts = cx.facts.facts(cx.game, stored.item());
+            if facts.base.bucket != view.bucket {
+                return None;
+            }
+            in_bucket += 1;
+            let name = facts.display_name();
+            match view.query.verdict(Subject {
+                name: &name,
+                facets: facts.facets,
+            }) {
+                Verdict::Matches => Some((name, stored)),
+                Verdict::Excluded => None,
+                Verdict::Unresolved => {
+                    unresolved += 1;
+                    None
+                }
+            }
+        })
+        .collect();
+    shown.sort_by(|(a, left), (b, right)| a.cmp(b).then(left.id().cmp(&right.id())));
+    Filtered {
+        shown,
+        in_bucket,
+        unresolved,
+    }
+}
+
+/// The heading, the store's path, its size, and the one action that
+/// brings items in from outside the game: importing a GD Stash export.
+fn header(ui: &mut Ui, doc: &StoreDoc, theme: &Theme, frame: &mut DragFrame) {
     ui.label(theme.heading("Vault store"));
     ui.label(theme.path_text(doc.path().display().to_string()));
-    let store = doc.store();
     ui.horizontal(|ui| {
-        ui.label(format!("{} items", store.len()));
+        ui.label(format!("{} items", doc.store().len()));
         if ui
             .button("Import GD Stash export…")
             .on_hover_text(
@@ -60,6 +102,18 @@ pub fn show(
                 .pick_file();
         }
     });
+}
+
+pub fn show(
+    ui: &mut Ui,
+    doc: &StoreDoc,
+    view: &mut StoreView,
+    theme: &Theme,
+    cx: &mut PaneCtx<'_>,
+    frame: &mut DragFrame,
+) {
+    header(ui, doc, theme, frame);
+    let store = doc.store();
 
     let mut counts: HashMap<Bucket, usize> = HashMap::new();
     for stored in store.items() {
@@ -100,6 +154,7 @@ pub fn show(
             }
         }
     });
+    search::bar(ui, &mut view.query);
     ui.separator();
 
     let zone = ui.available_rect_before_wrap();
@@ -122,20 +177,23 @@ pub fn show(
         });
     }
 
-    let mut shown: Vec<(String, &StoredItem)> = store
-        .items()
-        .iter()
-        .filter_map(|stored| {
-            let facts = cx.facts.facts(cx.game, stored.item());
-            (facts.base.bucket == view.bucket).then(|| (facts.display_name(), stored))
-        })
-        .collect();
-    shown.sort_by(|(a, left), (b, right)| a.cmp(b).then(left.id().cmp(&right.id())));
+    let Filtered {
+        shown,
+        in_bucket,
+        unresolved,
+    } = filtered(store.items(), view, cx);
+    if !view.query.is_empty() {
+        ui.weak(search::summary(shown.len(), in_bucket, unresolved));
+    }
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if shown.is_empty() {
-                ui.weak(format!("No {} in the store.", view.bucket.label()));
+                ui.weak(if view.query.is_empty() {
+                    format!("No {} in the store.", view.bucket.label())
+                } else {
+                    format!("No {} match the search.", view.bucket.label())
+                });
             }
             ui.horizontal_wrapped(|ui| {
                 for (name, stored) in &shown {
@@ -166,7 +224,9 @@ fn store_tile(
     let rarity = facts.base.rarity;
     let initials = facts.initials();
     let bitmap = facts.base.bitmap.clone();
+    let symbol = facts.facets.symbol();
     let icon = cx.icons.icon(ui.ctx(), cx.game, bitmap.as_ref());
+    let badge_icon = symbol.map(|symbol| cx.icons.symbol(ui.ctx(), symbol));
 
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, CornerRadius::same(3), cx.palette.faint_bg);
@@ -180,6 +240,9 @@ fn store_tile(
             footprint: footprint_source,
             stack: item.stack_count,
             icon: &icon,
+            badge: symbol
+                .zip(badge_icon.as_ref())
+                .map(|(symbol, icon)| Badge { symbol, icon }),
             hovered,
             lifted,
         },

@@ -63,6 +63,15 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
         world.report.elapsed
     );
 
+    println!(
+        "tile symbols: {} of {} found in UI.arc",
+        world.report.symbols,
+        grimvault_core::facets::Symbol::ALL.len()
+    );
+    for (symbol, problem) in world.symbols.problems() {
+        println!("  {}: {problem}", symbol.variable());
+    }
+
     let campaigns: Vec<String> = world.campaigns.iter().map(ToString::to_string).collect();
     println!(
         "campaigns: {} — showing the {} (its transfer.gst was written last)",
@@ -398,8 +407,8 @@ fn print_character(doc: &CharacterDoc, facts: &mut FactsCache, game: &GameData) 
     }
 }
 
-/// `Prefix Base Suffix xN [Rarity WxH]`, `?` for what the database
-/// cannot resolve.
+/// `Prefix Base Suffix xN [Rarity WxH · facets]`, `?` for what the
+/// database cannot resolve.
 fn describe(facts: &mut FactsCache, game: &GameData, item: &Item) -> String {
     let view = facts.facts(game, item);
     let rarity = view
@@ -415,5 +424,14 @@ fn describe(facts: &mut FactsCache, game: &GameData, item: &Item) -> String {
     } else {
         String::new()
     };
-    format!("{}{stack} [{rarity} {footprint}]", view.display_name())
+    let marks = view.facets.labels();
+    let marks = if marks.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", marks.join(" · "))
+    };
+    format!(
+        "{}{stack} [{rarity} {footprint}{marks}]",
+        view.display_name()
+    )
 }

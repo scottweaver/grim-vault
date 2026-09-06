@@ -6,6 +6,12 @@
 //! [`load_world`] is the whole path as one function, so the window
 //! and the headless `--check` run the same code; [`start`] moves it
 //! onto a thread and reports progress over a channel.
+//!
+//! The tile symbols are the one thing read by entry rather than whole:
+//! each layer's `UI.arc` runs to a quarter gigabyte, and the eleven
+//! 4 KB textures the app wants are found through the archive's
+//! directory ([`ArcIndex`]) and read as byte ranges
+//! ([`univault_io::read_ranges`]).
 
 use std::fmt;
 use std::io;
@@ -14,18 +20,21 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use grimvault_core::campaign::Campaign;
+use grimvault_core::facets::Symbol;
 use grimvault_core::gamedata::{
     GameData, LayerFiles, LayerSet, ModListing, mod_layers, shipped_layers,
 };
 use thiserror::Error;
-use univault_engine::arc::{ArcError, ArcFile};
+use univault_engine::arc::{ArcError, ArcFile, ArcHeader, ArcIndex, Located};
 use univault_engine::arz::{ArzDialect, ArzError, ArzFile};
 use univault_engine::codec::Codec;
 
+use crate::badges::SymbolTextures;
 use crate::crafting::{Blueprints, IllusionCollection};
 use crate::documents::{
     CharacterEntry, GstOpenError, Reagents, StashDoc, StoreDoc, StoreOpenError, open_characters,
 };
+use crate::icons::IconProblem;
 use crate::setup::{GameDir, SaveDir};
 
 /// Where everything lives, validated.
@@ -43,6 +52,7 @@ pub enum LoadStep {
     TextArchive(PathBuf),
     ItemArchive(PathBuf),
     Localization,
+    UiArchive(PathBuf),
     Stash,
     Reagents,
     Blueprints,
@@ -64,6 +74,9 @@ impl fmt::Display for LoadStep {
                 write!(f, "reading item archive {}", relative.display())
             }
             Self::Localization => f.write_str("building the localization table"),
+            Self::UiArchive(relative) => {
+                write!(f, "reading tile symbols from {}", relative.display())
+            }
             Self::Stash => f.write_str("opening transfer.gst"),
             Self::Reagents => f.write_str("opening reagents.gst"),
             Self::Blueprints => f.write_str("opening formulas.gst"),
@@ -75,13 +88,15 @@ impl fmt::Display for LoadStep {
 }
 
 /// What the game-data half of the load found: the shipped layers by
-/// kind, and how many mods contributed a database.
+/// kind, how many mods contributed a database, and how many of the
+/// tile symbols have their texture.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoadReport {
     pub databases: usize,
     pub text_archives: usize,
     pub item_archives: usize,
     pub mods: usize,
+    pub symbols: usize,
     pub elapsed: Duration,
 }
 
@@ -89,6 +104,7 @@ pub struct LoadReport {
 pub struct LoadedWorld {
     pub game: GameData,
     pub report: LoadReport,
+    pub symbols: SymbolTextures,
     /// Every campaign the save directory holds, main first.
     pub campaigns: Vec<Campaign>,
     /// Whose shared files `stash`, `reagents`, `blueprints`, and
@@ -228,17 +244,32 @@ pub fn load_world(
 ) -> Result<LoadedWorld, LoadFailure> {
     let started = Instant::now();
     let game_dir = paths.game.path();
-    let shipped = load_layers(game_dir, &shipped_layers(), progress)?;
-    let mods = load_layers(game_dir, &mod_layers(list_mods(game_dir)), progress)?;
+    let shipped_files = shipped_layers();
+    let mod_files = mod_layers(list_mods(game_dir));
+    let shipped = load_layers(game_dir, &shipped_files, progress)?;
+    let mods = load_layers(game_dir, &mod_files, progress)?;
     progress(LoadStep::Localization);
+    let counts = (
+        shipped.databases.len(),
+        shipped.text_archives.len(),
+        shipped.item_archives.len(),
+        mods.databases.len(),
+    );
+    let game = GameData::layered(shipped, mods).map_err(LoadFailure::Localization)?;
+    let (symbols, mut warnings) = load_symbols(
+        game_dir,
+        mod_files.iter().chain(&shipped_files),
+        &game,
+        progress,
+    );
     let report = LoadReport {
-        databases: shipped.databases.len(),
-        text_archives: shipped.text_archives.len(),
-        item_archives: shipped.item_archives.len(),
-        mods: mods.databases.len(),
+        databases: counts.0,
+        text_archives: counts.1,
+        item_archives: counts.2,
+        mods: counts.3,
+        symbols: symbols.found(),
         elapsed: started.elapsed(),
     };
-    let game = GameData::layered(shipped, mods).map_err(LoadFailure::Localization)?;
 
     let campaigns = paths.save.campaigns();
     let campaign = newest_campaign(campaigns.iter().map(|campaign| {
@@ -252,8 +283,9 @@ pub fn load_world(
         reagents,
         blueprints,
         illusions,
-        warnings,
+        warnings: shared_warnings,
     } = open_shared(&paths.save, &campaign, progress)?;
+    warnings.extend(shared_warnings);
     progress(LoadStep::Store);
     let store = StoreDoc::open(paths.store.clone())?;
     progress(LoadStep::Characters);
@@ -261,6 +293,7 @@ pub fn load_world(
     Ok(LoadedWorld {
         game,
         report,
+        symbols,
         campaigns,
         campaign,
         stash,
@@ -270,6 +303,106 @@ pub fn load_world(
         store,
         characters,
         warnings,
+    })
+}
+
+/// The tile symbols `gameiteminfo.dbr` names, read by entry out of
+/// each layer's `UI.arc` in overlay order (mods first, as fill layers)
+/// so a later layer's copy wins. An archive that cannot be opened is a
+/// warning, not a failure: the tiles fall back to drawn glyphs.
+fn load_symbols<'l>(
+    game_dir: &Path,
+    layers: impl Iterator<Item = &'l LayerFiles>,
+    game: &GameData,
+    progress: &mut dyn FnMut(LoadStep),
+) -> (SymbolTextures, Vec<String>) {
+    let wanted = game.symbol_bitmaps();
+    let mut textures = SymbolTextures::default();
+    let mut warnings = Vec::new();
+    for symbol in Symbol::ALL {
+        let problem = if wanted.contains_key(&symbol) {
+            IconProblem::NotInArchives
+        } else {
+            IconProblem::NoBitmap
+        };
+        textures.insert(symbol, Err(problem));
+    }
+    for layer in layers {
+        let path = game_dir.join(&layer.ui);
+        if !path.is_file() {
+            continue;
+        }
+        progress(LoadStep::UiArchive(layer.ui.clone()));
+        let index = match open_arc_index(&path) {
+            Ok(index) => index,
+            Err(failure) => {
+                warnings.push(format!("tile symbols: {failure}"));
+                continue;
+            }
+        };
+        for (symbol, bitmap) in &wanted {
+            if let Some(located) = index.locate(bitmap.archive_entry()) {
+                let bytes = read_arc_entry(&path, &index, &located)
+                    .map_err(|failure| IconProblem::Archive(failure.to_string()));
+                textures.insert(*symbol, bytes);
+            }
+        }
+    }
+    (textures, warnings)
+}
+
+/// The directory of an archive, from its header and table region
+/// alone.
+fn open_arc_index(path: &Path) -> Result<ArcIndex, LoadFailure> {
+    let archive = |source| LoadFailure::Archive {
+        path: path.to_path_buf(),
+        source,
+    };
+    let file_len = std::fs::metadata(path)
+        .map_err(|source| LoadFailure::Read {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .len();
+    let header = read_ranges(path, std::slice::from_ref(&(0..ArcHeader::LEN)))?;
+    let header = ArcHeader::parse(&header[0]).map_err(archive)?;
+    let tables = header
+        .tables_range(usize::try_from(file_len).unwrap_or(usize::MAX))
+        .map_err(archive)?;
+    let tables = read_ranges(path, std::slice::from_ref(&tables))?;
+    ArcIndex::parse(header, &tables[0], Codec::Lz4Block).map_err(archive)
+}
+
+/// One entry's bytes, read as the ranges the directory names.
+fn read_arc_entry(
+    path: &Path,
+    index: &ArcIndex,
+    located: &Located,
+) -> Result<Vec<u8>, LoadFailure> {
+    let parts = read_ranges(path, &located.ranges())?;
+    let slices: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
+    index
+        .assemble(located, &slices)
+        .map_err(|source| LoadFailure::Archive {
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
+fn read_ranges(
+    path: &Path,
+    ranges: &[std::ops::Range<usize>],
+) -> Result<Vec<Vec<u8>>, LoadFailure> {
+    let ranges: Vec<std::ops::Range<u64>> = ranges
+        .iter()
+        .map(|range| {
+            u64::try_from(range.start).unwrap_or(u64::MAX)
+                ..u64::try_from(range.end).unwrap_or(u64::MAX)
+        })
+        .collect();
+    univault_io::read_ranges(path, &ranges).map_err(|source| LoadFailure::Read {
+        path: path.to_path_buf(),
+        source,
     })
 }
 

@@ -8,6 +8,7 @@
 
 mod app;
 mod autosave;
+mod badges;
 mod check;
 mod crafting;
 mod documents;
@@ -17,6 +18,7 @@ mod grid;
 mod icons;
 mod loader;
 mod panes;
+mod search;
 mod settings;
 mod setup;
 mod theme;

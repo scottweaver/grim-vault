@@ -1,12 +1,15 @@
 //! What the game data says about an item, resolved once and memoized.
 //! The panes ask per painted tile every frame, and the layered lookups
 //! behind the answer — record → tag → text, bitmap → archive entry →
-//! `.tex` header — are far too slow to repeat at that rate.
+//! `.tex` header — are far too slow to repeat at that rate. The facets
+//! are derived on each ask from the memoized base and affix records;
+//! that is a few comparisons.
 
 use std::collections::HashMap;
 
 use grimvault_core::bucket::Bucket;
-use grimvault_core::gamedata::{BitmapPath, Footprint, GameData, ItemClass, Rarity};
+use grimvault_core::facets::{AffixEvidence, AscensionTable, BaseEvidence, Facets};
+use grimvault_core::gamedata::{AffixInfo, BitmapPath, Footprint, GameData, ItemClass, Rarity};
 use grimvault_core::item::Item;
 use grimvault_core::reagents::{ReagentKind, ReagentKinds};
 use grimvault_core::transfer::Footprints;
@@ -31,15 +34,17 @@ pub struct BaseFacts {
     pub bitmap: Option<BitmapPath>,
     pub bucket: Bucket,
     pub reagent: Option<ReagentKind>,
+    pub evidence: BaseEvidence,
 }
 
-/// One item's facts: its base record's, with the affix names the
-/// database could resolve.
+/// One item's facts: its base record's, the affix names the database
+/// could resolve, and the facets derived from all three records.
 #[derive(Clone, Copy, Debug)]
 pub struct ItemFacts<'a> {
     pub base: &'a BaseFacts,
     pub prefix: Option<&'a str>,
     pub suffix: Option<&'a str>,
+    pub facets: Facets,
 }
 
 impl ItemFacts<'_> {
@@ -67,14 +72,16 @@ impl ItemFacts<'_> {
     }
 }
 
-/// The memo: base facts by base record path, affix names by affix
-/// record path. Only the [`Footprints`] and [`ReagentKinds`] views
-/// read it without warming, so a caller that will move items warms
-/// every item involved first ([`FactsCache::warm`]).
+/// The memo: base facts by base record path, affix records by affix
+/// record path, and the ascension table read once. Only the
+/// [`Footprints`] and [`ReagentKinds`] views read it without warming,
+/// so a caller that will move items warms every item involved first
+/// ([`FactsCache::warm`]).
 #[derive(Default)]
 pub struct FactsCache {
     bases: HashMap<String, BaseFacts>,
-    affixes: HashMap<String, Option<String>>,
+    affixes: HashMap<String, Option<AffixInfo>>,
+    ascension: Option<AscensionTable>,
 }
 
 impl FactsCache {
@@ -85,11 +92,25 @@ impl FactsCache {
             .bases
             .get(&item.base_name)
             .unwrap_or_else(|| unreachable!("warm inserted the base"));
-        let affix = |name: &str| self.affixes.get(name).and_then(|name| name.as_deref());
+        let table = self
+            .ascension
+            .as_ref()
+            .unwrap_or_else(|| unreachable!("warm read the table"));
+        let affix = |name: &str| self.affixes.get(name).and_then(Option::as_ref);
+        let prefix = affix(&item.prefix_name);
+        let suffix = affix(&item.suffix_name);
+        let facets = Facets::classify(
+            item,
+            base.evidence,
+            AffixEvidence::of(&item.prefix_name, prefix),
+            AffixEvidence::of(&item.suffix_name, suffix),
+            table,
+        );
         ItemFacts {
             base,
-            prefix: affix(&item.prefix_name),
-            suffix: affix(&item.suffix_name),
+            prefix: prefix.and_then(|info| info.name.as_deref()),
+            suffix: suffix.and_then(|info| info.name.as_deref()),
+            facets,
         }
     }
 
@@ -104,14 +125,19 @@ impl FactsCache {
     /// Resolves and memoizes everything about `item` so later reads —
     /// including the [`Footprints`] view — can answer.
     pub fn warm(&mut self, game: &GameData, item: &Item) {
+        if self.ascension.is_none() {
+            self.ascension = Some(AscensionTable::read(game));
+        }
         if !self.bases.contains_key(&item.base_name) {
             self.bases
                 .insert(item.base_name.clone(), resolve_base(game, &item.base_name));
         }
         for affix in [&item.prefix_name, &item.suffix_name] {
             if !affix.is_empty() && !self.affixes.contains_key(affix) {
-                let name = RecordId::parse(affix.clone()).and_then(|id| game.affix_name(&id));
-                self.affixes.insert(affix.clone(), name);
+                let info = RecordId::parse(affix.clone())
+                    .and_then(|id| game.affix_info(&id))
+                    .and_then(Result::ok);
+                self.affixes.insert(affix.clone(), info);
             }
         }
     }
@@ -149,6 +175,7 @@ fn resolve_base(game: &GameData, base_name: &str) -> BaseFacts {
         .and_then(|bitmap| game.footprint(bitmap))
         .and_then(Result::ok);
     let bucket = info.class.as_ref().map_or(Bucket::Misc, Bucket::of);
+    let evidence = BaseEvidence::of(Some(&info));
     BaseFacts {
         name: info.name,
         record: RecordStatus::Known,
@@ -159,6 +186,7 @@ fn resolve_base(game: &GameData, base_name: &str) -> BaseFacts {
         bitmap: info.bitmap,
         bucket,
         reagent: info.reagent,
+        evidence,
     }
 }
 
@@ -173,6 +201,7 @@ fn unknown(name: String) -> BaseFacts {
         bitmap: None,
         bucket: Bucket::Misc,
         reagent: None,
+        evidence: BaseEvidence::Unresolved,
     }
 }
 
@@ -180,46 +209,39 @@ fn unknown(name: String) -> BaseFacts {
 mod tests {
     use super::*;
 
-    fn facts(
-        name: &str,
-        prefix: Option<&str>,
-        suffix: Option<&str>,
-    ) -> (BaseFacts, Option<String>, Option<String>) {
-        (
-            unknown(name.to_string()),
-            prefix.map(str::to_string),
-            suffix.map(str::to_string),
-        )
+    fn view<'a>(
+        base: &'a BaseFacts,
+        prefix: Option<&'a str>,
+        suffix: Option<&'a str>,
+    ) -> ItemFacts<'a> {
+        ItemFacts {
+            base,
+            prefix,
+            suffix,
+            facets: Facets::classify(
+                &Item::default(),
+                base.evidence,
+                AffixEvidence::Absent,
+                AffixEvidence::Absent,
+                &AscensionTable::Absent,
+            ),
+        }
     }
 
     #[test]
     fn display_name_joins_the_named_parts() {
-        let (base, prefix, suffix) = facts("Aether Cluster", Some("Cruel"), None);
-        let view = ItemFacts {
-            base: &base,
-            prefix: prefix.as_deref(),
-            suffix: suffix.as_deref(),
-        };
+        let base = unknown("Aether Cluster".to_string());
+        let view = view(&base, Some("Cruel"), None);
         assert_eq!(view.display_name(), "Cruel Aether Cluster");
         assert_eq!(view.initials(), "AC");
     }
 
     #[test]
     fn initials_skip_punctuation_and_cap_at_two() {
-        let (base, _, _) = facts("<unknown> a01_thing", None, None);
-        let view = ItemFacts {
-            base: &base,
-            prefix: None,
-            suffix: None,
-        };
-        assert_eq!(view.initials(), "A");
-        let (base, _, _) = facts("Mark of the Dark Woods", None, None);
-        let view = ItemFacts {
-            base: &base,
-            prefix: None,
-            suffix: None,
-        };
-        assert_eq!(view.initials(), "MO");
+        let base = unknown("<unknown> a01_thing".to_string());
+        assert_eq!(view(&base, None, None).initials(), "A");
+        let base = unknown("Mark of the Dark Woods".to_string());
+        assert_eq!(view(&base, None, None).initials(), "MO");
     }
 
     #[test]
@@ -231,5 +253,13 @@ mod tests {
         };
         assert_eq!(cache.footprint(&item), None);
         assert_eq!(cache.reagent_kind(&item), None);
+    }
+
+    #[test]
+    fn an_unknown_base_leaves_every_facet_unresolved() {
+        let base = unknown("<unknown> x".to_string());
+        let facets = view(&base, None, None).facets;
+        assert!(!facets.is_resolved());
+        assert_eq!(facets.symbol(), None);
     }
 }

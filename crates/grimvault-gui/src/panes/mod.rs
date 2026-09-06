@@ -27,6 +27,7 @@ use univault_engine::grid::CellRect;
 use univault_engine::ids::GridPos;
 use univault_ui::theme::Palette;
 
+use crate::badges::{Badge, paint_badge};
 use crate::documents::CharacterSlot;
 use crate::drag::{self, Container, DragSource, DragState, DropTarget, Fit, Mode};
 use crate::facts::FactsCache;
@@ -418,7 +419,9 @@ pub fn paint_item(
     let rarity = facts.base.rarity;
     let initials = facts.initials();
     let bitmap = facts.base.bitmap.clone();
+    let symbol = facts.facets.symbol();
     let icon = cx.icons.icon(ctx, cx.game, bitmap.as_ref());
+    let badge_icon = symbol.map(|symbol| cx.icons.symbol(ctx, symbol));
     paint_tile(
         painter,
         rect,
@@ -428,6 +431,9 @@ pub fn paint_item(
             footprint,
             stack: item.stack_count,
             icon: &icon,
+            badge: symbol
+                .zip(badge_icon.as_ref())
+                .map(|(symbol, icon)| Badge { symbol, icon }),
             hovered,
             lifted,
         },
@@ -442,6 +448,8 @@ pub struct TileLook<'a> {
     pub footprint: FootprintSource,
     pub stack: u32,
     pub icon: &'a Icon,
+    /// The game's tile symbol, when the item's facets earn one.
+    pub badge: Option<Badge<'a>>,
     pub hovered: bool,
     pub lifted: bool,
 }
@@ -470,6 +478,9 @@ pub fn paint_tile(painter: &Painter, rect: Rect, look: &TileLook<'_>, palette: &
         Stroke::new(1.0, border)
     };
     painter.rect_stroke(rect, CornerRadius::same(2), stroke, StrokeKind::Inside);
+    if let Some(badge) = &look.badge {
+        paint_badge(painter, rect, badge, palette);
+    }
     if look.footprint == FootprintSource::Assumed {
         painter.text(
             rect.left_top() + vec2(3.0, 1.0),
@@ -512,13 +523,17 @@ pub fn paint_fit_preview(painter: &Painter, preview: Rect, fit: Fit) {
     );
 }
 
-/// Item details on hover: name in its rarity colour, then rarity,
-/// class, level gate and stack, then the base record in a muted
-/// monospace.
+/// Item details on hover: name in its rarity colour, the facets the
+/// game would mark, then rarity, class, level gate and stack, then
+/// the base record in a muted monospace.
 pub fn item_tooltip(ui: &mut Ui, cx: &mut PaneCtx<'_>, item: &Item) {
     let facts = cx.facts.facts(cx.game, item);
     let colour = facts.base.rarity.map_or(UNKNOWN_RARITY, rarity_color);
     ui.label(RichText::new(facts.display_name()).color(colour).strong());
+    let labels = facts.facets.labels();
+    if !labels.is_empty() {
+        ui.label(RichText::new(labels.join(" · ")).color(cx.palette.heading));
+    }
     let details: Vec<String> = [
         facts.base.rarity.map(|rarity| format!("{rarity:?}")),
         facts.base.class.as_ref().map(ToString::to_string),
