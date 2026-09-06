@@ -5,36 +5,43 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-03 (M4 character editing built on
-`feat/character-editing`, unmerged; no remote yet; awaiting user
-acceptance of both the stash loop and the character loop)
+Last updated: 2026-09-06 (checkpoint before /clear; M4 on
+`feat/character-editing`, unmerged, awaiting acceptance)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
 
-**Resume here:** `main` is at `9abc5fe`; branch
-`feat/character-editing` holds M4 (characters editable: sack and
-own-stash moves in every direction, copy with Alt/⌘/Ctrl, iron bits)
-and is ready to fast-forward once the user accepts it. No remote; the
-user declined creating the GitHub repo for now — do not push
-unprompted, it is next-up item 5. The next action is the **user's
-acceptance run** with the game closed: vault an item from the
-transfer stash and one from a character's sack, place them back, set
-the iron bits, then confirm in-game. Nothing the app writes has been
+**Resume here:** check out `feat/character-editing` (`e4a508c`, one
+commit ahead of `main` at `9abc5fe`). It holds M4: sack and own-stash
+moves in every direction, copy with Alt/⌘/Ctrl on the drop, and the
+iron-bits field. No remote; the user declined creating the GitHub
+repo for now — do not push unprompted (next-up item 5). The next
+action is the **user's acceptance run** with the game closed: vault
+an item from the transfer stash and one from a character's sack,
+place them back, copy one, set the iron bits, then confirm in-game;
+fast-forward `main` once accepted. Nothing the app writes has been
 read by the game yet — `player.gdc` least of all.
 
-- **Environment left behind:** a release build of the app launched by
-  the assistant may still be running (`pgrep -x grimvault-gui`);
-  relaunch with `cargo run --release -p grimvault-gui`. The real paths
+- **Environment left behind:** the previous session's release build
+  (pre-M4) is still running as pid 53978. Quit it
+  (`pkill -x grimvault-gui`) before launching the new one with
+  `cargo run --release -p grimvault-gui`; `target/release/` already
+  holds M4 builds of the app and `examples/vault_cli`. The real paths
   are seeded in `~/Library/Application Support/grim-vault/settings.json`;
-  no `vault-store.json` exists yet (nothing vaulted).
-- **Scratch material is gone with the session:** copies of the game
-  archives and saves, and the reference clones (gdlc, yagde,
-  grim-save-parser) lived in the session scratchpad. Re-copy from
+  no `vault-store.json` exists yet (nothing vaulted for real).
+- **Scratch material is gone with the session:** the save copies and
+  the Zark round-trip artefacts lived in the scratchpad. Re-copy from
   `/Volumes/scott-games/...` (never read live files while the game
-  runs; `cp` first) and re-clone from the URLs in
-  `docs/format-references.md` when needed. The examples accept
-  `--game` / `--save` overrides for copies.
+  runs; `cp` first) and re-clone the references named in
+  `docs/format-references.md` when needed. The mount was present and
+  the user was actively playing on 2026-09-03 — always reload before
+  reasoning about contents.
+- **Decisions this session, recorded only in the commit and here:**
+  a copy keeps the original's seed; equipped items stay display-only;
+  the three direct storage↔stash core ops were removed because the
+  generic lift-then-place path covers them; this checkpoint landed on
+  the feature branch because there is no remote and STATE.md is
+  authored on feature branches.
 - **Known nits, unfiled:** a single-mastery character shows the raw
   class tag (`tagSkillClassName10`) instead of the mastery name; the
   store pane is a uniform tile flow, not a grid; the illusion
@@ -47,12 +54,9 @@ read by the game yet — `player.gdc` least of all.
   game keeps or drops a zero-count reagent entry is unknown; whether
   the game accepts a `player.gdc` this app wrote is unknown (the CLI
   round trip on a copy of Zark re-reads lossless and fully typed).
-- **Skill note:** `/wrap-up` assumes a merged PR and a remote; this
-  session ran its local equivalent (fast-forward + docs branch). Worth
-  a "no remote" branch in the skill if it recurs.
-- **Live data drift:** the user is actively playing; the transfer
-  stash grew from 3 to 36 items during the session. Always reload
-  before reasoning about contents.
+- **Skill note:** `/checkpoint` and `/wrap-up` both assume a remote
+  and a PR; both have run local equivalents in this project (a
+  docs commit on the branch in hand, fast-forward instead of merge).
 
 ## Active workstream
 
