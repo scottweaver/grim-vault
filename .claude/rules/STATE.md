@@ -338,17 +338,6 @@ none`.
   surface couplings the survey missed; verify with tq-univault's
   tests, not by re-surveying.
 
-- **2026-09-03 — Rules layer bootstrapped.** `git init` on `main`;
-  installed RUST_BEST_PRACTICES, METHODOLOGIES, STATE, ARCHITECTURE,
-  the CLAUDE.md authority map + AGENTS.md symlink, and the Cursor
-  mirrors; PROJECT.md was bound earlier the same day (`tracker:
-  none`). Why: identical workflow to tq-univault so the portable
-  skills and every session rehydrate the same way across the two
-  sibling projects. Risk: every ARCHITECTURE constraint is a pre-code
-  inference from tq-univault plus the game's on-disk layout; the
-  full-re-encode write path is unverified until the first parser
-  round-trips a real save.
-
 ## Blocked / waiting
 
 - *(nothing)* — environment note: the game install and saves live on
