@@ -14,6 +14,7 @@ use egui::{
 };
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gds;
+use grimvault_core::respec::{Reset, RespecRules};
 use grimvault_core::store::Timestamp;
 use univault_io::read_verified;
 use univault_ui::theme::{Palette, Theme};
@@ -617,7 +618,8 @@ impl World {
 
     /// Adopts a drag the panes began, paints the lifted item at the
     /// pointer, and commits or snaps back on release. Double-clicks
-    /// are moves too, and an iron-bits edit is applied here.
+    /// are moves too, and an iron-bits edit or a confirmed reset is
+    /// applied here.
     fn finish_frame(
         &mut self,
         ctx: &egui::Context,
@@ -631,6 +633,9 @@ impl World {
         }
         if let Some(path) = &frame.import_gds {
             self.import_gds(path, toasts);
+        }
+        if let Some((slot, reset)) = frame.respec {
+            self.respec(slot, reset, toasts);
         }
         if self.drag.is_none()
             && let Some(source) = frame.double_click
@@ -877,6 +882,46 @@ impl World {
                 Some(_) | None => {}
             },
             Err(error) => toasts.error(error.to_string()),
+        }
+    }
+
+    /// A confirmed reset: the rules come from the loaded game data,
+    /// the character is edited through its document — so autosave,
+    /// backup-first, and the guard handle the write — and the report
+    /// is toasted. A refusal leaves the character untouched.
+    fn respec(&mut self, slot: CharacterSlot, reset: Reset, toasts: &mut Toasts) {
+        let label = self.doc_label(Doc::Character(slot));
+        let rules = match RespecRules::load(&self.game) {
+            Ok(rules) => rules,
+            Err(error) => {
+                toasts.error(format!("cannot reset {reset}: {error}"));
+                return;
+            }
+        };
+        let Some(doc) = self
+            .characters
+            .get_mut(slot.value())
+            .and_then(CharacterEntry::doc_mut)
+        else {
+            return;
+        };
+        let file = match doc.file_mut() {
+            Ok(file) => file,
+            Err(error) => {
+                toasts.error(error.to_string());
+                return;
+            }
+        };
+        match reset.apply(file, &rules) {
+            Ok(report) if report.is_noop() => {
+                toasts.info(format!("{label}: {report}; nothing to change"));
+            }
+            Ok(report) => {
+                doc.tracking_mut().mark_edited();
+                self.write_order.prioritize(Doc::Character(slot));
+                toasts.info(format!("{label}: {report}"));
+            }
+            Err(error) => toasts.error(format!("{label}: reset {reset} refused: {error}")),
         }
     }
 

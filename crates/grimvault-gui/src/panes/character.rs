@@ -1,13 +1,16 @@
 //! The character section: a picker over `main/*/player.gdc`, and the
 //! chosen character's sacks, equipped items, and personal stash. A
 //! character whose every block is typed is editable — its sacks and
-//! stash tabs are drag sources and drop targets, and its iron bits can
-//! be set — while one with an opaque block is shown read-only, since
-//! an edit before that block could never be re-keyed (ARCHITECTURE.md
-//! "Data flow"). Equipped items are shown but never moved.
+//! stash tabs are drag sources and drop targets, its iron bits can be
+//! set, and its attributes or masteries can be reset behind a
+//! confirmation — while one with an opaque block is shown read-only,
+//! since an edit before that block could never be re-keyed
+//! (ARCHITECTURE.md "Data flow"). Equipped items are shown but never
+//! moved.
 
-use egui::{RichText, Ui, Vec2};
+use egui::{Id, RichText, Ui, Vec2};
 use grimvault_core::gdc::{EquippedItem, InventoryState, PlayerFile};
+use grimvault_core::respec::Reset;
 use grimvault_core::transfer::{SackIndex, TabIndex};
 use univault_ui::theme::Theme;
 
@@ -28,11 +31,13 @@ pub enum CharacterTab {
     Stash(usize),
 }
 
-/// The picker's choice and the container tab.
+/// The picker's choice, the container tab, and the reset awaiting
+/// the user's confirmation, if any.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CharacterView {
     pub selected: usize,
     pub tab: CharacterTab,
+    pub confirm: Option<Reset>,
 }
 
 impl Default for CharacterView {
@@ -40,6 +45,7 @@ impl Default for CharacterView {
         Self {
             selected: 0,
             tab: CharacterTab::Sack(0),
+            confirm: None,
         }
     }
 }
@@ -101,6 +107,7 @@ pub fn show(
             });
         if view.selected != before {
             view.tab = CharacterTab::Sack(0);
+            view.confirm = None;
         }
         if let Some(CharacterEntry::Loaded(doc)) = characters.get(view.selected) {
             access_badge(ui, doc, cx);
@@ -179,8 +186,10 @@ fn body(
     ui.horizontal_wrapped(|ui| {
         ui.label(header_line(file, cx));
         money_field(ui, slot, file, editable, frame);
+        respec_buttons(ui, editable, view);
         ui.label(theme.path_text(doc.path().display().to_string()));
     });
+    confirm_reset(ui, slot, file.character_name(), view, theme, frame);
     let sacks = file
         .inventory()
         .map_or(&[][..], |inventory| inventory.sacks());
@@ -366,6 +375,88 @@ fn money_field(
         .on_hover_text("Drag, or click and type, to set the character's iron bits.");
     if response.changed() {
         frame.set_money = Some((slot, money));
+    }
+}
+
+const READ_ONLY_WHY: &str = "This character is read-only: a block of its player.gdc is not typed, so nothing before it \
+     can be edited.";
+
+/// What each reset does, for its button and its confirmation.
+fn reset_explanation(reset: Reset) -> &'static str {
+    match reset {
+        Reset::Attributes => {
+            "Returns every spent attribute point to the pool and puts physique, cunning, and \
+             spirit — with the health and energy they bought — back to their base values."
+        }
+        Reset::Masteries => {
+            "Removes both masteries and every skill in them, returning the points, so both \
+             masteries can be chosen again in-game. Devotions and item skills stay."
+        }
+    }
+}
+
+/// The two resets as buttons; a click asks for confirmation rather
+/// than acting, and a read-only character explains itself on hover.
+fn respec_buttons(ui: &mut Ui, editable: bool, view: &mut CharacterView) {
+    ui.separator();
+    for (reset, label) in [
+        (Reset::Attributes, "Reset attributes"),
+        (Reset::Masteries, "Reset masteries"),
+    ] {
+        if ui
+            .add_enabled(editable, egui::Button::new(label))
+            .on_hover_text(reset_explanation(reset))
+            .on_disabled_hover_text(READ_ONLY_WHY)
+            .clicked()
+        {
+            view.confirm = Some(reset);
+        }
+    }
+}
+
+/// The confirmation a reset needs before it is reported: nothing is
+/// edited until the user confirms, and Esc, a click outside, or
+/// Cancel drops the request.
+fn confirm_reset(
+    ui: &Ui,
+    slot: CharacterSlot,
+    name: &str,
+    view: &mut CharacterView,
+    theme: &Theme,
+    frame: &mut DragFrame,
+) {
+    let Some(reset) = view.confirm else {
+        return;
+    };
+    let mut confirmed = None;
+    let response = egui::Modal::new(Id::new("respec-confirm")).show(ui.ctx(), |ui| {
+        ui.set_max_width(440.0);
+        ui.label(theme.heading(format!("Reset {name}'s {reset}?")));
+        ui.label(reset_explanation(reset));
+        ui.label(
+            "The change is written by autosave, backup-first, like every other edit. Close the \
+             game first; the game overwrites player.gdc when it saves.",
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button(format!("Reset {reset}")).clicked() {
+                confirmed = Some(true);
+            }
+            if ui.button("Cancel").clicked() {
+                confirmed = Some(false);
+            }
+        });
+    });
+    if confirmed.is_none() && response.should_close() {
+        confirmed = Some(false);
+    }
+    match confirmed {
+        Some(true) => {
+            frame.respec = Some((slot, reset));
+            view.confirm = None;
+        }
+        Some(false) => view.confirm = None,
+        None => {}
     }
 }
 

@@ -20,6 +20,7 @@ use grimvault_core::block::StashTab;
 use grimvault_core::gamedata::{GameData, Rarity};
 use grimvault_core::gdc::Sack;
 use grimvault_core::item::Item;
+use grimvault_core::respec::Reset;
 use grimvault_core::transfer::{Footprints, ItemIndex};
 use univault_engine::grid::CellRect;
 use univault_engine::ids::GridPos;
@@ -62,6 +63,9 @@ pub struct DragFrame {
     pub set_money: Option<(CharacterSlot, u32)>,
     /// A GD Stash export the user picked to import into the store.
     pub import_gds: Option<PathBuf>,
+    /// A reset of a character's attributes or masteries the user
+    /// confirmed.
+    pub respec: Option<(CharacterSlot, Reset)>,
 }
 
 /// How a grid takes part in drag-and-drop.
