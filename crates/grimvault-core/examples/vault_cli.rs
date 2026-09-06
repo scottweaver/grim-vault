@@ -4,7 +4,7 @@
 //! re-parsed to prove it.
 //!
 //! ```text
-//! vault_cli <game dir> <save dir> <store.json> list
+//! vault_cli [--mod NAME] <game dir> <save dir> <store.json> list
 //! vault_cli <game dir> <save dir> <store.json> vault <tab> <index>
 //! vault_cli <game dir> <save dir> <store.json> place <id> <tab> [x y]
 //! vault_cli <game dir> <save dir> <store.json> reagents
@@ -22,6 +22,9 @@
 //! when every block of it is typed. `<character>` is `Name` or
 //! `main/Name` for a main-campaign character and `user/Name` for a
 //! custom-game (mod) character.
+//!
+//! `--mod NAME` works a mod's shared files under `save/<NAME>/`
+//! instead of the main campaign's; characters are the same either way.
 //!
 //! Write policy. Each invocation is one load, so every file goes
 //! through `backup_first_write` under the `grimvault-bak` policy (five
@@ -42,6 +45,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use grimvault_core::bucket::{Bucket, Group};
+use grimvault_core::campaign::Campaign;
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::{PlayerFile, Realm};
 use grimvault_core::gst::{GstFile, ReagentStorage, TransferStash};
@@ -56,7 +60,7 @@ use univault_io::{BackupPolicy, backup_first_write, read_verified};
 use support::{cli_paths, describe, load_game_data};
 
 const BACKUPS: BackupPolicy = BackupPolicy::new("grimvault-bak", 5);
-const USAGE: &str = "usage: vault_cli [--game DIR] [--save DIR] [--store FILE] \
+const USAGE: &str = "usage: vault_cli [--game DIR] [--save DIR] [--store FILE] [--mod NAME] \
                      (list | vault <tab> <index> | place <id> <tab> [x y] \
                      | reagents | vault-reagent <index> <count> | place-reagent <id> \
                      | characters | vault-sack <character> <sack> <index> \
@@ -147,6 +151,7 @@ struct Invocation {
     game_dir: PathBuf,
     save_dir: PathBuf,
     store_path: PathBuf,
+    campaign: Campaign,
     command: Command,
 }
 
@@ -156,11 +161,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         game_dir,
         save_dir,
         store_path,
+        campaign,
         command,
     } = parse_args(&args)?;
     let game_data = load_game_data(&game_dir)?;
-    let stash_path = save_dir.join("transfer.gst");
-    let reagents_path = save_dir.join("reagents.gst");
+    let shared_dir = campaign.shared_dir(&save_dir);
+    let stash_path = shared_dir.join("transfer.gst");
+    let reagents_path = shared_dir.join("reagents.gst");
     let mut stash = Loaded::<GstFile>::load(read_verified(&stash_path)?)?;
     let mut store = load_store(&store_path)?;
     println!(
@@ -179,6 +186,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::Vault { tab, index } => {
             let id = transfer::vault_from_stash(
                 transfer_stash_mut(stash.model_mut())?,
+                &campaign,
                 tab,
                 index,
                 &mut store,
@@ -216,6 +224,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut reagents = load_reagents(&reagents_path)?;
             let id = transfer::vault_from_reagents(
                 reagent_storage_mut(reagents.model_mut())?,
+                &campaign,
                 index,
                 count,
                 &mut store,
@@ -514,6 +523,7 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
         game_dir: paths.game_dir,
         save_dir: paths.save_dir,
         store_path: paths.store_path,
+        campaign: paths.campaign,
         command,
     })
 }
@@ -700,14 +710,18 @@ fn bucket_of(game_data: &GameData, item: &Item) -> Bucket {
 
 fn origin_label(origin: &ItemOrigin) -> String {
     match origin {
-        ItemOrigin::TransferStash { tab } => format!("transfer stash tab {tab}"),
+        ItemOrigin::TransferStash { campaign, tab } => {
+            format!("{campaign} transfer stash tab {tab}")
+        }
         ItemOrigin::Character { realm, name, sack } => {
             format!("character {}/{name} sack {sack}", realm.dir_name())
         }
         ItemOrigin::CharacterStash { realm, name, tab } => {
             format!("character {}/{name} stash tab {tab}", realm.dir_name())
         }
-        ItemOrigin::ReagentStorage => "component / crafting-material storage".to_string(),
+        ItemOrigin::ReagentStorage { campaign } => {
+            format!("{campaign} component / crafting-material storage")
+        }
         ItemOrigin::Unknown => "unknown".to_string(),
     }
 }

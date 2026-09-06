@@ -59,7 +59,10 @@ On first run the app asks for two directories:
   `Documents/My Games/Grim Dawn/save`, or with Steam Cloud enabled
   `<Steam>/userdata/<account>/219990/remote/save`. Editing saves that
   Steam Cloud also syncs invites conflicts; disabling cloud saves for
-  Grim Dawn keeps them in the local folder.
+  Grim Dawn keeps them in the local folder. Each mod keeps its own
+  stash and component storage under `save/<Mod>/`: a selector above
+  the stash switches between the main campaign and each mod, and the
+  app opens on whichever the game wrote last.
 
 Settings and the vault store (`vault-store.json`) live in the app's
 config directory: `~/Library/Application Support/grim-vault` (macOS),

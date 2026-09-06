@@ -58,6 +58,16 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
         world.report.elapsed
     );
 
+    let campaigns: Vec<String> = world.campaigns.iter().map(ToString::to_string).collect();
+    println!(
+        "campaigns: {} — showing the {} (its transfer.gst was written last)",
+        campaigns.join(", "),
+        world.campaign
+    );
+    for warning in &world.warnings {
+        println!("  WARNING {warning}");
+    }
+
     let stash = world.stash.stash();
     println!(
         "\ntransfer stash: {} ({} bytes, lossless; block 18 {}; {} tabs)",

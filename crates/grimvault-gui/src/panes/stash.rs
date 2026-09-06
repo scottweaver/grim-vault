@@ -6,6 +6,7 @@
 
 use egui::{Ui, Vec2};
 use grimvault_core::block::StashTab;
+use grimvault_core::campaign::Campaign;
 use grimvault_core::reagents::ReagentKind;
 use grimvault_core::transfer::TabIndex;
 use univault_ui::theme::Theme;
@@ -46,20 +47,65 @@ impl Default for StashView {
     }
 }
 
+const CAMPAIGN_WHY: &str = "Whose shared files show here: the main campaign keeps its stash and \
+     component storage beside main/, and each mod keeps its own under save/<Mod>/. The app opens \
+     on whichever the game wrote last. Characters are not tied to a campaign — the game lists \
+     every custom-game character under every mod — so the character list never changes.";
+
+/// The campaign whose files the pane shows, among those the save
+/// directory holds.
+#[derive(Clone, Copy)]
+pub struct Selection<'a> {
+    pub campaign: &'a Campaign,
+    pub campaigns: &'a [Campaign],
+}
+
+/// The selected campaign's shared files.
+#[derive(Clone, Copy)]
+pub struct Shared<'a> {
+    pub stash: &'a StashDoc,
+    pub reagents: &'a Reagents,
+}
+
+/// Draws the pane; `Some` when the user picked another campaign,
+/// whose files the shell then opens in place of `shared`.
 pub fn show(
     ui: &mut Ui,
-    doc: &StashDoc,
-    storage: &Reagents,
+    selection: Selection<'_>,
+    shared: Shared<'_>,
     view: &mut StashView,
     theme: &Theme,
     cx: &mut PaneCtx<'_>,
     frame: &mut DragFrame,
-) {
+) -> Option<Campaign> {
+    let Shared {
+        stash: doc,
+        reagents: storage,
+    } = shared;
     let (heading, path) = match view.showing {
         Showing::Stash => ("Transfer stash", doc.path()),
         Showing::Reagents(_) => ("Component storage", storage.path()),
     };
-    ui.label(theme.heading(heading));
+    let mut switch = None;
+    ui.horizontal(|ui| {
+        ui.label(theme.heading(heading));
+        egui::ComboBox::from_id_salt("campaign-picker")
+            .selected_text(selection.campaign.to_string())
+            .show_ui(ui, |ui| {
+                for candidate in selection.campaigns {
+                    let current = candidate == selection.campaign;
+                    if ui
+                        .selectable_label(current, candidate.to_string())
+                        .clicked()
+                        && !current
+                    {
+                        switch = Some(candidate.clone());
+                    }
+                }
+            })
+            .response
+            .on_hover_text(CAMPAIGN_WHY);
+    });
     ui.label(theme.path_text(path.display().to_string()));
     let stash = doc.stash();
     ui.horizontal_wrapped(|ui| {
@@ -112,6 +158,7 @@ pub fn show(
             reagents::show(ui, storage, kind, &mut view.reagent_amount, cx, frame);
         }
     }
+    switch
 }
 
 fn show_tab(

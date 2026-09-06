@@ -28,7 +28,9 @@ use crate::drag::{
 use crate::facts::FactsCache;
 use crate::grid::CELL_PX;
 use crate::icons::{Icon, IconCache};
-use crate::loader::{self, LoadFailure, LoadJob, LoadOutcome, LoadReport, LoadedWorld, WorldPaths};
+use crate::loader::{
+    self, LoadFailure, LoadJob, LoadOutcome, LoadReport, LoadedWorld, WorldPaths, open_shared,
+};
 use crate::panes::character::CharacterView;
 use crate::panes::stash::StashView;
 use crate::panes::store::StoreView;
@@ -37,6 +39,7 @@ use crate::settings::{self, ConfigDir, Settings};
 use crate::setup::{DirProblem, GameDir, SaveDir, SetupState};
 use crate::theme::FITS;
 use crate::watch::{Observation, RefreshTracker, Watcher};
+use grimvault_core::campaign::Campaign;
 
 /// Where the app is.
 pub enum Phase {
@@ -361,6 +364,8 @@ pub struct World {
     paths: WorldPaths,
     game: GameData,
     report: LoadReport,
+    campaigns: Vec<Campaign>,
+    campaign: Campaign,
     stash: StashDoc,
     reagents: Reagents,
     store: StoreDoc,
@@ -386,30 +391,24 @@ impl World {
         toasts: &mut Toasts,
     ) -> Self {
         let watcher = Watcher::start(ctx.clone());
-        match &watcher {
-            Ok(watcher) => watcher.watch(
-                [
-                    loaded.stash.path(),
-                    loaded.reagents.path(),
-                    loaded.store.path(),
-                ]
-                .into_iter()
-                .chain(loaded.characters.iter().map(CharacterEntry::path))
-                .map(std::path::Path::to_path_buf)
-                .collect(),
-            ),
-            Err(error) => toasts.error(format!(
+        if let Err(error) = &watcher {
+            toasts.error(format!(
                 "external-change watching is off: the watcher thread could not start ({error})"
-            )),
+            ));
+        }
+        for warning in loaded.warnings {
+            toasts.error(warning);
         }
         let write_order =
             WriteOrder::new([Doc::Store, Doc::Stash, Doc::Reagents].into_iter().chain(
                 (0..loaded.characters.len()).map(|slot| Doc::Character(CharacterSlot::new(slot))),
             ));
-        Self {
+        let world = Self {
             paths,
             game: loaded.game,
             report: loaded.report,
+            campaigns: loaded.campaigns,
+            campaign: loaded.campaign,
             stash: loaded.stash,
             reagents: loaded.reagents,
             store: loaded.store,
@@ -425,7 +424,64 @@ impl World {
             refresh: RefreshTracker::default(),
             conflicts: Vec::new(),
             write_order,
+        };
+        world.rewatch();
+        world
+    }
+
+    /// Points the guard at the files now open.
+    fn rewatch(&self) {
+        if let Ok(watcher) = &self.watcher {
+            watcher.watch(
+                self.docs()
+                    .into_iter()
+                    .filter_map(|doc| self.path(doc))
+                    .map(std::path::Path::to_path_buf)
+                    .collect(),
+            );
         }
+    }
+
+    /// Swaps the shared files for another campaign's. Unsaved edits
+    /// are written first, backup-first as ever; nothing changes when
+    /// that write, a pending external change, or the open stands in
+    /// the way.
+    fn switch_campaign(&mut self, next: Campaign, toasts: &mut Toasts) {
+        if next == self.campaign {
+            return;
+        }
+        if self.gate() == Gate::Suspended {
+            toasts.error("decide the pending external change before switching campaigns");
+            return;
+        }
+        if let Err(error) = self.flush(toasts) {
+            toasts.error(format!(
+                "could not save before switching campaigns: {error}"
+            ));
+            return;
+        }
+        if self.gate() == Gate::Suspended {
+            return;
+        }
+        let shared = match open_shared(&self.paths.save, &next, &mut |_| {}) {
+            Ok(shared) => shared,
+            Err(error) => {
+                toasts.error(format!("could not open the {next} files: {error}"));
+                return;
+            }
+        };
+        for doc in [Doc::Stash, Doc::Reagents] {
+            self.forget_refresh(doc);
+        }
+        self.stash = shared.stash;
+        self.reagents = shared.reagents;
+        self.campaign = next;
+        self.stash_view = StashView::default();
+        for warning in shared.warnings {
+            toasts.error(warning);
+        }
+        self.rewatch();
+        toasts.info(format!("showing the {} files", self.campaign));
     }
 
     /// Every document, in default write order.
@@ -482,32 +538,45 @@ impl World {
                     &mut frame,
                 );
             });
-        egui::CentralPanel::default().show(ui, |ui| {
-            let mut cx = PaneCtx {
-                game: &self.game,
-                facts: &mut self.facts,
-                icons: &mut self.icons,
-                palette: &theme.palette,
-                drag: self.drag.as_ref(),
-                mode,
-            };
-            panes::stash::show(
-                ui,
-                &self.stash,
-                &self.reagents,
-                &mut self.stash_view,
-                theme,
-                &mut cx,
-                &mut frame,
-            );
-        });
+        let switch = egui::CentralPanel::default()
+            .show(ui, |ui| {
+                let mut cx = PaneCtx {
+                    game: &self.game,
+                    facts: &mut self.facts,
+                    icons: &mut self.icons,
+                    palette: &theme.palette,
+                    drag: self.drag.as_ref(),
+                    mode,
+                };
+                panes::stash::show(
+                    ui,
+                    panes::stash::Selection {
+                        campaign: &self.campaign,
+                        campaigns: &self.campaigns,
+                    },
+                    panes::stash::Shared {
+                        stash: &self.stash,
+                        reagents: &self.reagents,
+                    },
+                    &mut self.stash_view,
+                    theme,
+                    &mut cx,
+                    &mut frame,
+                )
+            })
+            .inner;
         self.show_conflict_modal(ui.ctx(), theme, toasts);
         self.finish_frame(ui.ctx(), frame, mode, &theme.palette, toasts);
+        if let Some(next) = switch {
+            self.switch_campaign(next, toasts);
+        }
     }
 
     fn status_bar(&self, ui: &mut Ui, theme: &Theme, toasts: &Toasts) {
         ui.horizontal_wrapped(|ui| {
             ui.label(theme.path_text(format!("saves: {}", self.paths.save.path().display())));
+            ui.separator();
+            ui.label(format!("campaign: {}", self.campaign));
             ui.separator();
             ui.label(format!("store: {} items", self.store.store().len()));
             ui.separator();
@@ -664,6 +733,7 @@ impl World {
                 .map_or(0, |elapsed| elapsed.as_secs()),
         );
         let World {
+            campaign,
             stash,
             store,
             reagents,
@@ -672,6 +742,7 @@ impl World {
             ..
         } = self;
         let mut containers = Containers {
+            campaign,
             stash: stash.stash_mut(),
             store: store.store_mut(),
             reagents: reagents.doc_mut().map(ReagentDoc::storage_mut),

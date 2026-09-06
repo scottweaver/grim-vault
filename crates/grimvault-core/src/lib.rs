@@ -21,6 +21,7 @@
 pub mod block;
 pub mod blocks;
 pub mod bucket;
+pub mod campaign;
 pub mod crypto;
 pub mod gamedata;
 pub mod gdc;

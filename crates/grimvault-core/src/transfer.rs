@@ -36,6 +36,7 @@ use univault_engine::grid::{CellRect, find_open_cells, fits};
 use univault_engine::ids::{GridPos, RecordId};
 
 use crate::block::StashTab;
+use crate::campaign::Campaign;
 use crate::gamedata::{Footprint, GameData};
 use crate::gdc::{PlayerFile, Realm, Sack};
 use crate::gst::{ReagentEntry, ReagentStorage, TransferStash};
@@ -351,13 +352,18 @@ pub fn can_place_at(
 /// store and stash are unchanged on error.
 pub fn vault_from_stash(
     stash: &mut TransferStash,
+    campaign: &Campaign,
     tab: TabIndex,
     index: ItemIndex,
     store: &mut VaultStore,
     at: Timestamp,
 ) -> Result<StoredItemId, TransferError> {
     let placed = take_from_tabs(&mut stash.tabs, tab, index)?;
-    Ok(store.add(placed.item, ItemOrigin::TransferStash { tab }, at))
+    let origin = ItemOrigin::TransferStash {
+        campaign: campaign.clone(),
+        tab,
+    };
+    Ok(store.add(placed.item, origin, at))
 }
 
 /// Moves stored item `id` into the first free spot of `tab`, returning
@@ -635,6 +641,7 @@ pub fn place_in_sack_at(
 /// are unchanged on error.
 pub fn vault_from_reagents(
     storage: &mut ReagentStorage,
+    campaign: &Campaign,
     index: ReagentIndex,
     count: u32,
     store: &mut VaultStore,
@@ -656,7 +663,10 @@ pub fn vault_from_reagents(
         stack_count: count,
         ..Item::default()
     };
-    let id = store.add(item, ItemOrigin::ReagentStorage, at);
+    let origin = ItemOrigin::ReagentStorage {
+        campaign: campaign.clone(),
+    };
+    let id = store.add(item, origin, at);
     take_from_entry(storage, index, count);
     Ok(id)
 }
@@ -1175,11 +1185,25 @@ mod tests {
         let mut stash = stash(vec![tab(10, 19, vec![placed(CLUSTER, 1.0, 6.0)])]);
         let mut store = VaultStore::new();
 
-        let id = vault_from_stash(&mut stash, TAB0, ItemIndex::new(0), &mut store, NOW).unwrap();
+        let id = vault_from_stash(
+            &mut stash,
+            &Campaign::Main,
+            TAB0,
+            ItemIndex::new(0),
+            &mut store,
+            NOW,
+        )
+        .unwrap();
         assert!(stash.tabs[0].items.is_empty());
         let stored = store.get(id).unwrap();
         assert_eq!(stored.item(), &item(CLUSTER));
-        assert_eq!(stored.origin(), &ItemOrigin::TransferStash { tab: TAB0 });
+        assert_eq!(
+            stored.origin(),
+            &ItemOrigin::TransferStash {
+                campaign: Campaign::Main,
+                tab: TAB0
+            }
+        );
         assert_eq!(stored.stored_at(), NOW);
 
         let pos = place_in_stash(&mut store, id, &mut stash, TAB0, &footprints).unwrap();
@@ -1207,6 +1231,7 @@ mod tests {
         assert_eq!(
             vault_from_stash(
                 &mut stash,
+                &Campaign::Main,
                 TabIndex::new(3),
                 ItemIndex::new(0),
                 &mut store,
@@ -1215,7 +1240,14 @@ mod tests {
             Err(TransferError::NoSuchTab(TabIndex::new(3)))
         );
         assert_eq!(
-            vault_from_stash(&mut stash, TAB0, ItemIndex::new(1), &mut store, NOW),
+            vault_from_stash(
+                &mut stash,
+                &Campaign::Main,
+                TAB0,
+                ItemIndex::new(1),
+                &mut store,
+                NOW
+            ),
             Err(TransferError::NoSuchItem {
                 tab: TAB0,
                 index: ItemIndex::new(1)
@@ -1364,14 +1396,20 @@ mod tests {
             let mut storage = storage(vec![entry(SHARD, 15), entry(CLUSTER, 20)]);
             let mut store = VaultStore::new();
 
-            let id = vault_from_reagents(&mut storage, FIRST, 5, &mut store, NOW).unwrap();
+            let id = vault_from_reagents(&mut storage, &Campaign::Main, FIRST, 5, &mut store, NOW)
+                .unwrap();
             let stored = store.get(id).unwrap();
             assert_eq!(stored.item(), &stack(SHARD, 5));
-            assert_eq!(stored.origin(), &ItemOrigin::ReagentStorage);
+            assert_eq!(
+                stored.origin(),
+                &ItemOrigin::ReagentStorage {
+                    campaign: Campaign::Main
+                }
+            );
             assert_eq!(stored.stored_at(), NOW);
             assert_eq!(storage.entries, vec![entry(SHARD, 10), entry(CLUSTER, 20)]);
 
-            vault_from_reagents(&mut storage, FIRST, 10, &mut store, NOW).unwrap();
+            vault_from_reagents(&mut storage, &Campaign::Main, FIRST, 10, &mut store, NOW).unwrap();
             assert_eq!(storage.entries, vec![entry(CLUSTER, 20)]);
             assert_eq!(store.len(), 2);
         }
@@ -1382,15 +1420,22 @@ mod tests {
             let mut store = VaultStore::new();
             let before = storage.clone();
             assert_eq!(
-                vault_from_reagents(&mut storage, ReagentIndex::new(1), 1, &mut store, NOW),
+                vault_from_reagents(
+                    &mut storage,
+                    &Campaign::Main,
+                    ReagentIndex::new(1),
+                    1,
+                    &mut store,
+                    NOW
+                ),
                 Err(TransferError::NoSuchReagent(ReagentIndex::new(1)))
             );
             assert_eq!(
-                vault_from_reagents(&mut storage, FIRST, 0, &mut store, NOW),
+                vault_from_reagents(&mut storage, &Campaign::Main, FIRST, 0, &mut store, NOW),
                 Err(TransferError::ZeroReagentCount(FIRST))
             );
             assert_eq!(
-                vault_from_reagents(&mut storage, FIRST, 16, &mut store, NOW),
+                vault_from_reagents(&mut storage, &Campaign::Main, FIRST, 16, &mut store, NOW),
                 Err(TransferError::ReagentCountExceeded {
                     index: FIRST,
                     requested: 16,
@@ -1457,7 +1502,8 @@ mod tests {
             let mut storage = storage(vec![entry(SHARD, 15), entry(CLUSTER, 20)]);
             let before = storage.clone();
             let mut store = VaultStore::new();
-            let id = vault_from_reagents(&mut storage, FIRST, 3, &mut store, NOW).unwrap();
+            let id = vault_from_reagents(&mut storage, &Campaign::Main, FIRST, 3, &mut store, NOW)
+                .unwrap();
             place_in_reagents(&mut store, id, &mut storage, &Kinds).unwrap();
             assert_eq!(storage, before);
             assert!(store.is_empty());

@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
+use crate::campaign::Campaign;
 use crate::gdc::Realm;
 
 use crate::item::Item;
@@ -101,8 +102,12 @@ impl Timestamp {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ItemOrigin {
-    /// A tab of `transfer.gst`.
-    TransferStash { tab: TabIndex },
+    /// A tab of a campaign's `transfer.gst`.
+    TransferStash {
+        #[serde(default = "campaign_before_mods_were_recorded")]
+        campaign: Campaign,
+        tab: TabIndex,
+    },
     /// A sack of a character's inventory (`player.gdc` block 3).
     Character {
         #[serde(default = "realm_before_realms_were_recorded")]
@@ -117,8 +122,12 @@ pub enum ItemOrigin {
         name: String,
         tab: TabIndex,
     },
-    /// The component / crafting-material storage, `reagents.gst`.
-    ReagentStorage,
+    /// A campaign's component / crafting-material storage,
+    /// `reagents.gst`.
+    ReagentStorage {
+        #[serde(default = "campaign_before_mods_were_recorded")]
+        campaign: Campaign,
+    },
     /// Provenance not recorded.
     Unknown,
 }
@@ -128,6 +137,12 @@ pub enum ItemOrigin {
 /// character.
 const fn realm_before_realms_were_recorded() -> Realm {
     Realm::Main
+}
+
+/// Origins written before 2026-09-06 name no campaign; the app then
+/// read only the main campaign's shared files.
+const fn campaign_before_mods_were_recorded() -> Campaign {
+    Campaign::Main
 }
 
 /// One store entry: the item, its identity in the store, and its
@@ -397,6 +412,7 @@ mod tests {
         let id = store.add(
             cluster(),
             ItemOrigin::TransferStash {
+                campaign: Campaign::Main,
                 tab: TabIndex::new(0),
             },
             at(1_756_900_000),
@@ -413,7 +429,7 @@ mod tests {
         assert_eq!(value["items"][0]["id"], json!(1));
         assert_eq!(
             value["items"][0]["origin"],
-            json!({ "kind": "transferStash", "tab": 0 })
+            json!({ "kind": "transferStash", "campaign": "main", "tab": 0 })
         );
         assert_eq!(value["items"][0]["storedAt"], json!(1_756_900_000));
         assert_eq!(
@@ -538,8 +554,28 @@ mod tests {
             json!({ "kind": "unknown" })
         );
         assert_eq!(
-            serde_json::to_value(ItemOrigin::ReagentStorage).unwrap(),
-            json!({ "kind": "reagentStorage" })
+            serde_json::to_value(ItemOrigin::ReagentStorage {
+                campaign: Campaign::Main
+            })
+            .unwrap(),
+            json!({ "kind": "reagentStorage", "campaign": "main" })
+        );
+        let loot = Campaign::Mod(crate::campaign::ModName::parse("LootAscension").unwrap());
+        assert_eq!(
+            serde_json::to_value(ItemOrigin::TransferStash {
+                campaign: loot.clone(),
+                tab: TabIndex::new(4)
+            })
+            .unwrap(),
+            json!({ "kind": "transferStash", "campaign": "LootAscension", "tab": 4 })
+        );
+        let origin: ItemOrigin =
+            serde_json::from_value(json!({ "kind": "reagentStorage" })).unwrap();
+        assert_eq!(
+            origin,
+            ItemOrigin::ReagentStorage {
+                campaign: Campaign::Main
+            }
         );
     }
 

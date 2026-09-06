@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use grimvault_core::campaign::{Campaign, ModName};
 use grimvault_core::gamedata::{
     GameData, LayerFiles, LayerSet, ModListing, mod_layers, shipped_layers,
 };
@@ -125,18 +126,23 @@ pub fn describe(game_data: &GameData, item: &Item) -> String {
 /// and `--store FILE` flags win, and anything not given comes from the
 /// app's saved settings (`settings.json` in the config directory, the
 /// store beside it) so the paths need typing only once, in the app.
+/// `--mod NAME` selects a mod's shared files under `save/<NAME>/`;
+/// the main campaign's are the default.
 pub struct CliPaths {
     pub game_dir: PathBuf,
     pub save_dir: PathBuf,
-    // Shared by every example; the read-only ones never open the store.
+    // Shared by every example; the read-only ones never open the store
+    // or the shared files.
     #[allow(dead_code)]
     pub store_path: PathBuf,
+    #[allow(dead_code)]
+    pub campaign: Campaign,
     /// The arguments that were not path flags, in order.
     pub rest: Vec<String>,
 }
 
 pub fn cli_paths(args: &[String]) -> Result<CliPaths, Box<dyn Error>> {
-    let (mut game, mut save, mut store) = (None, None, None);
+    let (mut game, mut save, mut store, mut mod_name) = (None, None, None, None);
     let mut rest = Vec::new();
     let mut words = args.iter();
     while let Some(word) = words.next() {
@@ -144,6 +150,7 @@ pub fn cli_paths(args: &[String]) -> Result<CliPaths, Box<dyn Error>> {
             "--game" => &mut game,
             "--save" => &mut save,
             "--store" => &mut store,
+            "--mod" => &mut mod_name,
             _ => {
                 rest.push(word.clone());
                 continue;
@@ -152,8 +159,11 @@ pub fn cli_paths(args: &[String]) -> Result<CliPaths, Box<dyn Error>> {
         let Some(value) = words.next() else {
             return Err(format!("{word} needs a value").into());
         };
-        *slot = Some(PathBuf::from(value));
+        *slot = Some(value.clone());
     }
+    let campaign = mod_name.map_or(Ok(Campaign::Main), |name| {
+        ModName::parse(&name).map(Campaign::Mod)
+    })?;
     let config = ConfigDir::resolve()?;
     let settings = if game.is_none() || save.is_none() {
         Some(load_settings(&config)?)
@@ -163,12 +173,15 @@ pub fn cli_paths(args: &[String]) -> Result<CliPaths, Box<dyn Error>> {
     let from_settings = |field: fn(&Settings) -> &PathBuf| settings.as_ref().map(field).cloned();
     Ok(CliPaths {
         game_dir: game
+            .map(PathBuf::from)
             .or_else(|| from_settings(|s| &s.game_dir))
             .ok_or("no game dir: pass --game DIR or run the app once")?,
         save_dir: save
+            .map(PathBuf::from)
             .or_else(|| from_settings(|s| &s.save_dir))
             .ok_or("no save dir: pass --save DIR or run the app once")?,
-        store_path: store.unwrap_or_else(|| config.store_file()),
+        store_path: store.map_or_else(|| config.store_file(), PathBuf::from),
+        campaign,
         rest,
     })
 }

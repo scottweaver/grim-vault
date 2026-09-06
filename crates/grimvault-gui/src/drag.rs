@@ -10,6 +10,7 @@
 //! seeded with a clone and the source is never touched.
 
 use egui::Vec2;
+use grimvault_core::campaign::Campaign;
 use grimvault_core::gamedata::Footprint;
 use grimvault_core::gdc::{PlayerFile, Realm};
 use grimvault_core::gst::{ReagentStorage, TransferStash};
@@ -300,6 +301,9 @@ pub struct OpenCharacter<'a> {
 /// `reagents.gst` is absent or unusable, and a character is `None`
 /// while unreadable or read-only.
 pub struct Containers<'a> {
+    /// Whose shared files `stash` and `reagents` are, recorded in
+    /// every origin lifted out of them.
+    pub campaign: &'a Campaign,
     pub stash: &'a mut TransferStash,
     pub store: &'a mut VaultStore,
     pub reagents: Option<&'a mut ReagentStorage>,
@@ -387,8 +391,15 @@ pub fn peek(
         DragSource::Grid {
             container: Container::TransferStash(tab),
             index,
-        } => grid_item(&containers.stash.tabs, tab, index)
-            .map(|item| (item, ItemOrigin::TransferStash { tab })),
+        } => grid_item(&containers.stash.tabs, tab, index).map(|item| {
+            (
+                item,
+                ItemOrigin::TransferStash {
+                    campaign: containers.campaign.clone(),
+                    tab,
+                },
+            )
+        }),
         DragSource::Grid {
             container: Container::Sack { character, sack },
             index,
@@ -445,7 +456,9 @@ pub fn peek(
                         stack_count: count,
                         ..Item::default()
                     },
-                    ItemOrigin::ReagentStorage,
+                    ItemOrigin::ReagentStorage {
+                        campaign: containers.campaign.clone(),
+                    },
                 )
             }),
     };
@@ -477,7 +490,14 @@ fn lift(
         DragSource::Grid {
             container: Container::TransferStash(tab),
             index,
-        } => transfer::vault_from_stash(containers.stash, tab, index, into, now)?,
+        } => transfer::vault_from_stash(
+            containers.stash,
+            containers.campaign,
+            tab,
+            index,
+            into,
+            now,
+        )?,
         DragSource::Grid {
             container: Container::Sack { character, sack },
             index,
@@ -501,7 +521,15 @@ fn lift(
             into.add(item, origin, now)
         }
         DragSource::Reagent { index, count } => {
-            transfer::vault_from_reagents(containers.reagents()?, index, count, into, now)?
+            let campaign = containers.campaign;
+            transfer::vault_from_reagents(
+                containers.reagents()?,
+                campaign,
+                index,
+                count,
+                into,
+                now,
+            )?
         }
     })
 }
@@ -853,6 +881,7 @@ mod tests {
     impl World {
         fn apply(&mut self, mv: Move) -> Result<Applied, ApplyError> {
             let mut containers = Containers {
+                campaign: &Campaign::Main,
                 stash: &mut self.stash,
                 store: &mut self.store,
                 reagents: self.reagents.as_mut(),
@@ -1040,7 +1069,10 @@ mod tests {
         assert!(world.stash.tabs[0].items.is_empty());
         assert_eq!(
             world.store.get(id).unwrap().origin(),
-            &ItemOrigin::TransferStash { tab: TAB0 }
+            &ItemOrigin::TransferStash {
+                campaign: Campaign::Main,
+                tab: TAB0
+            }
         );
 
         assert_eq!(
@@ -1202,7 +1234,9 @@ mod tests {
         assert_eq!(world.store.get(id).unwrap().item().stack_count, 4);
         assert_eq!(
             world.store.get(id).unwrap().origin(),
-            &ItemOrigin::ReagentStorage
+            &ItemOrigin::ReagentStorage {
+                campaign: Campaign::Main
+            }
         );
         assert_eq!(world.reagents.as_ref().unwrap().entries[0].count, 9);
 
@@ -1426,7 +1460,10 @@ mod tests {
         assert_eq!(world.store.get(id).unwrap().item(), &item(CLUSTER));
         assert_eq!(
             world.store.get(id).unwrap().origin(),
-            &ItemOrigin::TransferStash { tab: TAB0 }
+            &ItemOrigin::TransferStash {
+                campaign: Campaign::Main,
+                tab: TAB0
+            }
         );
 
         let twin = stored_id(

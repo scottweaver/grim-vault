@@ -11,8 +11,9 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
+use grimvault_core::campaign::Campaign;
 use grimvault_core::gamedata::{
     GameData, LayerFiles, LayerSet, ModListing, mod_layers, shipped_layers,
 };
@@ -83,10 +84,94 @@ pub struct LoadReport {
 pub struct LoadedWorld {
     pub game: GameData,
     pub report: LoadReport,
+    /// Every campaign the save directory holds, main first.
+    pub campaigns: Vec<Campaign>,
+    /// Whose shared files `stash` and `reagents` are.
+    pub campaign: Campaign,
     pub stash: StashDoc,
     pub reagents: Reagents,
     pub store: StoreDoc,
     pub characters: Vec<CharacterEntry>,
+    /// Cross-checks that failed without stopping the load, for the
+    /// shell to show.
+    pub warnings: Vec<String>,
+}
+
+/// One campaign's shared files as opened.
+pub struct SharedDocs {
+    pub stash: StashDoc,
+    pub reagents: Reagents,
+    /// A file whose own `mod_name` disagrees with its folder is
+    /// opened all the same, but the disagreement is reported: the
+    /// folder is context, the file's own word is the fact.
+    pub warnings: Vec<String>,
+}
+
+/// Opens a campaign's transfer stash and component storage.
+///
+/// # Errors
+/// [`GstOpenError`] for the stash; an absent or untypeable
+/// `reagents.gst` is reported inside [`Reagents`] instead.
+pub fn open_shared(
+    save: &SaveDir,
+    campaign: &Campaign,
+    progress: &mut dyn FnMut(LoadStep),
+) -> Result<SharedDocs, GstOpenError> {
+    progress(LoadStep::Stash);
+    let stash = StashDoc::open(save.transfer_stash(campaign))?;
+    progress(LoadStep::Reagents);
+    let reagents = Reagents::open(save.reagent_storage(campaign));
+    let mut warnings = Vec::new();
+    if !campaign.owns_file_naming(&stash.stash().mod_name) {
+        warnings.push(misfiled(stash.path(), &stash.stash().mod_name, campaign));
+    }
+    if let Some(doc) = reagents.doc()
+        && !campaign.owns_file_naming(&doc.storage().mod_name)
+    {
+        warnings.push(misfiled(doc.path(), &doc.storage().mod_name, campaign));
+    }
+    Ok(SharedDocs {
+        stash,
+        reagents,
+        warnings,
+    })
+}
+
+fn misfiled(path: &Path, mod_name: &str, campaign: &Campaign) -> String {
+    let claims = if mod_name.is_empty() {
+        "the main campaign".to_string()
+    } else {
+        format!("mod {mod_name:?}")
+    };
+    format!(
+        "{} says it belongs to {claims}, not the {campaign}: showing it anyway",
+        path.display()
+    )
+}
+
+/// The campaign the game wrote most recently, by its stash's
+/// modification time: the best witness of what is being played, since
+/// neither a character file nor the game names a character's mod. The
+/// first candidate (the main campaign) when nothing has a time or on a
+/// tie.
+fn newest_campaign(stamped: impl IntoIterator<Item = (Campaign, Option<SystemTime>)>) -> Campaign {
+    stamped
+        .into_iter()
+        .fold(
+            (Campaign::Main, None::<SystemTime>),
+            |best, (campaign, time)| match (best.1, time) {
+                (None, Some(_)) => (campaign, time),
+                (Some(held), Some(seen)) if seen > held => (campaign, time),
+                _ => best,
+            },
+        )
+        .0
+}
+
+fn modified(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
 }
 
 /// Why the load stopped.
@@ -130,10 +215,18 @@ pub fn load_world(
     };
     let game = GameData::layered(shipped, mods).map_err(LoadFailure::Localization)?;
 
-    progress(LoadStep::Stash);
-    let stash = StashDoc::open(paths.save.transfer_stash())?;
-    progress(LoadStep::Reagents);
-    let reagents = Reagents::open(paths.save.reagent_storage());
+    let campaigns = paths.save.campaigns();
+    let campaign = newest_campaign(campaigns.iter().map(|campaign| {
+        (
+            campaign.clone(),
+            modified(&paths.save.transfer_stash(campaign)),
+        )
+    }));
+    let SharedDocs {
+        stash,
+        reagents,
+        warnings,
+    } = open_shared(&paths.save, &campaign, progress)?;
     progress(LoadStep::Store);
     let store = StoreDoc::open(paths.store.clone())?;
     progress(LoadStep::Characters);
@@ -141,10 +234,13 @@ pub fn load_world(
     Ok(LoadedWorld {
         game,
         report,
+        campaigns,
+        campaign,
         stash,
         reagents,
         store,
         characters,
+        warnings,
     })
 }
 
@@ -325,4 +421,46 @@ fn run(paths: &WorldPaths, sender: &Sender<LoadEvent>, wake: &egui::Context) {
     };
     let _ = sender.send(outcome);
     wake.request_repaint();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use grimvault_core::campaign::ModName;
+
+    use super::*;
+
+    fn at(seconds: u64) -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(seconds)
+    }
+
+    #[test]
+    fn the_default_campaign_is_the_one_written_most_recently() {
+        let loot = Campaign::Mod(ModName::parse("LootAscension").unwrap());
+        let zeta = Campaign::Mod(ModName::parse("Zeta").unwrap());
+        assert_eq!(
+            newest_campaign([
+                (Campaign::Main, Some(at(100))),
+                (loot.clone(), Some(at(300))),
+                (zeta.clone(), Some(at(200))),
+            ]),
+            loot
+        );
+        assert_eq!(
+            newest_campaign([
+                (Campaign::Main, Some(at(300))),
+                (loot.clone(), Some(at(300)))
+            ]),
+            Campaign::Main
+        );
+        assert_eq!(
+            newest_campaign([(Campaign::Main, None), (zeta.clone(), Some(at(5)))]),
+            zeta
+        );
+        assert_eq!(
+            newest_campaign([(Campaign::Main, None), (loot, None)]),
+            Campaign::Main
+        );
+    }
 }

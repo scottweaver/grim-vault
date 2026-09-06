@@ -6,6 +6,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use grimvault_core::campaign::{Campaign, ModName};
 use grimvault_core::gdc::Realm;
 use grimvault_core::platform::{
     GAME_DIR_MARKER, SAVE_DIR_MARKERS, game_dir_candidates, save_dir_candidates,
@@ -90,18 +91,38 @@ impl SaveDir {
         &self.0
     }
 
-    /// The shared stash file.
+    /// A campaign's shared stash file.
     #[must_use]
-    pub fn transfer_stash(&self) -> PathBuf {
-        self.0.join("transfer.gst")
+    pub fn transfer_stash(&self, campaign: &Campaign) -> PathBuf {
+        campaign.shared_dir(&self.0).join("transfer.gst")
     }
 
-    /// The component / crafting-material storage file. Not a marker:
-    /// a save directory the game has not yet written it into is still
-    /// a save directory.
+    /// A campaign's component / crafting-material storage file. Not a
+    /// marker: a save directory the game has not yet written it into
+    /// is still a save directory.
     #[must_use]
-    pub fn reagent_storage(&self) -> PathBuf {
-        self.0.join("reagents.gst")
+    pub fn reagent_storage(&self, campaign: &Campaign) -> PathBuf {
+        campaign.shared_dir(&self.0).join("reagents.gst")
+    }
+
+    /// The campaigns this save directory holds: the main campaign,
+    /// then every folder with its own `transfer.gst`, by name — the
+    /// game creates such a folder the first time a mod is played.
+    #[must_use]
+    pub fn campaigns(&self) -> Vec<Campaign> {
+        let mut mods: Vec<ModName> = std::fs::read_dir(&self.0)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|entry| entry.path().join("transfer.gst").is_file())
+                    .filter_map(|entry| ModName::parse(&entry.file_name().to_string_lossy()).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        mods.sort();
+        std::iter::once(Campaign::Main)
+            .chain(mods.into_iter().map(Campaign::Mod))
+            .collect()
     }
 
     /// The per-character folders of `realm`: `main/` for the main
@@ -291,9 +312,31 @@ mod tests {
         ));
         std::fs::create_dir_all(scratch.0.join("main")).unwrap();
         let save = SaveDir::parse(&scratch.0).unwrap();
-        assert_eq!(save.transfer_stash(), scratch.0.join("transfer.gst"));
+        assert_eq!(
+            save.transfer_stash(&Campaign::Main),
+            scratch.0.join("transfer.gst")
+        );
         assert_eq!(save.characters_dir(Realm::Main), scratch.0.join("main"));
         assert_eq!(save.characters_dir(Realm::Custom), scratch.0.join("user"));
+        assert_eq!(save.campaigns(), vec![Campaign::Main]);
+
+        for folder in ["Zeta", "LootAscension", "user", "NoStash"] {
+            std::fs::create_dir_all(scratch.0.join(folder)).unwrap();
+        }
+        for folder in ["Zeta", "LootAscension", "user"] {
+            std::fs::write(scratch.0.join(folder).join("transfer.gst"), b"gst").unwrap();
+        }
+        let loot = Campaign::Mod(ModName::parse("LootAscension").unwrap());
+        let zeta = Campaign::Mod(ModName::parse("Zeta").unwrap());
+        assert_eq!(save.campaigns(), vec![Campaign::Main, loot.clone(), zeta]);
+        assert_eq!(
+            save.transfer_stash(&loot),
+            scratch.0.join("LootAscension/transfer.gst")
+        );
+        assert_eq!(
+            save.reagent_storage(&loot),
+            scratch.0.join("LootAscension/reagents.gst")
+        );
     }
 
     #[test]

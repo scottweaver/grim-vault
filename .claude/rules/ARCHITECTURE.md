@@ -46,7 +46,8 @@ Q&A). Items marked TBD are open questions, not decisions.
   crafting files `save/formulas.gst` (blueprints) and
   `save/transmutes.gst` (illusions). The game owns them; this app is
   a guest editor. `player.gdc` (in either realm), `transfer.gst`, and
-  `reagents.gst` are the only game-owned files the app writes
+  `reagents.gst` (in the save root or any mod's folder, see the
+  campaign rule below) are the only game-owned files the app writes
   (`reagents.gst` added 2026-09-03 when block 20 was typed from the
   user's file — it is item storage, the same role as the transfer
   stash); `formulas.gst`, `transmutes.gst`, `playmenu.cpn`, and the
@@ -55,13 +56,23 @@ Q&A). Items marked TBD are open questions, not decisions.
   identity only through its folder, so every store record naming a
   character carries the realm explicitly (`ItemOrigin`); a record
   without one predates realms and can only be `main/`. (2026-09-06)
-  TBD (2026-09-06): each mod also keeps its own stash and storage
-  under `save/<Mod>/` (`transfer.gst`, `reagents.gst`,
-  `formulas.gst`, `transmutes.gst`, the mod name inside each file)
-  (its record database is read as a fill layer, see "ARZ/ARC
-  archives" below); the app does not read a mod's stash folder yet.
-  Reading it is a design dialog: which mod's stash a pane shows, and
-  how it relates to the base stash and the store.
+  **Campaigns.** Each mod keeps its own shared files under
+  `save/<Mod>/` (`transfer.gst`, `reagents.gst`, `formulas.gst`,
+  `transmutes.gst`, the mod name inside each; its record database is
+  a fill layer, see "ARZ/ARC archives" below). The shell opens **one
+  campaign's** shared files at a time — the main campaign's beside
+  `main/`, or one mod folder's — chosen by a selector whose default
+  is the campaign whose `transfer.gst` the game wrote most recently:
+  the best available witness of what is being played, because
+  neither `player.gdc` nor the game names a character's mod (the game
+  lists every `user/` character under every mod). The characters
+  shown never depend on the selection. A `.gst`'s own `mod_name` is
+  cross-checked against its folder and a mismatch is surfaced, never
+  silently reinterpreted. Every store origin from a shared file names
+  its campaign (`"campaign": "main"` or the mod name; absent means
+  main, written before campaigns were recorded). Switching writes
+  unsaved edits first and re-arms backup-first for the files opened.
+  (2026-09-06, user request)
 - The game keeps its own backup rotation (`transfer.t00`–`.t09`,
   `player.g00`/`.g01`). Those slots are the game's: the app never
   writes, renames, or deletes them, and never treats one as a write
