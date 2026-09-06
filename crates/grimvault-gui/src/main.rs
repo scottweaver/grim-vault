@@ -9,6 +9,7 @@
 mod app;
 mod autosave;
 mod check;
+mod crafting;
 mod documents;
 mod drag;
 mod facts;

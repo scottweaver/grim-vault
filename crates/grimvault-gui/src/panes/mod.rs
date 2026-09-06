@@ -6,6 +6,7 @@
 //! every pane has drawn, so no pane ever mutates a document.
 
 pub mod character;
+pub mod crafting;
 pub mod reagents;
 pub mod stash;
 pub mod store;
@@ -66,6 +67,8 @@ pub struct DragFrame {
     /// A reset of a character's attributes or masteries the user
     /// confirmed.
     pub respec: Option<(CharacterSlot, Reset)>,
+    /// An add, export, or import on a crafting list.
+    pub crafting: Option<crate::crafting::Request>,
 }
 
 /// How a grid takes part in drag-and-drop.

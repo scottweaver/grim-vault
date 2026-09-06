@@ -1,6 +1,7 @@
 //! The left pane: one tab strip over the transfer stash's tabs and,
-//! beside them, the component / crafting-material storage's two tabs.
-//! A stash tab shows as an editable grid, a storage tab as rows. Tab
+//! beside them, the component / crafting-material storage's two tabs
+//! and the campaign's Blueprints and Illusions tabs. A stash tab shows
+//! as an editable grid, the others as rows. Stash and storage tab
 //! buttons double as drop targets — first fit in a stash tab, merge by
 //! record in a storage tab — while a drag is in flight.
 
@@ -11,10 +12,12 @@ use grimvault_core::reagents::ReagentKind;
 use grimvault_core::transfer::TabIndex;
 use univault_ui::theme::Theme;
 
+use super::crafting::{self, CraftingView};
 use super::{
     DragFrame, DropCandidate, GridSpec, Interaction, PaneCtx, container_tab, grid_surface, outline,
     reagents, stash_entries,
 };
+use crate::crafting::{Blueprints, Crafting, IllusionCollection};
 use crate::documents::{Reagents, StashDoc};
 use crate::drag::{self, Container, DropTarget, Fit};
 use crate::grid::FootprintSource;
@@ -24,17 +27,18 @@ use crate::grid::FootprintSource;
 pub enum Showing {
     Stash,
     Reagents(ReagentKind),
+    Crafting(Crafting),
 }
 
 /// The pane's selection: the surface showing, the stash tab last
-/// chosen (the target of a double-clicked store item even while a
-/// storage tab shows), and how many a storage drag carries (0 for the
-/// whole entry).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// chosen (the target of a double-clicked store item even while
+/// another tab shows), how many a storage drag carries (0 for the
+/// whole entry), and the crafting tabs' own state.
 pub struct StashView {
     pub tab: TabIndex,
     pub showing: Showing,
     pub reagent_amount: u32,
+    pub crafting: CraftingView,
 }
 
 impl Default for StashView {
@@ -43,6 +47,7 @@ impl Default for StashView {
             tab: TabIndex::new(0),
             showing: Showing::Stash,
             reagent_amount: 0,
+            crafting: CraftingView::default(),
         }
     }
 }
@@ -65,6 +70,8 @@ pub struct Selection<'a> {
 pub struct Shared<'a> {
     pub stash: &'a StashDoc,
     pub reagents: &'a Reagents,
+    pub blueprints: &'a Blueprints,
+    pub illusions: &'a IllusionCollection,
 }
 
 /// Draws the pane; `Some` when the user picked another campaign,
@@ -81,10 +88,14 @@ pub fn show(
     let Shared {
         stash: doc,
         reagents: storage,
+        blueprints,
+        illusions,
     } = shared;
     let (heading, path) = match view.showing {
         Showing::Stash => ("Transfer stash", doc.path()),
         Showing::Reagents(_) => ("Component storage", storage.path()),
+        Showing::Crafting(Crafting::Blueprints) => ("Blueprints", blueprints.path()),
+        Showing::Crafting(Crafting::Illusions) => ("Illusions", illusions.path()),
     };
     let mut switch = None;
     ui.horizontal(|ui| {
@@ -151,11 +162,19 @@ pub fn show(
                 });
             }
         }
+        ui.separator();
+        crafting_tabs(ui, blueprints, illusions, view);
     });
     match view.showing {
         Showing::Stash => show_tab(ui, stash.tabs.as_slice(), view, cx, frame),
         Showing::Reagents(kind) => {
             reagents::show(ui, storage, kind, &mut view.reagent_amount, cx, frame);
+        }
+        Showing::Crafting(Crafting::Blueprints) => {
+            crafting::show_blueprints(ui, blueprints, &mut view.crafting, cx, frame);
+        }
+        Showing::Crafting(Crafting::Illusions) => {
+            crafting::show_illusions(ui, illusions, &mut view.crafting, cx, frame);
         }
     }
     switch
@@ -211,6 +230,30 @@ fn show_tab(
                 frame,
             );
         });
+}
+
+/// The Blueprints and Illusions tab buttons, each with its count.
+fn crafting_tabs(
+    ui: &mut Ui,
+    blueprints: &Blueprints,
+    illusions: &IllusionCollection,
+    view: &mut StashView,
+) {
+    let blueprint_label = crafting::tab_label(Crafting::Blueprints, blueprints, |doc| {
+        doc.formulas().entries.len()
+    });
+    let illusion_label = crafting::tab_label(Crafting::Illusions, illusions, |doc| {
+        doc.illusions().total_count()
+    });
+    for (list, label) in [
+        (Crafting::Blueprints, blueprint_label),
+        (Crafting::Illusions, illusion_label),
+    ] {
+        let selected = view.showing == Showing::Crafting(list);
+        if ui.selectable_label(selected, label).clicked() {
+            view.showing = Showing::Crafting(list);
+        }
+    }
 }
 
 fn tab_label(slot: usize, tab: &StashTab) -> String {

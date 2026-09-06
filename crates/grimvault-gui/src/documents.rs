@@ -1,12 +1,15 @@
 //! The open files as the shell holds them: the transfer stash, the
-//! component / crafting-material storage, the vault store, and the
-//! characters. Each writable document knows the disk stamp it was
-//! read under (the external-change guard's baseline), whether it
-//! holds unsaved edits, and whether this load's backup has been taken
-//! yet — the backup-first rule is *one backup per load*, so the first
-//! write since load takes it and later writes reuse it
-//! (ARCHITECTURE.md "Data flow"). That bookkeeping is one type,
-//! [`Tracking`], shared by every document.
+//! component / crafting-material storage, the illusion collection,
+//! the vault store, and the characters (the blueprint list, being the
+//! one plaintext file, is [`crate::crafting::FormulasDoc`]). Each
+//! writable document knows the disk stamp it was read under (the
+//! external-change guard's baseline), whether it holds unsaved edits,
+//! and whether this load's backup has been taken yet — the
+//! backup-first rule is *one backup per load*, so the first write
+//! since load takes it and later writes reuse it (ARCHITECTURE.md
+//! "Data flow"). That bookkeeping is one type, [`Tracking`], shared by
+//! every document; the files the game creates lazily share
+//! [`Optional`].
 //!
 //! A character is writable only while every block of its `player.gdc`
 //! is typed: an opaque block cannot be re-keyed, so an edit before it
@@ -22,7 +25,7 @@ use std::time::SystemTime;
 use grimvault_core::block::SaveEncodeError;
 use grimvault_core::crypto::BlockId;
 use grimvault_core::gdc::{GdcError, PlayerFile, Realm};
-use grimvault_core::gst::{GstError, GstFile, ReagentStorage, TransferStash};
+use grimvault_core::gst::{GstError, GstFile, Illusions, ReagentStorage, TransferStash};
 use grimvault_core::loaded::{LoadError, Loaded};
 use grimvault_core::store::{StoreError, VaultStore};
 use thiserror::Error;
@@ -121,6 +124,8 @@ pub enum Doc {
     Stash,
     Store,
     Reagents,
+    Blueprints,
+    Illusions,
     Character(CharacterSlot),
 }
 
@@ -130,6 +135,8 @@ impl fmt::Display for Doc {
             Self::Stash => f.write_str("transfer stash"),
             Self::Store => f.write_str("vault store"),
             Self::Reagents => f.write_str("component storage"),
+            Self::Blueprints => f.write_str("blueprint list"),
+            Self::Illusions => f.write_str("illusion collection"),
             Self::Character(slot) => write!(f, "character {}", slot.value() + 1),
         }
     }
@@ -148,7 +155,7 @@ pub struct Tracking {
 
 impl Tracking {
     /// A freshly read file: stamped now, clean, backup armed.
-    fn fresh(path: PathBuf) -> Self {
+    pub(crate) fn fresh(path: PathBuf) -> Self {
         let stamp = stamp_of(&path);
         Self {
             path,
@@ -186,7 +193,7 @@ impl Tracking {
     /// on the first write since load, a plain synced write after; the
     /// backup state advances only once the write succeeded, and the
     /// edits stay unsaved on failure.
-    fn save_bytes(&mut self, bytes: &[u8]) -> Result<SaveOutcome, SaveError> {
+    pub(crate) fn save_bytes(&mut self, bytes: &[u8]) -> Result<SaveOutcome, SaveError> {
         if stamp_of(&self.path) != self.stamp {
             return Ok(SaveOutcome::Conflict);
         }
@@ -259,6 +266,18 @@ impl EditableBlock for ReagentStorage {
     }
 }
 
+impl EditableBlock for Illusions {
+    const ID: BlockId = BlockId::ILLUSIONS;
+
+    fn of(file: &GstFile) -> Option<&Self> {
+        file.illusions()
+    }
+
+    fn of_mut(file: &mut GstFile) -> Option<&mut Self> {
+        file.illusions_mut()
+    }
+}
+
 /// A `.gst` editable through its typed block `B`, because it passed
 /// the lossless gate and carries that block.
 #[derive(Debug)]
@@ -272,6 +291,8 @@ pub struct GstDoc<B: EditableBlock> {
 pub type StashDoc = GstDoc<TransferStash>;
 /// The component / crafting-material storage.
 pub type ReagentDoc = GstDoc<ReagentStorage>;
+/// The illusion collection, `transmutes.gst`.
+pub type IllusionsDoc = GstDoc<Illusions>;
 
 impl<B: EditableBlock> GstDoc<B> {
     /// Reads, gates, and stamps the file.
@@ -381,12 +402,75 @@ impl ReagentDoc {
     }
 }
 
-/// `reagents.gst` however it fared: the game writes it only once the
-/// storage has been used, so a save directory without it is normal,
-/// and a file this build cannot type is shown, not fatal.
+impl IllusionsDoc {
+    /// Block 19.
+    #[must_use]
+    pub fn illusions(&self) -> &Illusions {
+        self.block()
+    }
+
+    /// Block 19 for editing; call [`Tracking::mark_edited`] after.
+    pub fn illusions_mut(&mut self) -> &mut Illusions {
+        self.block_mut()
+    }
+}
+
+/// A file document as [`Optional`] drives it: opened from a path,
+/// tracked, saved, and re-read.
+pub trait Document: fmt::Debug + Sized {
+    type OpenError: std::error::Error;
+
+    /// Reads, gates, and stamps the file.
+    ///
+    /// # Errors
+    /// The document's own open error.
+    fn open(path: PathBuf) -> Result<Self, Self::OpenError>;
+    fn tracking(&self) -> &Tracking;
+    fn tracking_mut(&mut self) -> &mut Tracking;
+    /// Writes the model unless the file changed underneath.
+    ///
+    /// # Errors
+    /// [`SaveError`]; the edits stay unsaved.
+    fn save(&mut self) -> Result<SaveOutcome, SaveError>;
+    /// Re-reads the file, dropping in-memory edits; on failure the
+    /// document is untouched, edits included.
+    ///
+    /// # Errors
+    /// The document's own open error.
+    fn reload(&mut self) -> Result<(), Self::OpenError>;
+}
+
+impl<B: EditableBlock> Document for GstDoc<B> {
+    type OpenError = GstOpenError;
+
+    fn open(path: PathBuf) -> Result<Self, GstOpenError> {
+        GstDoc::open(path)
+    }
+
+    fn tracking(&self) -> &Tracking {
+        &self.tracking
+    }
+
+    fn tracking_mut(&mut self) -> &mut Tracking {
+        &mut self.tracking
+    }
+
+    fn save(&mut self) -> Result<SaveOutcome, SaveError> {
+        GstDoc::save(self)
+    }
+
+    fn reload(&mut self) -> Result<(), GstOpenError> {
+        GstDoc::reload(self)
+    }
+}
+
+/// A shared file the game writes only once it has something to put in
+/// it — `reagents.gst`, `formulas.gst`, `transmutes.gst` — however it
+/// fared: a save directory without it is normal, and a file this build
+/// cannot type is shown, not fatal.
 #[derive(Debug)]
-pub enum Reagents {
-    Open(ReagentDoc),
+pub enum Optional<D: Document> {
+    Open(D),
     Absent {
         path: PathBuf,
     },
@@ -395,11 +479,14 @@ pub enum Reagents {
     Failed {
         path: PathBuf,
         stamp: Option<FileStamp>,
-        error: GstOpenError,
+        error: D::OpenError,
     },
 }
 
-impl Reagents {
+/// The component / crafting-material storage, however it fared.
+pub type Reagents = Optional<ReagentDoc>;
+
+impl<D: Document> Optional<D> {
     /// Opens `path` when it exists.
     #[must_use]
     pub fn open(path: PathBuf) -> Self {
@@ -407,7 +494,7 @@ impl Reagents {
             return Self::Absent { path };
         }
         let stamp = stamp_of(&path);
-        match ReagentDoc::open(path.clone()) {
+        match D::open(path.clone()) {
             Ok(doc) => Self::Open(doc),
             Err(error) => Self::Failed { path, stamp, error },
         }
@@ -416,7 +503,7 @@ impl Reagents {
     #[must_use]
     pub fn path(&self) -> &Path {
         match self {
-            Self::Open(doc) => doc.path(),
+            Self::Open(doc) => doc.tracking().path(),
             Self::Absent { path } | Self::Failed { path, .. } => path,
         }
     }
@@ -440,17 +527,43 @@ impl Reagents {
     }
 
     #[must_use]
-    pub fn doc(&self) -> Option<&ReagentDoc> {
+    pub fn doc(&self) -> Option<&D> {
         match self {
             Self::Open(doc) => Some(doc),
             Self::Absent { .. } | Self::Failed { .. } => None,
         }
     }
 
-    pub fn doc_mut(&mut self) -> Option<&mut ReagentDoc> {
+    pub fn doc_mut(&mut self) -> Option<&mut D> {
         match self {
             Self::Open(doc) => Some(doc),
             Self::Absent { .. } | Self::Failed { .. } => None,
+        }
+    }
+
+    /// Marks the open document edited; nothing to mark otherwise.
+    pub fn mark_edited(&mut self) {
+        if let Some(doc) = self.doc_mut() {
+            doc.tracking_mut().mark_edited();
+        }
+    }
+
+    /// See [`Tracking::keep_mine`]; nothing to keep otherwise.
+    pub fn keep_mine(&mut self) {
+        if let Some(doc) = self.doc_mut() {
+            doc.tracking_mut().keep_mine();
+        }
+    }
+
+    /// Writes the open document; an absent or unusable file has
+    /// nothing to write and never has edits to flush.
+    ///
+    /// # Errors
+    /// [`SaveError`].
+    pub fn save(&mut self) -> Result<SaveOutcome, SaveError> {
+        match self.doc_mut() {
+            Some(doc) => doc.save(),
+            None => Ok(SaveOutcome::Saved { backup: None }),
         }
     }
 
@@ -460,8 +573,9 @@ impl Reagents {
     /// game has since written included.
     ///
     /// # Errors
-    /// [`GstOpenError`] when an open document could not be re-read.
-    pub fn reload(&mut self) -> Result<(), GstOpenError> {
+    /// The document's open error when an open document could not be
+    /// re-read.
+    pub fn reload(&mut self) -> Result<(), D::OpenError> {
         match self {
             Self::Open(doc) => doc.reload(),
             Self::Absent { path } | Self::Failed { path, .. } => {

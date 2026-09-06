@@ -20,9 +20,11 @@ use univault_io::read_verified;
 use univault_ui::theme::{Palette, Theme};
 
 use crate::autosave::{Activity, Autosave, AutosaveState, Gate, Pending, Verdict};
+use crate::crafting::{self, Blueprints, CraftingFiles, FormulasOpenError, IllusionCollection};
 use crate::documents::{
-    Backup, CharacterDoc, CharacterEntry, CharacterOpenError, CharacterSlot, Doc, Edits, FileStamp,
-    GstOpenError, ReagentDoc, Reagents, SaveError, SaveOutcome, StashDoc, StoreDoc, StoreOpenError,
+    Backup, CharacterDoc, CharacterEntry, CharacterOpenError, CharacterSlot, Doc, Document, Edits,
+    FileStamp, GstOpenError, Optional, ReagentDoc, Reagents, SaveError, SaveOutcome, StashDoc,
+    StoreDoc, StoreOpenError,
 };
 use crate::drag::{
     self, Applied, Containers, DragSource, DragState, DropTarget, Fit, Landing, Mode, Move,
@@ -347,10 +349,35 @@ enum ReloadError {
     #[error("{0}")]
     Gst(#[from] GstOpenError),
     #[error("{0}")]
+    Formulas(#[from] FormulasOpenError),
+    #[error("{0}")]
     Store(#[from] StoreOpenError),
     #[error("{0}")]
     Character(#[from] CharacterOpenError),
 }
+
+/// The moment of an edit, for the store and the export documents;
+/// the core has no clock.
+fn now() -> Timestamp {
+    Timestamp::from_unix_seconds(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs()),
+    )
+}
+
+/// The documents the campaign selector swaps out.
+const CAMPAIGN_DOCS: [Doc; 4] = [Doc::Stash, Doc::Reagents, Doc::Blueprints, Doc::Illusions];
+
+/// The non-character documents in default write order: the store
+/// first, then the campaign's files in load order.
+const SHARED_DOCS: [Doc; 5] = [
+    Doc::Store,
+    Doc::Stash,
+    Doc::Reagents,
+    Doc::Blueprints,
+    Doc::Illusions,
+];
 
 /// Whether the modifier keys ask for a copy: Alt, or the platform's
 /// command key (Ctrl, ⌘ on macOS).
@@ -371,6 +398,8 @@ pub struct World {
     campaign: Campaign,
     stash: StashDoc,
     reagents: Reagents,
+    blueprints: Blueprints,
+    illusions: IllusionCollection,
     store: StoreDoc,
     characters: Vec<CharacterEntry>,
     facts: FactsCache,
@@ -402,10 +431,9 @@ impl World {
         for warning in loaded.warnings {
             toasts.error(warning);
         }
-        let write_order =
-            WriteOrder::new([Doc::Store, Doc::Stash, Doc::Reagents].into_iter().chain(
-                (0..loaded.characters.len()).map(|slot| Doc::Character(CharacterSlot::new(slot))),
-            ));
+        let write_order = WriteOrder::new(SHARED_DOCS.into_iter().chain(
+            (0..loaded.characters.len()).map(|slot| Doc::Character(CharacterSlot::new(slot))),
+        ));
         let world = Self {
             paths,
             game: loaded.game,
@@ -414,6 +442,8 @@ impl World {
             campaign: loaded.campaign,
             stash: loaded.stash,
             reagents: loaded.reagents,
+            blueprints: loaded.blueprints,
+            illusions: loaded.illusions,
             store: loaded.store,
             characters: loaded.characters,
             facts: FactsCache::default(),
@@ -473,11 +503,13 @@ impl World {
                 return;
             }
         };
-        for doc in [Doc::Stash, Doc::Reagents] {
+        for doc in CAMPAIGN_DOCS {
             self.forget_refresh(doc);
         }
         self.stash = shared.stash;
         self.reagents = shared.reagents;
+        self.blueprints = shared.blueprints;
+        self.illusions = shared.illusions;
         self.campaign = next;
         self.stash_view = StashView::default();
         for warning in shared.warnings {
@@ -489,7 +521,7 @@ impl World {
 
     /// Every document, in default write order.
     fn docs(&self) -> Vec<Doc> {
-        [Doc::Store, Doc::Stash, Doc::Reagents]
+        SHARED_DOCS
             .into_iter()
             .chain((0..self.characters.len()).map(|slot| Doc::Character(CharacterSlot::new(slot))))
             .collect()
@@ -560,6 +592,8 @@ impl World {
                     panes::stash::Shared {
                         stash: &self.stash,
                         reagents: &self.reagents,
+                        blueprints: &self.blueprints,
+                        illusions: &self.illusions,
                     },
                     &mut self.stash_view,
                     theme,
@@ -592,10 +626,12 @@ impl World {
             ui.colored_label(colour, format!("autosave: {state}"));
             ui.separator();
             ui.weak(format!(
-                "backup-first: stash {}, store {}, components {}, characters {}",
+                "backup-first: stash {}, store {}, components {}, blueprints {}, illusions {}, characters {}",
                 backup_label(self.stash.tracking().backup()),
                 backup_label(self.store.tracking().backup()),
-                reagents_backup_label(&self.reagents),
+                optional_backup_label(&self.reagents),
+                optional_backup_label(&self.blueprints),
+                optional_backup_label(&self.illusions),
                 characters_backup_label(&self.characters)
             ))
             .on_hover_text(
@@ -636,6 +672,9 @@ impl World {
         }
         if let Some((slot, reset)) = frame.respec {
             self.respec(slot, reset, toasts);
+        }
+        if let Some(request) = frame.crafting {
+            self.perform_crafting(request, toasts);
         }
         if self.drag.is_none()
             && let Some(source) = frame.double_click
@@ -862,6 +901,25 @@ impl World {
         }
     }
 
+    /// An add, export, or import on the campaign's blueprint list or
+    /// illusion collection; a changed document joins the write order.
+    fn perform_crafting(&mut self, request: crafting::Request, toasts: &mut Toasts) {
+        let mut files = CraftingFiles {
+            blueprints: &mut self.blueprints,
+            illusions: &mut self.illusions,
+        };
+        if let Some(doc) = crafting::perform(
+            request,
+            &mut files,
+            &self.game,
+            &self.campaign,
+            now(),
+            toasts,
+        ) {
+            self.write_order.prioritize(doc);
+        }
+    }
+
     /// Sets a character's iron bits; the model is edited only when the
     /// character is writable, and the toast says so otherwise.
     fn set_money(&mut self, slot: CharacterSlot, money: u32, toasts: &mut Toasts) {
@@ -929,11 +987,9 @@ impl World {
         match doc {
             Doc::Stash => self.stash.tracking_mut().mark_edited(),
             Doc::Store => self.store.tracking_mut().mark_edited(),
-            Doc::Reagents => {
-                if let Some(doc) = self.reagents.doc_mut() {
-                    doc.tracking_mut().mark_edited();
-                }
-            }
+            Doc::Reagents => self.reagents.mark_edited(),
+            Doc::Blueprints => self.blueprints.mark_edited(),
+            Doc::Illusions => self.illusions.mark_edited(),
             Doc::Character(slot) => {
                 if let Some(doc) = self
                     .characters
@@ -950,7 +1006,9 @@ impl World {
     /// character by name, the rest by role.
     fn doc_label(&self, doc: Doc) -> String {
         match doc {
-            Doc::Stash | Doc::Store | Doc::Reagents => doc.to_string(),
+            Doc::Stash | Doc::Store | Doc::Reagents | Doc::Blueprints | Doc::Illusions => {
+                doc.to_string()
+            }
             Doc::Character(slot) => self.characters.get(slot.value()).map_or_else(
                 || doc.to_string(),
                 |entry| format!("character {}", entry.label()),
@@ -1000,6 +1058,7 @@ impl World {
                     .collect::<Vec<_>>();
                 self.facts.warm_all(&self.game, &entries);
             }
+            Doc::Blueprints | Doc::Illusions => {}
             Doc::Character(slot) => {
                 let Some(file) = self
                     .characters
@@ -1105,15 +1164,17 @@ impl World {
         }
     }
 
-    /// Writes one document; an absent or unusable `reagents.gst`, or
-    /// an unreadable character, has nothing to write and never has
-    /// edits to flush.
+    /// Writes one document; an absent or unusable shared file, or an
+    /// unreadable character, has nothing to write and never has edits
+    /// to flush.
     fn save(&mut self, doc: Doc) -> Result<SaveOutcome, SaveError> {
         const NOTHING: Result<SaveOutcome, SaveError> = Ok(SaveOutcome::Saved { backup: None });
         match doc {
             Doc::Stash => self.stash.save(),
             Doc::Store => self.store.save(),
-            Doc::Reagents => self.reagents.doc_mut().map_or(NOTHING, ReagentDoc::save),
+            Doc::Reagents => self.reagents.save(),
+            Doc::Blueprints => self.blueprints.save(),
+            Doc::Illusions => self.illusions.save(),
             Doc::Character(slot) => self.character_mut(slot).map_or(NOTHING, CharacterDoc::save),
         }
     }
@@ -1133,6 +1194,8 @@ impl World {
             Doc::Stash => self.stash.tracking().edits(),
             Doc::Store => self.store.tracking().edits(),
             Doc::Reagents => self.reagents.edits(),
+            Doc::Blueprints => self.blueprints.edits(),
+            Doc::Illusions => self.illusions.edits(),
             Doc::Character(slot) => self
                 .character(slot)
                 .map_or(Edits::Saved, CharacterEntry::edits),
@@ -1144,6 +1207,8 @@ impl World {
             Doc::Stash => self.stash.tracking().stamp(),
             Doc::Store => self.store.tracking().stamp(),
             Doc::Reagents => self.reagents.stamp(),
+            Doc::Blueprints => self.blueprints.stamp(),
+            Doc::Illusions => self.illusions.stamp(),
             Doc::Character(slot) => self.character(slot).and_then(CharacterEntry::stamp),
         }
     }
@@ -1153,6 +1218,8 @@ impl World {
             Doc::Stash => Some(self.stash.path()),
             Doc::Store => Some(self.store.path()),
             Doc::Reagents => Some(self.reagents.path()),
+            Doc::Blueprints => Some(self.blueprints.path()),
+            Doc::Illusions => Some(self.illusions.path()),
             Doc::Character(slot) => self.character(slot).map(CharacterEntry::path),
         }
     }
@@ -1162,6 +1229,8 @@ impl World {
             Doc::Stash => self.stash.reload()?,
             Doc::Store => self.store.reload()?,
             Doc::Reagents => self.reagents.reload()?,
+            Doc::Blueprints => self.blueprints.reload()?,
+            Doc::Illusions => self.illusions.reload()?,
             Doc::Character(slot) => {
                 if let Some(entry) = self.characters.get_mut(slot.value()) {
                     entry.reload()?;
@@ -1175,11 +1244,9 @@ impl World {
         match doc {
             Doc::Stash => self.stash.tracking_mut().keep_mine(),
             Doc::Store => self.store.tracking_mut().keep_mine(),
-            Doc::Reagents => {
-                if let Some(doc) = self.reagents.doc_mut() {
-                    doc.tracking_mut().keep_mine();
-                }
-            }
+            Doc::Reagents => self.reagents.keep_mine(),
+            Doc::Blueprints => self.blueprints.keep_mine(),
+            Doc::Illusions => self.illusions.keep_mine(),
             Doc::Character(slot) => {
                 if let Some(doc) = self.character_mut(slot) {
                     doc.tracking_mut().keep_mine();
@@ -1321,11 +1388,11 @@ fn backup_label(backup: Backup) -> &'static str {
     }
 }
 
-fn reagents_backup_label(reagents: &Reagents) -> &'static str {
-    match reagents {
-        Reagents::Open(doc) => backup_label(doc.tracking().backup()),
-        Reagents::Absent { .. } => "no file",
-        Reagents::Failed { .. } => "read-only",
+fn optional_backup_label<D: Document>(file: &Optional<D>) -> &'static str {
+    match file {
+        Optional::Open(doc) => backup_label(doc.tracking().backup()),
+        Optional::Absent { .. } => "no file",
+        Optional::Failed { .. } => "read-only",
     }
 }
 
@@ -1366,22 +1433,20 @@ mod tests {
     }
 
     #[test]
+    fn the_campaign_docs_are_the_shared_docs_less_the_store() {
+        assert!(SHARED_DOCS.contains(&Doc::Store));
+        assert!(!CAMPAIGN_DOCS.contains(&Doc::Store));
+        assert!(CAMPAIGN_DOCS.iter().all(|doc| SHARED_DOCS.contains(doc)));
+        assert_eq!(CAMPAIGN_DOCS.len() + 1, SHARED_DOCS.len());
+    }
+
+    #[test]
     fn alt_or_the_command_key_asks_for_a_copy() {
         assert_eq!(mode_of(egui::Modifiers::NONE), Mode::Move);
         assert_eq!(mode_of(egui::Modifiers::ALT), Mode::Copy);
         assert_eq!(mode_of(egui::Modifiers::COMMAND), Mode::Copy);
         assert_eq!(mode_of(egui::Modifiers::SHIFT), Mode::Move);
     }
-}
-
-/// The moment an edit is stamped with; the epoch when the clock is
-/// unset, never a refusal.
-fn now() -> Timestamp {
-    Timestamp::from_unix_seconds(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs()),
-    )
 }
 
 /// Transient outcome notifications, and the last error for the status

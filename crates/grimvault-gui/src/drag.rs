@@ -288,6 +288,9 @@ pub enum ApplyError {
     /// between the pane's report and the drop.
     #[error("the item is no longer where the drag began")]
     SourceGone,
+    /// The document holds record lists, not items; no move ends there.
+    #[error("the {0} holds no items")]
+    NotAnItemContainer(Doc),
 }
 
 /// A character open for editing: its file and the realm the store
@@ -618,6 +621,7 @@ impl Snapshot {
             Doc::Character(slot) => {
                 Self::Character(slot, containers.character_ref(slot)?.file.clone())
             }
+            Doc::Blueprints | Doc::Illusions => return Err(ApplyError::NotAnItemContainer(doc)),
         })
     }
 

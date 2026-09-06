@@ -22,6 +22,7 @@ use univault_engine::arc::{ArcError, ArcFile};
 use univault_engine::arz::{ArzDialect, ArzError, ArzFile};
 use univault_engine::codec::Codec;
 
+use crate::crafting::{Blueprints, IllusionCollection};
 use crate::documents::{
     CharacterEntry, GstOpenError, Reagents, StashDoc, StoreDoc, StoreOpenError, open_characters,
 };
@@ -44,6 +45,8 @@ pub enum LoadStep {
     Localization,
     Stash,
     Reagents,
+    Blueprints,
+    Illusions,
     Store,
     Characters,
 }
@@ -63,6 +66,8 @@ impl fmt::Display for LoadStep {
             Self::Localization => f.write_str("building the localization table"),
             Self::Stash => f.write_str("opening transfer.gst"),
             Self::Reagents => f.write_str("opening reagents.gst"),
+            Self::Blueprints => f.write_str("opening formulas.gst"),
+            Self::Illusions => f.write_str("opening transmutes.gst"),
             Self::Store => f.write_str("opening the vault store"),
             Self::Characters => f.write_str("opening characters"),
         }
@@ -86,10 +91,13 @@ pub struct LoadedWorld {
     pub report: LoadReport,
     /// Every campaign the save directory holds, main first.
     pub campaigns: Vec<Campaign>,
-    /// Whose shared files `stash` and `reagents` are.
+    /// Whose shared files `stash`, `reagents`, `blueprints`, and
+    /// `illusions` are.
     pub campaign: Campaign,
     pub stash: StashDoc,
     pub reagents: Reagents,
+    pub blueprints: Blueprints,
+    pub illusions: IllusionCollection,
     pub store: StoreDoc,
     pub characters: Vec<CharacterEntry>,
     /// Cross-checks that failed without stopping the load, for the
@@ -101,17 +109,23 @@ pub struct LoadedWorld {
 pub struct SharedDocs {
     pub stash: StashDoc,
     pub reagents: Reagents,
+    pub blueprints: Blueprints,
+    pub illusions: IllusionCollection,
     /// A file whose own `mod_name` disagrees with its folder is
     /// opened all the same, but the disagreement is reported: the
     /// folder is context, the file's own word is the fact.
     pub warnings: Vec<String>,
 }
 
-/// Opens a campaign's transfer stash and component storage.
+/// Opens a campaign's transfer stash, component storage, blueprint
+/// list, and illusion collection.
 ///
 /// # Errors
-/// [`GstOpenError`] for the stash; an absent or untypeable
-/// `reagents.gst` is reported inside [`Reagents`] instead.
+/// [`GstOpenError`] for the stash; the other three files being
+/// absent or untypeable is reported inside their [`Optional`]
+/// instead.
+///
+/// [`Optional`]: crate::documents::Optional
 pub fn open_shared(
     save: &SaveDir,
     campaign: &Campaign,
@@ -121,6 +135,10 @@ pub fn open_shared(
     let stash = StashDoc::open(save.transfer_stash(campaign))?;
     progress(LoadStep::Reagents);
     let reagents = Reagents::open(save.reagent_storage(campaign));
+    progress(LoadStep::Blueprints);
+    let blueprints = Blueprints::open(save.blueprints(campaign));
+    progress(LoadStep::Illusions);
+    let illusions = IllusionCollection::open(save.illusions(campaign));
     let mut warnings = Vec::new();
     if !campaign.owns_file_naming(&stash.stash().mod_name) {
         warnings.push(misfiled(stash.path(), &stash.stash().mod_name, campaign));
@@ -130,9 +148,16 @@ pub fn open_shared(
     {
         warnings.push(misfiled(doc.path(), &doc.storage().mod_name, campaign));
     }
+    if let Some(doc) = illusions.doc()
+        && !campaign.owns_file_naming(&doc.illusions().mod_name)
+    {
+        warnings.push(misfiled(doc.path(), &doc.illusions().mod_name, campaign));
+    }
     Ok(SharedDocs {
         stash,
         reagents,
+        blueprints,
+        illusions,
         warnings,
     })
 }
@@ -225,6 +250,8 @@ pub fn load_world(
     let SharedDocs {
         stash,
         reagents,
+        blueprints,
+        illusions,
         warnings,
     } = open_shared(&paths.save, &campaign, progress)?;
     progress(LoadStep::Store);
@@ -238,6 +265,8 @@ pub fn load_world(
         campaign,
         stash,
         reagents,
+        blueprints,
+        illusions,
         store,
         characters,
         warnings,

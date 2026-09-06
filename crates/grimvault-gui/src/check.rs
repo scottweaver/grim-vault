@@ -9,13 +9,18 @@ use std::error::Error;
 use std::path::Path;
 use std::process::ExitCode;
 
+use grimvault_core::blueprint::check_blueprint;
+use grimvault_core::formulas::FormulaRead;
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::InventoryState;
+use grimvault_core::illusion::{IllusionCategory, audit};
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
 use grimvault_core::transfer::SackIndex;
+use univault_engine::ids::RecordId;
 
-use crate::documents::{CharacterDoc, CharacterEntry, Reagents, Writable};
+use crate::crafting::{Blueprints, IllusionCollection};
+use crate::documents::{CharacterDoc, CharacterEntry, Optional, Reagents, Writable};
 use crate::facts::FactsCache;
 use crate::loader::{LoadStep, WorldPaths, load_world};
 use crate::panes::character::{EQUIPMENT_SLOTS, WEAPON_SLOTS};
@@ -95,6 +100,8 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
     }
 
     print_reagents(&world.reagents, &mut facts, &world.game);
+    let mut problems = print_blueprints(&world.blueprints, &mut facts, &world.game);
+    problems += print_illusions(&world.illusions, &mut facts, &world.game);
 
     let store = world.store.store();
     let status = if world.store.path().is_file() {
@@ -123,7 +130,6 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
         paths.save.characters_dir(Realm::Main).display(),
         paths.save.characters_dir(Realm::Custom).display()
     );
-    let mut problems = 0;
     for entry in &world.characters {
         match entry {
             CharacterEntry::Loaded(doc) => print_character(doc, &mut facts, &world.game),
@@ -182,6 +188,131 @@ fn print_reagents(reagents: &Reagents, facts: &mut FactsCache, game: &GameData) 
                 path.display()
             );
         }
+    }
+}
+
+/// The blueprint list with every entry named and checked against the
+/// database; the number of entries the database refuses.
+fn print_blueprints(blueprints: &Blueprints, facts: &mut FactsCache, game: &GameData) -> usize {
+    let doc = match blueprints {
+        Optional::Open(doc) => doc,
+        Optional::Absent { path } => {
+            println!(
+                "\nblueprints: {} is absent (the game writes it once a blueprint is learned)",
+                path.display()
+            );
+            return 0;
+        }
+        Optional::Failed { path, error, .. } => {
+            println!("\nblueprints: {} cannot be edited: {error}", path.display());
+            return 0;
+        }
+    };
+    let formulas = doc.formulas();
+    let unread = formulas
+        .entries
+        .iter()
+        .filter(|entry| entry.read == FormulaRead::Unread)
+        .count();
+    println!(
+        "\nblueprints: {} ({} bytes, lossless; {}; {} entries, {unread} new)",
+        doc.path().display(),
+        doc.baseline_len(),
+        formulas.version,
+        formulas.entries.len()
+    );
+    let mut problems = 0;
+    let mut rows: Vec<(String, usize, &'static str, Option<String>)> = formulas
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let name = facts.base(game, &record_item(&entry.record)).name.clone();
+            let badge = match entry.read {
+                FormulaRead::Read => "",
+                FormulaRead::Unread => " NEW",
+            };
+            let problem = RecordId::parse(entry.record.clone()).map_or(
+                Some("empty record".to_string()),
+                |id| {
+                    check_blueprint(game, &id)
+                        .err()
+                        .map(|error| error.to_string())
+                },
+            );
+            (name, index, badge, problem)
+        })
+        .collect();
+    rows.sort();
+    for (name, index, badge, problem) in rows {
+        match problem {
+            None => println!("  [{index:>3}] {name}{badge}"),
+            Some(problem) => {
+                problems += 1;
+                println!("  [{index:>3}] {name}{badge} — PROBLEM {problem}");
+            }
+        }
+    }
+    problems
+}
+
+/// The illusion collection by category with every entry named, then
+/// the database's disagreements; how many there were.
+fn print_illusions(
+    illusions: &IllusionCollection,
+    facts: &mut FactsCache,
+    game: &GameData,
+) -> usize {
+    let doc = match illusions {
+        Optional::Open(doc) => doc,
+        Optional::Absent { path } => {
+            println!(
+                "\nillusions: {} is absent (the game writes it once an illusion is unlocked)",
+                path.display()
+            );
+            return 0;
+        }
+        Optional::Failed { path, error, .. } => {
+            println!("\nillusions: {} cannot be edited: {error}", path.display());
+            return 0;
+        }
+    };
+    let collection = doc.illusions();
+    println!(
+        "\nillusions: {} ({} bytes, lossless; block 19 {}; {} unlocked in {} slots)",
+        doc.path().display(),
+        doc.baseline_len(),
+        collection.version,
+        collection.total_count(),
+        collection.slots.len()
+    );
+    for slot in &collection.slots {
+        let category = IllusionCategory::from_slot_id(slot.slot).map_or_else(
+            || format!("slot {} (unknown)", slot.slot),
+            |category| category.to_string(),
+        );
+        println!("  {category}: {} records", slot.records.len());
+        let mut names: Vec<String> = slot
+            .records
+            .iter()
+            .map(|record| facts.base(game, &record_item(record)).name.clone())
+            .collect();
+        names.sort();
+        for name in names {
+            println!("    {name}");
+        }
+    }
+    let problems = audit(collection, game);
+    for (record, error) in &problems {
+        println!("  PROBLEM {record}: {error}");
+    }
+    problems.len()
+}
+
+fn record_item(record: &str) -> Item {
+    Item {
+        base_name: record.to_string(),
+        ..Item::default()
     }
 }
 

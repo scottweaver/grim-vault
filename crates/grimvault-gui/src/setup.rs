@@ -105,6 +105,20 @@ impl SaveDir {
         campaign.shared_dir(&self.0).join("reagents.gst")
     }
 
+    /// A campaign's blueprint list, `formulas.gst`; absent until the
+    /// first blueprint is learned there.
+    #[must_use]
+    pub fn blueprints(&self, campaign: &Campaign) -> PathBuf {
+        campaign.shared_dir(&self.0).join("formulas.gst")
+    }
+
+    /// A campaign's illusion collection, `transmutes.gst`; absent until
+    /// the first illusion is unlocked there.
+    #[must_use]
+    pub fn illusions(&self, campaign: &Campaign) -> PathBuf {
+        campaign.shared_dir(&self.0).join("transmutes.gst")
+    }
+
     /// The campaigns this save directory holds: the main campaign,
     /// then every folder with its own `transfer.gst`, by name — the
     /// game creates such a folder the first time a mod is played.
@@ -336,6 +350,14 @@ mod tests {
         assert_eq!(
             save.reagent_storage(&loot),
             scratch.0.join("LootAscension/reagents.gst")
+        );
+        assert_eq!(
+            save.blueprints(&loot),
+            scratch.0.join("LootAscension/formulas.gst")
+        );
+        assert_eq!(
+            save.illusions(&Campaign::Main),
+            scratch.0.join("transmutes.gst")
         );
     }
 
