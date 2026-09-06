@@ -5,18 +5,20 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-06 (M5 mod characters plus mod and gdx3
-game-data layers on `feat/mod-characters`, stacked on the unmerged
-M4 branch; both await the user's acceptance run)
+Last updated: 2026-09-06 (M5 mod characters, mod and gdx3 game-data
+layers, and the campaign selector on `feat/mod-characters`, stacked
+on the unmerged M4 branch; both await the user's acceptance run)
 
 ## Session handoff
-**Resume here:** check out `feat/mod-characters` (four commits ahead
+**Resume here:** check out `feat/mod-characters` (six commits ahead
 of `feat/character-editing`, which is one ahead of `main` at
 `9abc5fe`). It holds M5: custom-game (mod) characters under
 `save/user/` are listed, editable, and their vaulted items record the
 realm; every `mods/<Mod>/database/*.arz` (with its text and item
-archives) is a fill layer under the shipped ones, and `gdx3` is read
-when present. No
+archives) is a fill layer under the shipped ones, `gdx3` is read when
+present, and a **campaign selector** above the stash opens one
+campaign's `transfer.gst` + `reagents.gst` at a time (main, or any
+`save/<Mod>/`), defaulting to the one the game wrote last. No
 remote; the user declined creating the GitHub repo for now — do not
 push unprompted (next-up item 6). The next action is the **user's
 acceptance run** with the game closed (next-up item 1), now covering
@@ -45,9 +47,11 @@ once accepted. Nothing the app writes has been read by the game yet.
   Each mod keeps its own `save/<Mod>/{transfer,reagents,formulas,
   transmutes}.gst` with the mod name inside (LootAscension: 10-tab
   stash, 82 reagent entries) and its own `mods/<Mod>/database/
-  <Mod>.arz`. The database is now a fill layer (user decision
-  2026-09-06, ARCHITECTURE "ARZ/ARC archives"); the per-mod stash
-  folder is still unread (ARCHITECTURE "Source of truth" TBD).
+  <Mod>.arz`. The database is a fill layer and the stash folder is a
+  selectable campaign (both user decisions 2026-09-06, ARCHITECTURE
+  "Source of truth" / "ARZ/ARC archives"). `formulas.gst` (plaintext
+  blueprints) and `transmutes.gst` (illusions, parsed) exist per
+  campaign too and are still not shown anywhere.
 - **Resolved the same day:** the "unknown records" on the mod Zark
   (`quest_areah_woodchip.dbr` etc.) that made its sacks refuse every
   placement were **Fangs of Asterkarn records** — `gdx3` is installed
@@ -62,9 +66,11 @@ once accepted. Nothing the app writes has been read by the game yet.
   collection is parsed but not shown; equipped items are display-only;
   a copy keeps the original's seed.
 - **Unverified in the window:** drag-and-drop, autosave, the copy
-  modifier, the iron-bits field, the Reload/Keep-mine modal, and the
-  realm-labelled picker are covered by unit tests only (synthetic
-  input is banned); whether the game keeps a zero-count reagent entry
+  modifier, the iron-bits field, the Reload/Keep-mine modal, the
+  realm-labelled picker, and the campaign switch (flush → reopen →
+  rewatch; its pure parts — the newest-stash default, the folder
+  listing, the `Campaign` type — are unit-tested) are covered by unit
+  tests only (synthetic input is banned); whether the game keeps a zero-count reagent entry
   and whether it accepts any file this app wrote are unknown. The
   mod fill rule is proven by a fixture test, not yet by a mod-only
   item on a real character (every record on the mod Zark resolves
@@ -114,7 +120,7 @@ none`.
 |---|---|---|
 | `main` | trunk | at `9abc5fe` — rules layer, read stack, vault loop, GUI shell, typed `player.gdc`, reagent storage, settings fallback; 288 tests green; no remote and no GitHub repo yet |
 | `feat/character-editing` | M4: characters editable, copy, iron bits | one commit ahead of `main` (plus a checkpoint commit); 293 tests, clippy clean; CLI round trip on a copy of the user's saves re-reads lossless; awaiting the user's acceptance run before fast-forwarding |
-| `feat/mod-characters` | M5: custom-game (mod) characters under `user/`, realm in store origins, mod + gdx3 game-data layers | four commits ahead of `feat/character-editing`; 301 tests, clippy clean; vault + place on a copy of the mod Zark ends byte-identical; lands with M4 |
+| `feat/mod-characters` | M5: custom-game (mod) characters under `user/`, realm in store origins, mod + gdx3 game-data layers, campaign selector | six commits ahead of `feat/character-editing`; 305 tests, clippy clean; vault + place on copies of the mod Zark and the LootAscension stash end byte-identical; lands with M4 |
 
 ## Next up
 
@@ -125,15 +131,18 @@ none`.
    of the transfer stash, one out of a main-campaign sack, and one out
    of the custom-game Zark (picker entry "Zark · custom game"), place
    them back, Alt-drop one to copy it, set the iron bits, then
-   confirm in-game. Load time now includes `gdx3` and the two mods
-   (14 s over SMB in the headless check). Fast-forward `main` through
-   both branches once accepted.
-2. **Mod support, phase 2 (design dialog first):** the per-mod stash
-   and storage under `save/<Mod>/` (`transfer.gst`, `reagents.gst`,
-   the mod name inside each). Decide which mod a pane shows (the save
-   dir lists the mod folders; `playmenu.cpn` names the last one
-   played) and how a mod's stash relates to the base stash and the
-   store.
+   confirm in-game. The stash pane should open on LootAscension (its
+   stash is the newest); switch the campaign selector to the main
+   campaign and back, vault from the mod stash and its component
+   storage too. Load time now includes `gdx3` and the two mods (14 s
+   over SMB in the headless check). Fast-forward `main` through both
+   branches once accepted.
+2. **Mod support, phase 3:** show each campaign's blueprints
+   (`formulas.gst`, plaintext key-value) and illusions
+   (`transmutes.gst`, already parsed); refine the default campaign
+   from `playmenu.cpn` (it names the last character *and* mod
+   selected, format unspecified) or remember the last selection in
+   settings if the newest-stash rule ever picks wrong.
 3. **M4 follow-ups:** equipment slots as drag ends (unequip to a
    sack / the store, equip from one — needs the slot-to-class rule);
    further block-1 / block-2 edits (level, attributes, skill points)
@@ -150,6 +159,26 @@ none`.
    wrap-up routine's PR steps stay inert until then.
 
 ## Most recent meaningful progress
+
+- **2026-09-06 — Campaign selector (branch `feat/mod-characters`, not
+  merged).** Core: `campaign::{Campaign, ModName}` — `Main` or
+  `Mod(name)`, folder `save/` or `save/<Mod>/`, wire name `""` or the
+  name, serialized `"main"` / the name — carried by
+  `ItemOrigin::{TransferStash, ReagentStorage}` (default main for
+  older origins) and taken by `vault_from_stash` /
+  `vault_from_reagents`. GUI: `SaveDir::campaigns()` lists the main
+  campaign plus every folder with a `transfer.gst`; the loader opens
+  the campaign whose stash was written last and cross-checks each
+  file's `mod_name` against its folder (a mismatch is a toast, not a
+  refusal); a ComboBox beside the stash heading switches — unsaved
+  edits flushed first, the guard re-pointed, backup re-armed. CLI:
+  `--mod NAME`. 305 tests. Why: the user plays LootAscension, whose
+  stash and component storage the app never showed; the character
+  file cannot name its mod, so a selector with a newest-file default
+  is the honest design. Risk: the switch path itself is shell glue
+  without a test; the newest-stash rule follows the game's last
+  write, which is right after play but wrong if the user edits the
+  other campaign's files by hand in between.
 
 - **2026-09-06 — Mod databases and `gdx3` as game-data layers
   (branch `feat/mod-characters`, not merged).** Core:
