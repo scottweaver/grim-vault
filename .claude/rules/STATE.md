@@ -5,10 +5,10 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-06 (wrap-up: M4 characters editable, M5 mod
-characters, mod + gdx3 game-data layers, and the campaign selector
-landed on `main` at `a224d9c` by local fast-forward; the in-game
-acceptance run is still pending)
+Last updated: 2026-09-06 (GD Stash sanctioned as an eyes-only
+reference and its findings recorded; the user's FEATURES.md queue
+folded into Next up; parallel feature tracks opening from `main`;
+the in-game acceptance run is still pending)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
@@ -21,6 +21,36 @@ The **user's acceptance run** (next-up item 1) is still open: nothing
 the app writes has been read by the game yet, though the user ran the
 app this session and saw the external-change reload work.
 
+- **GD Stash is an eyes-only reference (user, 2026-09-06):** the
+  user's copy at `/Volumes/scott-games/GDStash_v190a` decompiles
+  cleanly — `cfr-decompiler GDStash.jar --outputdir <scratchpad>`
+  (`brew install cfr-decompiler`, already done on this machine) —
+  and the jar embeds the author's plain-text format notes. Read it
+  for format facts, verify them against real files, never transcribe
+  code or its data tables, never let decompiled output into the repo
+  (ARCHITECTURE "Parser provenance"). Everything it has told us so
+  far is in `docs/format-references.md` "GD Stash (eyes-only)
+  findings": the `.gds` export layout (verified on the user's own
+  export), the illusion slot ids (corroborated), names for the
+  `player.gdc` fields the typing pass left unnamed, the equipment
+  slot order, and where the level / respec numbers come from
+  (`records/creatures/pc/playerlevels.dbr`).
+- **The user's feature queue is `FEATURES.md`** in the repo root
+  (untracked, user-authored 2026-09-06): blueprints (per campaign;
+  show, add, export), illusions (per campaign; show, export), `.gds`
+  import (samples in the save root: `gd-stash-export.gds`, 3,205
+  items, and `reagent-export.gds`, 589 entries — GD Stash exports of
+  the user's collection), gold (done: the iron-bits field), attribute
+  respec and mastery respec ("simple reset" is enough for both). The
+  user asked for these to be built in parallel; GD Stash implements
+  every one, so each track starts by reading the matching decompiled
+  class (eyes-only).
+- **Gap found 2026-09-06:** the shared files come in an
+  expansion-level family — `.gst` / `.gsh` (softcore / hardcore),
+  `.dst` / `.dsh` (Forgotten Gods level), `.cst`, `.bst` … — and the
+  user's save root holds `transfer.dst`, `formulas.dst`,
+  `transmutes.dst` beside the `.gst` set. The app opens only `.gst`;
+  whether the `.dst` set is live for any character is unknown.
 - **Save location (user, 2026-09-06):** Steam Cloud is *disabled* for
   Grim Dawn because cloud sync fights local save editing; with it
   disabled the saves live in the local layout, here
@@ -111,7 +141,10 @@ tests, clippy pedantic clean. Verified on scratch copies of the
 user's install and saves. **Not yet verified: the game reading any
 file this app wrote** — the next step is the user's acceptance run
 on the real install with the game closed; the user chose to land on
-`main` before it so parallel tracks share a base. grim-vault is the Grim
+`main` before it so parallel tracks share a base. The user's
+`FEATURES.md` (2026-09-06) queues blueprints, illusions, `.gds`
+import, and the two respecs as those tracks; GD Stash is an eyes-only
+reference for all of them. grim-vault is the Grim
 Dawn sibling of tq-univault; PROJECT.md is bound with `tracker:
 none`.
 
@@ -119,7 +152,8 @@ none`.
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at `a224d9c` — rules layer, read stack, vault loop, GUI shell, typed `player.gdc`, reagent storage, settings fallback, M4 character editing, M5 mod characters, mod + gdx3 game-data layers, campaign selector; 305 tests green; no remote and no GitHub repo yet |
+| `main` | trunk | `a224d9c` plus the GD Stash docs commit — rules layer, read stack, vault loop, GUI shell, typed `player.gdc`, reagent storage, settings fallback, M4 character editing, M5 mod characters, mod + gdx3 game-data layers, campaign selector; 305 tests green; no remote and no GitHub repo yet |
+| `docs/gdstash-reference` | GD Stash reference + FEATURES.md queue in the rules docs | docs only, fast-forwarded into `main` on landing; safe to delete |
 
 ## Next up
 
@@ -135,28 +169,63 @@ none`.
    storage too. Load time now includes `gdx3` and the two mods (14 s
    over SMB in the headless check). Everything is already on `main`
    (user decision 2026-09-06); this run is what makes it trusted.
-2. **Mod support, phase 3:** show each campaign's blueprints
-   (`formulas.gst`, plaintext key-value) and illusions
-   (`transmutes.gst`, already parsed); refine the default campaign
-   from `playmenu.cpn` (it names the last character *and* mod
-   selected, format unspecified) or remember the last selection in
-   settings if the newest-stash rule ever picks wrong.
-3. **M4 follow-ups:** equipment slots as drag ends (unequip to a
-   sack / the store, equip from one — needs the slot-to-class rule);
-   further block-1 / block-2 edits (level, attributes, skill points)
-   through the same `CharacterDoc` path; a fresh seed on copy as an
-   option.
-4. **Game-data cache** under the config dir (names, rarity, class,
+2. **Blueprints and illusions per campaign** (FEATURES.md 1–2):
+   parse `formulas.gst` through the engine's key/value reader, show
+   each campaign's known blueprints and per-slot illusions with names
+   and icons, add a blueprint from the database's blueprint records,
+   export / import both lists as self-describing JSON (the
+   copy-between-campaigns case). Writing `formulas.gst` /
+   `transmutes.gst` moves them to ARCHITECTURE's writable list in the
+   same PR, behind backup-first. Reference (eyes-only): GD Stash
+   `GDFormulaList`, `GDTransmute`.
+3. **`.gds` import** (FEATURES.md 3): a pure `gds` parser in core
+   (layout in `docs/format-references.md`), import into the store
+   under a new `ItemOrigin` that keeps the file, the hardcore flag and
+   the soulbound owner, exact duplicates skipped; a picker in the
+   store pane. Resolves ARCHITECTURE's interchange TBD in the same PR
+   (read-only import; the store stays the authority).
+4. **Respecs** (FEATURES.md 5–6): attribute reset (points back to
+   block 2's unspent; physique / cunning / spirit to their bases from
+   `playerlevels.dbr`) and full mastery reset (both masteries' skills
+   out of block 8, their levels refunded, masteries allowed back to
+   none) through the `CharacterDoc` path. Reference (eyes-only):
+   `GDCharBio`, `GDCharSkillList.refundMastery`, `DBEnginePlayer`.
+5. **Stash file family:** decide how the `.dst` / `.gsh` twins are
+   shown (further campaigns? a mode selector?) — design dialog first.
+6. **M4 follow-ups:** equipment slots as drag ends (slot order and
+   the `ItemSlots` rule are recorded now); level / XP edits need an
+   evaluator for `experienceLevelEquation`; a fresh seed on copy.
+7. **Game-data cache** under the config dir (names, rarity, class,
    footprint, icon RGBA per referenced record), stamp-keyed to the
    archives, so launches over the network mount stop re-reading
    ~870 MB.
-5. Deferred: extract the `univault-*` crates to their own repo and
+8. Deferred: extract the `univault-*` crates to their own repo and
    re-point tq-univault (R1–R5 done on the vendored copies).
-6. Create the GitHub repo (`scottweaver/grim-vault`, PROJECT.md's
+9. Create the GitHub repo (`scottweaver/grim-vault`, PROJECT.md's
    commented `github:` block is pre-filled) and push when ready; the
    wrap-up routine's PR steps stay inert until then.
+10. **Mod support leftovers:** refine the default campaign from
+    `playmenu.cpn` (GD Stash does not read it either) or remember the
+    last selection in settings if the newest-stash rule picks wrong.
 
 ## Most recent meaningful progress
+
+- **2026-09-06 — GD Stash sanctioned as an eyes-only reference
+  (branch `docs/gdstash-reference`, docs only).** The user asked to
+  use `/Volumes/scott-games/GDStash_v190a` to accelerate the work;
+  the jar decompiles cleanly with CFR and ships its author's format
+  notes. ARCHITECTURE "Parser provenance" records the rule (facts
+  only, verified against real files, nothing transcribed, decompiled
+  output never in the repo) and `docs/format-references.md` the
+  findings: the `.gds` layout verified on the user's export, the
+  illusion slot ids corroborated, names for every `player.gdc` field
+  the typing pass left unnamed, the equipment slot order, the
+  `playerlevels.dbr` sources for level and respec math, and the
+  `.dst` / `.gsh` stash family the app does not open. Why: the
+  user's FEATURES.md queue is exactly what GD Stash implements.
+  Risk: a license-unknown reference — the eyes-only rule is what
+  keeps the codebase clean, and every fact still needs its real-file
+  check before code depends on it.
 
 - **2026-09-06 — Landed on `main` (local fast-forward to `a224d9c`).**
   `feat/character-editing` (M4) and `feat/mod-characters` (M5 mod
@@ -314,23 +383,6 @@ none`.
   `transfer.gst` — byte-identity after a round trip is strong but not
   the same as an in-game read; first real use must be with the game
   closed and a backup in hand (the app takes one automatically).
-
-- **2026-09-03 — M1 read stack (branch `feat/gd-read-stack`, not
-  merged).** Workspace scaffolded; four crates built in parallel:
-  engine (82 tests; ARZ/ARC one parser each behind `Codec` +
-  `ArzDialect`; found ARZ records are never stored raw and GD
-  `TEX\x02` has no pad byte), io (15; backup-suffix policy +
-  post-write re-read), ui (21; art-free, one slicer), core (37;
-  cipher order XOR-then-update verified on real saves, lossless
-  blocks, `gamedata` layered facade with relic/transmuter bitmap
-  fallbacks). `smoke` example: 3 characters + transfer stash, every
-  item named with rarity and footprint, every round-trip
-  byte-identical. Why: the user chose a usable GD tool over migrating
-  tq-univault; this is the foundation every later milestone reads
-  through. Risk: opaque blocks cannot be re-keyed (ARCHITECTURE "Data
-  flow") — a write to `player.gdc` before blocks 5–17 are typed would
-  corrupt the file silently in-game; `encode` refuses, and that
-  refusal must survive the GUI work.
 
 ## Blocked / waiting
 

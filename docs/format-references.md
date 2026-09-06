@@ -39,8 +39,20 @@ first parser PR merges.
   not checked) and
   [AaronHutchinson/Grim-Dawn-Save-Decryption](https://github.com/AaronHutchinson/Grim-Dawn-Save-Decryption)
   (C++, license not checked) as cross-checks of the cipher.
-- **GD Stash** (mamba, Java) is closed source with no published
-  license. Nothing to read.
+- **GD Stash** (mamba, Java, closed source, no published license) —
+  **eyes-only** since 2026-09-06 (user decision; ARCHITECTURE.md
+  "Parser provenance"). The user's copy is
+  `/Volumes/scott-games/GDStash_v190a` (v1.90a; `GDStash.jar`, 656
+  unobfuscated classes under `org.gdstash`). It decompiles cleanly
+  with CFR (`brew install cfr-decompiler`, binary `cfr-decompiler
+  GDStash.jar --outputdir <scratchpad>`) — decompile into the
+  session scratchpad only, never into this repository — and the jar
+  embeds the author's own notes as plain text (`_info.txt` …
+  `_info5_gameengine.txt`, `info5_dmgtypes.txt`,
+  `org/gdstash/file/GDByteBuffer.txt`) plus HTML user docs under
+  `doc/`. Read it for format facts, verify them against real files,
+  never transcribe code or its hard-coded data tables. What it has
+  told us so far is under "GD Stash (eyes-only) findings" below.
 - **Cross-game prior art:** tq-univault's own parsers (MIT OR
   Apache-2.0, same author) and their TQVaultAE lineage; see
   tq-univault `docs/format-references.md`.
@@ -290,6 +302,143 @@ export format carries the same fields
 - `bitmap` record values carry an `items/` prefix naming the archive;
   Items.arc entry names omit it.
 
+## GD Stash (eyes-only) findings — 2026-09-06
+
+Facts read from the decompiled v1.90a sources and cross-checked
+against the user's files where a file exists. Class names are given
+so the next reader can find the spot; nothing below is a transcription.
+
+- **Package map:** `org.gdstash.file` — ARC/ARZ/DDS/TEX readers and
+  `GDReader` / `GDWriter` (the rolling-XOR codec; same scheme as
+  ours). `org.gdstash.character` — one class per `player.gdc` block:
+  `GDCharHeader`, `GDCharBio` (2), `GDCharInventory` +
+  `GDCharEquippedContainer` + `GDCharInventorySack` (3),
+  `GDCharStash` (4), `GDCharRespawnList` (5), `GDCharTeleportList`
+  (6), `GDCharMarkerList` (7), `GDCharSkillList` / `GDCharSkill` (8),
+  `GDCharCrucible` (10), `GDCharNoteList` (12), `GDCharFactionList`
+  (13), `GDCharUISettings` (14), `GDCharTutorialList` (15),
+  `GDCharStats` (16), `GDCharShrineList` (17). `org.gdstash.item` —
+  `GDStash` / `GDStashPage` (block 18), `GDTransmute` /
+  `GDTransmuteType` (19), `GDReagent` / `GDReagentItem` (20),
+  `GDItem`, `GDRandomUniform`. `org.gdstash.formula` —
+  `formulas.gst`. `org.gdstash.quest` — the per-character quest
+  files. `org.gdstash.db` — its Derby mirror of the record database
+  (`DBItem`, `DBAffix`, `DBEnginePlayer`, `DBEngineLevel`,
+  `DBSkillTree`, `ItemClass`, `ItemSlots`, `DBStashItem` with the
+  `.gds` / `.ias` readers). `org.gdstash.description` — item stat
+  text composition. It does **not** read `playmenu.cpn`.
+- **Stash file family.** Every shared file exists per expansion
+  level and per mode, distinguished by suffix: `transfer.gst` /
+  `.gsh` (softcore / hardcore, all expansions; UI labels "Softcore
+  (.gst)", "Hardcore (.gsh)"), `.dst` / `.dsh` ("SC FG", Forgotten
+  Gods level), `.cst` / `.csh` ("SC AoM"), `.bst` / `.bsh` ("SC
+  Vanilla"); `formulas.*`, `transmutes.*`, `reagents.*` take the
+  same suffixes, and the game's rotation follows (`.t00` for `.gst`,
+  `.h00` for `.gsh`, `.dt` / `.dh`, `.ct` / `.ch`, `.bt` / `.bh`).
+  Confirmed on disk 2026-09-06: the user's save root holds
+  `transfer.dst`, `formulas.dst`, `transmutes.dst` beside the `.gst`
+  set. **This app opens only the `.gst` files today.** The header's
+  `expansionStatus` byte is read as 1 = Ashes of Malmouth, 3 =
+  Forgotten Gods, 7 = Fangs of Asterkarn (by the look of it a mask:
+  bit 0 AoM, bit 1 FG, bit 2 FoA); on block 18 only `== 1` is tested.
+- **Block 19 (`transmutes.gst`) slot ids — now corroborated:** 1
+  head, 3 torso, 4 legs, 5 feet, 7 hands, 8 off-hand (foci *and*
+  shields), 9 weapon (every weapon class, one- and two-handed), 14
+  shoulders, 15 medal — `GDTransmute` constants, and
+  `ItemClass.getTransmuteType` maps a record's `Class` onto them.
+  Matches the nine ids observed in the user's file exactly. Its
+  "add all illusions" treats two items as the same illusion when
+  mesh, base / bump / glow texture, and shader all match, and skips
+  enemy-only items and `medal_visible.msh`. It writes the file with
+  the version and `expansionStatus` it read.
+- **`formulas.gst`:** read and written by `GDFormulaList` in the
+  plaintext `begin_block` / `end_block` shape recorded above
+  (`formulasVersion` 3, `numEntries`, `expansionStatus`, then
+  `itemName` + `formulaRead` per entry). "Enable all blueprints"
+  appends every blueprint record not already listed with
+  `formulaRead = 1`.
+- **`reagents.gst`:** block 20 v1, `(record, count)` entries, as
+  ours. Entries it cannot resolve are carried through unchanged
+  (`removedItems`); it does not settle whether the game keeps a
+  zero-count entry.
+- **`player.gdc` names for fields we left unnamed** (bytes
+  identical; only the labels differ):
+  - Block 8 skills, v7+: `name, level, enabled, locked,
+    devotionLevel, experience, subLevel (u32), active (byte),
+    transition (byte), autoCastSkill, autoCastController` — so our
+    `unknown_u8_v8` is its `locked`, our "active" word its
+    `subLevel`, our two trailing bytes its `active` / `transition`.
+    (v ≤ 6: `name, level, enabled, devotionLevel, experience,
+    active (u32), locked, transition, autoCast pair`.)
+  - Block 16 stats, v12: it reads the two v7+ trailing words first
+    (`unknown1`, `unknown2`) and then `ascendantBossMonstersKilled`,
+    `hiddenChestsOpened`; ours reads the v12 pair first, then the
+    trailing pair. Same four words — which pair is the new one is
+    still open (the fixture's `28` sits in its `unknown1` and our
+    `unknown_u32_v12_a`).
+  - Block 17 shrines: the six lists are, per difficulty *d* (0
+    normal, 1 elite, 2 ultimate), list `2d` = restored, list `2d+1`
+    = discovered. It also carries hard-coded UID → name tables for
+    shrines and rift gates (block 6); we would derive those from the
+    game's level files, not copy them.
+  - Block 13 factions: the leading word is unnamed there too
+    (`faction`); per faction `modified`, `unlocked` bytes and
+    `value`, `positiveBoost`, `negativeBoost` floats, as ours.
+  - Block 14 UI: `equipmentSelection` (byte), `skillWindowSelection`
+    (u32), `skillSettingValid` (byte), five × (`primarySkill`,
+    `secondarySkill`, `skillActive` byte), the skill sets,
+    `cameraDistance`.
+  - Block 3 equipment order: 0 head, 1 amulet, 2 chest, 3 legs, 4
+    feet, 5 hands, 6 ring left, 7 ring right, 8 belt, 9 shoulders,
+    10 medal, 11 artifact (relic); `useAlternate` byte before the
+    twelve, then `alternate1` byte + main hand / off hand, then
+    `alternate2` byte + the second pair. Item field `unknown (i32,
+    gdlc asserts 0)` between `augmentName` and `augmentSeed` is its
+    `enchantmentLevel` — the **augment level**.
+  - Slot rule for equipping: `ItemSlots` is 25 booleans per record
+    class (axe / mace / sword / dagger / scepter / spear / staff /
+    ranged, one- and two-handed; shield, off-hand; amulet, belt,
+    medal, ring; head, shoulders, chest, hands, legs, feet);
+    `ItemClass.getClassInt` enumerates the record `Class` values
+    (`ArmorProtective_Head` … `WeaponHunting_Ranged2h`,
+    `ItemArtifact`, `ItemRelic`, …).
+- **Level, XP, and respec math is data-driven** — all from
+  `records/creatures/pc/playerlevels.dbr`: `experienceLevelEquation`
+  (an expression in `playerLevel`, evaluated with exp4j; a small
+  evaluator is needed on our side), `characterModifierPoints` /
+  `skillModifierPoints` (attribute and skill points per level;
+  `DBEngineLevel` sums them over a level range), `strengthIncrement`
+  / `dexterityIncrement` / `intelligenceIncrement` / `lifeIncrement`
+  / `manaIncrement` (what one point buys; the attribute buttons
+  also move health and energy by them), `characterStrength` /
+  `characterDexterity` / `characterIntelligence` / `characterLife` /
+  `characterMana` (base values), `maxDevotionPoints`. Mastery reset
+  (`GDCharSkillList.refundMastery`): every skill of the mastery's
+  `DBSkillTree` is removed from block 8, the levels of the
+  non-granted ones summed and returned to block 2's skill points.
+- **Seeds:** `GDRandomUniform` is the Park–Miller minimal-standard
+  generator (16807, 2³¹ − 1, Schrage's split) used to mint new item
+  seeds; its own docs say the seed → stat-roll mapping is unknown to
+  it. A fresh seed on copy can be any `i32`.
+- **`.gds` (GD Stash export) — layout recorded; not yet a boundary**
+  (ARCHITECTURE.md "External boundaries" keeps interchange TBD).
+  Plain little-endian, unobfuscated: `u32 version` (v1.90a writes
+  3; 1 and 2 are read), `u32 count`, then per item — strings are
+  `u8 length + UTF-8 bytes`, 0 = absent — `itemID, prefixID,
+  suffixID, modifierID, transmuteID, i32 seed, relicID,
+  relicBonusID, i32 relicSeed, enchantmentID (augment), i32
+  enchantmentLevel, i32 enchantmentSeed, [v ≥ 2: ascendantID,
+  ascendant2hID], i32 var1 (relic completion level), i32 stackCount,
+  [v ≥ 2: i32 rerollsUsed], [v ≥ 3: i32 affixRerollsUsed], u8
+  hardcore, charname` (the soulbound owner, absent otherwise).
+  Verified 2026-09-06 against the first entries of the user's
+  `gd-stash-export.gds` (version 3, 3,205 items; first entry
+  `records/items/enchants/a07a_enchant.dbr` × 40, owner "Zark") and
+  `reagent-export.gds` (version 3, 589 entries). The `.ias` (Item
+  Assistant) reader beside it takes versions 1–7 with the same
+  string encoding, `var1` as `i16`, then `hardcore`, an expansion
+  byte, a mod name, and version-gated extras.
+
 ## Rust prior art (2026-09-03)
 
 - crates.io: nothing for Grim Dawn or Titan Quest ARZ/ARC/save.
@@ -303,7 +452,10 @@ export format carries the same fields
 
 **Verified from primary sources:** gdlc license, modules, formats,
 and decoder; lib-gddb GPL-3.0 and ARZ/ARC-only scope; marius00/iagd
-MIT and the absence of a C# save decoder; GD Stash closed source; GD
+MIT and the absence of a C# save decoder; GD Stash closed source
+(its jar and docs carry no license text; decompiles cleanly, read
+eyes-only); block 19's slot ids (GD Stash's constants agree with the
+nine observed); GD
 ARZ/ARC header and entry layouts, LZ4-block compression, the extra
 decompressed-size field; TQ zlib + 2-byte ARC skip; the full XOR
 scheme and block/checksum semantics; GD item field order including
@@ -313,8 +465,11 @@ the v8/v11 additions; no relevant crates.io crates.
 padding (preserved verbatim either way); whether block 20's zero word
 is a mod name or a bare `u32` (identical bytes on the base game; only
 a mod's `reagents.gst` would tell); whether the game writes a
-zero-count entry or drops it (this app drops it); block 19's slot-id
-mapping; whether IAGD ever shipped
+zero-count entry or drops it (this app drops it; GD Stash does not
+say); which of block 16's two word pairs is the v12 addition (GD
+Stash and this crate name them the other way round); the shrine
+lists' restored / discovered split (GD Stash's reading, not yet seen
+in-game); whether IAGD ever shipped
 `GDCryptoDataBuffer.cs` itself (inferred from GDParser's derived
 file); GD Stash's Nexus/ModDB permission text (HTTP 403); whether the "multiple count
 groups" string-table loop in gdlc/lib-gddb reflects real files or

@@ -265,10 +265,19 @@ Q&A). Items marked TBD are open questions, not decisions.
   [gregates/lib-gddb](https://github.com/gregates/lib-gddb) is GPL —
   eyes-only, never transcribed. GD Item Assistant
   (`marius00/iagd`, MIT) is a sanctioned secondary reference for
-  ARZ, ARC, and `.tex` and contains no save decoder; GD Stash is
-  closed source with no published license, so there is nothing to
-  read. The reference map is `docs/format-references.md` (written
-  2026-09-03). gdlc covers the save/stash encoding end to end,
+  ARZ, ARC, and `.tex` and contains no save decoder. **GD Stash**
+  (mamba, Java, closed source, no published license) is an
+  **eyes-only** reference (user decision 2026-09-06): the user's
+  copy at `/Volumes/scott-games/GDStash_v190a` decompiles cleanly
+  (CFR, `brew install cfr-decompiler`) into the session scratchpad,
+  and the jar ships its author's format notes as plain text. It is
+  read for **format facts** — field order, block ids, enum values,
+  which game record a number comes from — each verified against
+  real files before use; no line of its code and none of its
+  hard-coded data tables (shrine and rift-gate UIDs, tag-to-text
+  maps) is transcribed, and decompiled output never enters this
+  repository. The reference map is `docs/format-references.md`
+  (written 2026-09-03). gdlc covers the save/stash encoding end to end,
   corroborated by three independent implementations (resolved
   2026-09-03, engine-extraction survey).
 - The project is dual-licensed MIT OR Apache-2.0. (2026-09-03)
