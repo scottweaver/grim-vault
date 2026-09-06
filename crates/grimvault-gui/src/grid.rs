@@ -33,6 +33,16 @@ fn span(n: i32, cell: f32) -> f32 {
     n as f32 * cell
 }
 
+/// The footprint at the game's native cell size, as the tooltip shows
+/// an item.
+#[must_use]
+pub fn native_size(footprint: Footprint) -> Vec2 {
+    vec2(
+        span(footprint.width, CELL_PX),
+        span(footprint.height, CELL_PX),
+    )
+}
+
 impl GridGeometry {
     /// The largest cell in `MIN_CELL_PX..=CELL_PX` that fits the grid
     /// into `available`, floored to whole points so cell edges stay
@@ -71,6 +81,12 @@ impl GridGeometry {
     }
 
     /// The screen rectangle of a run of cells.
+    /// Points per cell.
+    #[must_use]
+    pub fn cell(&self) -> f32 {
+        self.cell
+    }
+
     #[must_use]
     pub fn cell_rect(&self, cells: CellRect) -> Rect {
         Rect::from_min_size(

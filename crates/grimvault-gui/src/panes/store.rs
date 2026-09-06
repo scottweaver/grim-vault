@@ -240,6 +240,7 @@ fn store_tile(
             footprint: footprint_source,
             stack: item.stack_count,
             icon: &icon,
+            cell: icon_cell(footprint.width, footprint.height),
             badge: symbol
                 .zip(badge_icon.as_ref())
                 .map(|(symbol, icon)| Badge { symbol, icon }),
@@ -301,12 +302,18 @@ fn store_tile(
 /// The icon area, keeping the footprint's aspect inside a square box.
 fn icon_box(tile: Rect, width: i32, height: i32) -> Rect {
     let (w, h) = (cells(width.max(1)), cells(height.max(1)));
-    let scale = ICON_BOX / w.max(h);
+    let scale = icon_cell(width, height);
     let size = vec2(w * scale, h * scale);
     Rect::from_center_size(
         pos2(tile.center().x, tile.min.y + 4.0 + ICON_BOX / 2.0),
         size,
     )
+}
+
+/// Points per footprint cell inside the icon box: the longer side of
+/// the footprint fills the box.
+fn icon_cell(width: i32, height: i32) -> f32 {
+    ICON_BOX / cells(width.max(height).max(1))
 }
 
 #[expect(

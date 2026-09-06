@@ -208,6 +208,7 @@ fn reagent_row(
             footprint: footprint_source,
             stack: 1,
             icon: &icon,
+            cell: icon_rect.width(),
             badge: None,
             hovered,
             lifted,

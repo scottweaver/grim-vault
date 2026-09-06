@@ -85,8 +85,8 @@ pub struct Badge<'a> {
 
 /// Paints the badge in the tile's top-left corner: the game's texture
 /// when it loaded, else a small diamond in the symbol's colour.
-pub fn paint_badge(painter: &Painter, tile: Rect, badge: &Badge<'_>, palette: &Palette) {
-    let rect = badge_rect(tile);
+pub fn paint_badge(painter: &Painter, tile: Rect, cell: f32, badge: &Badge<'_>, palette: &Palette) {
+    let rect = badge_rect(tile, cell);
     match badge.icon {
         Icon::Texture(texture) => {
             painter.image(
@@ -106,12 +106,23 @@ pub fn paint_badge(painter: &Painter, tile: Rect, badge: &Badge<'_>, palette: &P
     }
 }
 
-/// Where the badge sits: the top-left corner, half the tile's shorter
-/// side and never smaller than a legible dot nor larger than the
-/// texture's native 32 px.
+/// The badge's side as a fraction of one grid cell. The game's symbol
+/// is a 32 px texture whose glyph fills it edge to edge (measured
+/// 2..=29 of 32 on every symbol), so drawing it a full cell would hide
+/// a one-cell item; a little over half a cell keeps it legible on a
+/// ring and still reads on a three-cell weapon.
+const BADGE_PER_CELL: f32 = 0.625;
+/// Smallest badge still recognisable, for panes that shrink cells.
+const BADGE_MIN: f32 = 14.0;
+/// The texture's native size; never upscaled past it.
+const BADGE_MAX: f32 = 32.0;
+
+/// Where the badge sits: the tile's top-left corner, sized from the
+/// pane's cell (`cell` points per footprint cell) rather than from the
+/// item, so a thin weapon and a square chest piece carry the same mark.
 #[must_use]
-pub fn badge_rect(tile: Rect) -> Rect {
-    let size = (tile.width().min(tile.height()) * 0.5).clamp(10.0, 32.0);
+pub fn badge_rect(tile: Rect, cell: f32) -> Rect {
+    let size = (cell * BADGE_PER_CELL).clamp(BADGE_MIN, BADGE_MAX);
     Rect::from_min_size(tile.left_top() + vec2(1.0, 1.0), vec2(size, size))
 }
 
@@ -153,16 +164,16 @@ mod tests {
     use crate::theme::palette;
 
     #[test]
-    fn the_badge_scales_with_the_tile_between_legible_and_native() {
-        let cell = Rect::from_min_size(pos2(10.0, 10.0), vec2(32.0, 32.0));
-        assert_eq!(badge_rect(cell).size(), vec2(16.0, 16.0));
-        assert_eq!(badge_rect(cell).min, pos2(11.0, 11.0));
-        let tall = Rect::from_min_size(Pos2::ZERO, vec2(32.0, 96.0));
-        assert_eq!(badge_rect(tall).size(), vec2(16.0, 16.0));
-        let tiny = Rect::from_min_size(Pos2::ZERO, vec2(12.0, 12.0));
-        assert_eq!(badge_rect(tiny).size(), vec2(10.0, 10.0));
-        let huge = Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0));
-        assert_eq!(badge_rect(huge).size(), vec2(32.0, 32.0));
+    fn the_badge_scales_with_the_cell_not_the_item() {
+        let ring = Rect::from_min_size(pos2(10.0, 10.0), vec2(32.0, 32.0));
+        assert_eq!(badge_rect(ring, 32.0).size(), vec2(20.0, 20.0));
+        assert_eq!(badge_rect(ring, 32.0).min, pos2(11.0, 11.0));
+        let weapon = Rect::from_min_size(Pos2::ZERO, vec2(32.0, 96.0));
+        assert_eq!(badge_rect(weapon, 32.0).size(), vec2(20.0, 20.0));
+        let shrunk = Rect::from_min_size(Pos2::ZERO, vec2(20.0, 20.0));
+        assert_eq!(badge_rect(shrunk, 20.0).size(), vec2(14.0, 14.0));
+        let zoomed = Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0));
+        assert_eq!(badge_rect(zoomed, 200.0).size(), vec2(32.0, 32.0));
     }
 
     #[test]

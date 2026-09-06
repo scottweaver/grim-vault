@@ -31,7 +31,9 @@ use crate::badges::{Badge, paint_badge};
 use crate::documents::CharacterSlot;
 use crate::drag::{self, Container, DragSource, DragState, DropTarget, Fit, Mode};
 use crate::facts::FactsCache;
-use crate::grid::{FootprintSource, GridGeometry, cells_of, footprint_or_unit, occupant_at};
+use crate::grid::{
+    CELL_PX, FootprintSource, GridGeometry, cells_of, footprint_or_unit, native_size, occupant_at,
+};
 use crate::icons::{Icon, IconCache};
 use crate::theme::{BLOCKED, FITS, UNKNOWN_RARITY, rarity_color};
 
@@ -220,6 +222,7 @@ pub fn grid_surface(
             tile,
             entry.item,
             entry.footprint,
+            geometry.cell(),
             hovered == Some(slot) && !dragging,
             lifted,
             cx,
@@ -411,6 +414,7 @@ pub fn paint_item(
     rect: Rect,
     item: &Item,
     footprint: FootprintSource,
+    cell: f32,
     hovered: bool,
     lifted: bool,
     cx: &mut PaneCtx<'_>,
@@ -431,6 +435,7 @@ pub fn paint_item(
             footprint,
             stack: item.stack_count,
             icon: &icon,
+            cell,
             badge: symbol
                 .zip(badge_icon.as_ref())
                 .map(|(symbol, icon)| Badge { symbol, icon }),
@@ -448,6 +453,9 @@ pub struct TileLook<'a> {
     pub footprint: FootprintSource,
     pub stack: u32,
     pub icon: &'a Icon,
+    /// Points per footprint cell in the pane painting the tile; the
+    /// badge is sized from it.
+    pub cell: f32,
     /// The game's tile symbol, when the item's facets earn one.
     pub badge: Option<Badge<'a>>,
     pub hovered: bool,
@@ -479,7 +487,7 @@ pub fn paint_tile(painter: &Painter, rect: Rect, look: &TileLook<'_>, palette: &
     };
     painter.rect_stroke(rect, CornerRadius::same(2), stroke, StrokeKind::Inside);
     if let Some(badge) = &look.badge {
-        paint_badge(painter, rect, badge, palette);
+        paint_badge(painter, rect, look.cell, badge, palette);
     }
     if look.footprint == FootprintSource::Assumed {
         painter.text(
@@ -523,12 +531,36 @@ pub fn paint_fit_preview(painter: &Painter, preview: Rect, fit: Fit) {
     );
 }
 
-/// Item details on hover: name in its rarity colour, the facets the
-/// game would mark, then rarity, class, level gate and stack, the stat
+/// Item details on hover: the item's tile at the game's native size
+/// with its symbol, the name in its rarity colour, the facets the game
+/// would mark, then rarity, class, level gate and stack, the stat
 /// blocks with the set and the requirements, then the base record in a
 /// muted monospace.
 pub fn item_tooltip(ui: &mut Ui, cx: &mut PaneCtx<'_>, item: &Item) {
     let facts = cx.facts.facts(cx.game, item);
+    let (footprint, footprint_source) = footprint_or_unit(facts.base.footprint);
+    let symbol = facts.facets.symbol();
+    let icon = cx.icons.icon(ui.ctx(), cx.game, facts.base.bitmap.as_ref());
+    let badge_icon = symbol.map(|symbol| cx.icons.symbol(ui.ctx(), symbol));
+    let (response, painter) = ui.allocate_painter(native_size(footprint), Sense::hover());
+    paint_tile(
+        &painter,
+        response.rect,
+        &TileLook {
+            rarity: facts.base.rarity,
+            initials: &facts.initials(),
+            footprint: footprint_source,
+            stack: item.stack_count,
+            icon: &icon,
+            cell: CELL_PX,
+            badge: symbol
+                .zip(badge_icon.as_ref())
+                .map(|(symbol, icon)| Badge { symbol, icon }),
+            hovered: false,
+            lifted: false,
+        },
+        cx.palette,
+    );
     let colour = facts.base.rarity.map_or(UNKNOWN_RARITY, rarity_color);
     ui.label(RichText::new(facts.display_name()).color(colour).strong());
     let labels = facts.facets.labels();
@@ -561,8 +593,7 @@ pub fn item_tooltip(ui: &mut Ui, cx: &mut PaneCtx<'_>, item: &Item) {
             .size(10.5)
             .color(cx.palette.text_weak),
     );
-    let bitmap = facts.base.bitmap.clone();
-    if let Icon::Missing(problem) = cx.icons.icon(ui.ctx(), cx.game, bitmap.as_ref()) {
+    if let Icon::Missing(problem) = &icon {
         ui.label(
             RichText::new(format!("no icon: {problem}"))
                 .small()
