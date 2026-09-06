@@ -711,6 +711,233 @@ and were corrected where the saves disagreed.
   and the game clears hotbar slots itself when a skill is refunded
   in-game.
 
+## Item stat lines — 2026-09-06
+
+How a database record becomes the stat text the game shows, as
+established from the game's own `tags_ui.txt` (2,459 tags in the base
+archive, more per expansion) and a census of every variable on the
+26,244 `records/items/` records across base, `gdx1`, `gdx2`, `gdx3`
+and the two installed mods. Implemented in `grimvault-core::stats`
+(`vocabulary` = these facts; `render` = the engine-generic machinery;
+`item` = the per-item assembly). Provenance: the machinery is a port
+in shape of tq-univault's `stats` module (MIT OR Apache-2.0, same
+author; itself a port of `TQVaultAE`'s `ItemProvider`, MIT), rebuilt
+on Grim Dawn's tag grammar; the `{%…}` template parser is the vendored
+`univault_engine::format`. GD Stash (eyes-only) and IAGD (MIT) were
+read for *which attributes exist and how the game phrases them* and
+every phrase below was then found in the game's own tags; no line of
+either tool's code or text tables is transcribed.
+
+- **Tag grammar.** Every label is a `{%…}` template. Flat damage
+  labels take a pre-formatted amount as **text**: `DamageFire={%t0}
+  {^E}Fire Damage`, the amount itself coming from
+  `DamageSingleFormat={%.0f0}` or `DamageRangeFormat={%.0f0}-{%.0f1}`
+  ("12-28 Fire Damage"). Defense and character labels carry the
+  number: `DefenseFire={%.0f0}% {^E}Fire Resistance`,
+  `tagCharAttribute04={%+.0f0} {^E}Health`. Duration labels have no
+  placeholder and the amount is prepended: `DamageDurationFire=
+  {^E}Burn Damage`; a label beginning with `%` is a suffix of the
+  number (`DamageDurationRunSpeed=% {^E}Slower target Movement` →
+  "20% Slower target Movement"). Prefixes and suffixes are their own
+  tags: `tagChanceOf={%.1f0}% {^E}{Chance of {^H}`,
+  `DamageSingleFormatTime= {^E}over {^H}{%.1f0} {^E}Seconds`,
+  `DamageFixedSingleFormatTime= {^E}for {^H}{%.1f0} {^E}Seconds`,
+  `ImprovedTimeFormat= {^E}with {^H}{%+.0f0}% {^E}Increased Duration`,
+  `GlobalPercentChanceOfAllTag` / `…OneTag` ("…Chance of:" / "…Chance
+  for one of the following:"). A line is the concatenation; the text
+  archive loader trims every tag and strips the `{^X}` colour codes,
+  so the renderer re-joins pieces with single spaces and takes the
+  base/bonus distinction from the vocabulary, not from `{^S}`.
+- **The `…R` twins** (`DamageFireR={%t0}-{%t1}…`, `DefenseFireR`,
+  `tagCharAttribute01R`) are the game's *roll-range* display (the
+  possible affix roll under `lootRandomizerJitter`), not damage
+  ranges — resistances have them too. Not used.
+- **Variable grammar.** `<family stem><Part>`: parts are `Min`, `Max`,
+  `Chance`, `Global`, `XOR`, `DurationMin`, `DurationMax`,
+  `DurationChance`, `Modifier`, `ModifierChance`, `DurationModifier`,
+  `DurationModifierChance`, `MaxResist`, `DrainMin`/`DrainMax` and
+  `DamageRatio` (mana burn), and a bare stem for defense, character
+  and skill values; a defense `…Duration` is itself a value
+  ("Reduction in Burn Duration"). Matching is case-insensitive: the
+  database spells `retaliationPercentcurrentLifeGlobal`.
+- **Families and their tags** (stem → value tag / modifier tag):
+  `offensive<X>` → `Damage<X>` / `DamageModifier<X>`, with
+  `offensivePhysical` → `DamageBasePhysical` on weapons and shields
+  (white) and `DamagePhysical` ("+N Physical Damage") elsewhere,
+  `offensivePierceRatio` → `DamageBasePierceRatio`,
+  `offensiveBase<X>` → `tagDamageBase<X>` (`Life` → `…Vitality`; the
+  white base damage of caster weapons and shields),
+  `offensiveBonusPhysical` → `DamageBonusPhysical`, `offensiveManaBurn`
+  → `DamageManaDrain` + `DamageManaBurnRatio`, `offensiveTotalDamage`
+  / `offensiveCritDamage` / `offensiveDamageMult` modifier-only →
+  `tagDamageModifierTotalDamage` / `…CritDamage` / `…DamageMult`,
+  `offensiveSleep` → `tagDamageSleep`, `offensiveFumble` /
+  `offensiveProjectileFumble` → `DamageDurationFumble` /
+  `…ProjectileFumble`. `offensiveSlow<X>` (duration damage) →
+  `DamageDuration<X>` / `DamageDurationModifier<X>`. `retaliation<X>`
+  → `Retaliation<X>` / `RetaliationModifier<X>` (`retaliationTotalDamage`
+  → `tagRetaliationModifierTotalDamage`); `retaliationSlow<X>` →
+  `RetaliationDuration<X>` / `RetaliationDurationModifier<X>`.
+  `defensive<X>` → `Defense<X>`, `Defense<X>Modifier`,
+  `Defense<X>Duration`, `Defense<X>DurationModifier`,
+  `Defense<X>MaxResist`, with `defensiveProtection` →
+  `DefenseAbsorptionProtection` ("520 Armor", white on armor) or
+  `DefenseAbsorptionProtectionPlus` elsewhere and for
+  `defensiveBonusProtection`, `defensiveSlowLifeLeach` /
+  `…ManaLeach` → `DefenseLifeLeach` / `DefenseManaLeach`,
+  `defensiveTotalSpeedResistance` → `tagTotalSpeedResistance`,
+  `defensiveSleep` → `tagDefenseSleep`, `defensiveBlock` →
+  `DefenseBlock` plus a "N% Chance to Block" line from
+  `defensiveBlockChance` and `tagCharStatsBlockChance`,
+  `blockRecoveryTime` → `ShieldBlockRecoveryTime`. `character<X>` →
+  `tagChar<X>` / `tagChar<X>Modifier`, except the five attributes,
+  which the game names by character-sheet slot:
+  `characterDexterity` → `tagCharAttribute01` (Cunning),
+  `characterStrength` → `02` (Physique), `characterIntelligence` →
+  `03` (Spirit), `characterLife` → `04` (Health), `characterMana` →
+  `05` (Energy); also `characterDeflectProjectile` →
+  `tagCharDeflectProjectiles`, `characterGlobalReqReduction` →
+  `tagCharItemGlobalReduction`, `characterHealIncreasePercent` →
+  `tagCharPercentHealIncreaseModifier`. Skill stats on items and skill
+  records: `skillCooldownReduction`, `skillManaCostReduction`,
+  `skillProjectileSpeedModifier`, `SkillLifeBonus`, `SkillLifePercent`
+  … carry their own numbers; `skillManaCost`, `skillActiveManaCost`,
+  `skillActiveLifeCost` wrap a noun (`ManaCost`, `ActiveManaCost`,
+  `ActiveLifeCost`) in `SkillIntFormat={%d0 %s1}`; `skillCooldownTime`
+  / `skillActiveDuration` in `SkillSecondFormat` ("2.0 Second Skill
+  Recharge"); `skillTargetRadius` / `projectileExplosionRadius` in
+  `SkillDistanceFormat` ("4.0 Meter Target Area");
+  `projectileLaunchNumber`, `projectilePiercingChance` (also
+  `piercingProjectile`, `projectilePiercing`), `skillTargetNumber`,
+  `skillChanceWeight`, `weaponDamagePct` (`SkillWeaponDamageFormat`),
+  `petLimit`, `petBurstSpawn`, `spawnObjectsTimeToLive`,
+  `damageAbsorption(Percent)`, `cooldownCharges`, `lifeMonitorPercent`
+  have direct tags; `onHitActivationChance` prefixes
+  `SkillActivationChance`.
+- **Durations.** The duration-damage families whose amount is a total
+  over the duration (record value × `DurationMin`, "over N Seconds"):
+  Bleeding, Fire (Burn), Cold (Frostburn), Lightning (Electrocute),
+  Physical (Internal Trauma), Poison, Life (Vitality Decay),
+  LifeLeach, ManaLeach. The rest last "for N Seconds" at face value:
+  the `Slow{Total,Attack,Run,SpellCast}Speed`,
+  `Slow{Offensive,Defensive}{Ability,Reduction}` effects, the
+  `offensive…Reduction…` resistance and damage reductions, and the
+  fumbles. The influence effects (Stun, Freeze, Petrify, Trap,
+  Confusion, Convert, Fear, Sleep, Disruption, Knockdown, Taunt) have
+  their duration in `Min` and their label takes it as text
+  (`DamageStun={^E}Stun target{%t0}` → "Stun target for 1.5
+  Seconds"; retaliation through `RetaliationFixedSingleFormatTime`
+  → "1.0 Seconds of Stun Retaliation").
+- **Specials.** `characterBaseAttackSpeedTag` names the weapon speed
+  tag (`tagAttackSpeedVeryFast=Speed:  Very Fast`) and is shown on
+  weapons only. `conversionInType` / `conversionOutType` /
+  `conversionPercentage` (and the `2` triple) →
+  `tagDamageConversion={%.0f0}% {^E}{%s1} converted to {%s2}` with
+  `tagConversion<Type>` names (`Life` → "Vitality Damage", `Poison`
+  → "Acid Damage"). `racialBonusRace` (`Race001`…`Race018`, one or
+  two) with `racialBonusPercentDamage` / `…PercentDefense` /
+  `…AbsoluteDamage` / `…AbsoluteDefense` → `RacialBonus…` tags with
+  the plural race name (`tagRace003P=Aetherials`), one line per race.
+  `augmentSkillName<1..5>` + `augmentSkillLevel<N>` →
+  `ItemSkillIncrement={+%d0} {^E}to {^Z}{%s1}` with the skill's
+  `skillDisplayName` (following `buffSkillName` / `petSkillName`
+  redirections); `augmentMasteryName<1..3>` → `ItemMasteryIncrement`;
+  `augmentAllLevel` → `ItemAllSkillIncrement`. `itemSkillName` →
+  `tagItemGrantSkill` ("Grants Skill:") + name + the autocast
+  condition from `itemSkillAutoController` (a controller record whose
+  `triggerType` maps to `tagAutoSkillCondition01..12`: `LowHealth`
+  01, `LowMana` 02, `HitByEnemy` 03, `HitByMelee` 04,
+  `HitByProjectile` 05, `CastBuff` 06, `AttackEnemy` 07, `OnEquip`
+  08, `HitByCrit` 09, `AttackEnemyCrit` 10, `Block` 11, `OnKill` 12,
+  with `chanceToRun` as `%d0`) then the skill's `skillBaseDescription`
+  and its own lines at the level `itemSkillLevelEq` yields (an
+  equation in `itemLevel`: `"1"`, `"2"`, `"itemLevel/4+1"` …,
+  floored, ≥ 1; skill arrays are indexed by level − 1 and capped).
+  `modifierSkillName<1..6>` + `modifiedSkillName<N>` → the modifier
+  record's lines (a `SkillSecondary_PetModifier` redirects through
+  `petSkillName`) suffixed with `tagItemSkillModified= {^E}to
+  {^Z}{%s0}`. `petBonusName` → `tagPetBonusNameAllPets` heading then
+  the record's lines. `itemText` is the flavor line.
+- **Global chance.** `offensiveGlobalChance` / `retaliationGlobalChance`
+  head the lines whose `…Global` flag is set, indented, under
+  `GlobalPercentChanceOfOneTag` when any of them carries `…XOR`, else
+  `…AllTag`; XOR members keep their own chance prefix.
+- **`attributeScalePercent`.** Present on gear, largest on two-handed
+  weapons (census by class: 2H melee 30–80, 2H ranged 22–70, 1H
+  weapons 8–45, armor and jewelry 20–40). It multiplies the values of
+  the item's **prefix and suffix** (GD Stash applies the base item's
+  percent to both affixes' stats, and the designers' 2H-weapon affix
+  premium is common knowledge); this app does **not** apply it to the
+  base record's own numbers — GD Stash does, but an item authored with
+  `+220%` physical and `+220%` internal trauma would then read
+  `+220%` / `+396%`, which no designer writes, so the base values are
+  taken as displayed. Which families scale, per GD Stash's categories
+  (eyes-only; unverified in-game): flat and percent offense other than
+  `offensivePhysical`, `offensivePierceRatio`, `offensiveLifeLeech`,
+  `offensiveCritDamage`, `offensivePercentCurrentLife`,
+  `offensiveDamageMult`, `offensiveManaBurn`, the base damages and the
+  influences; every duration-damage family; `retaliationDamagePct`;
+  `weaponDamagePct`; `damageAbsorptionPercent`. Never defenses,
+  character values, or retaliation flats. Scaled values are truncated.
+- **`lootRandomizerJitter`** (15–50 on affixes and completion
+  bonuses) is the ± roll range the game applies per item seed; the
+  seed → roll mapping is not public (GD Stash says as much), so every
+  number shown is the record's nominal value.
+- **Requirements.** `levelRequirement` is explicit on base, affix,
+  component, augment and ascendant records and the item takes the
+  maximum. `strengthRequirement` / `dexterityRequirement` /
+  `intelligenceRequirement` exist on the templates but are zero on
+  every item record; the attribute requirements come from the cost
+  formulas: the base's `itemCostName` (`records/game/itemcostformulas
+  _<rarity|slot>.dbr`, default `records/game/itemcostformulas.dbr`)
+  holds `<class><Attribute>Equation` strings in `itemLevel` and
+  `totalAttCount` — class prefixes `head`, `shoulders`, `chest`,
+  `legs`, `feet`, `hands`, `waist`, `ring`, `amulet`, `axe`, `mace`,
+  `sword`, `dagger`, `scepter`, `melee2h` (every 2H melee class),
+  `ranged1h`, `ranged2h`, `shield`, `offhand`; medals have none.
+  `totalAttCount` is one per amount, percent modifier, duration
+  modifier and max-resistance on the base, prefix and suffix, plus
+  one per racial bonus (GD Stash's count, eyes-only); the result is
+  rounded up as `TQVaultAE` does for the same engine. Rendered
+  through `MeetsRequirement=Required {%s0}: {%.0f1}` with
+  `LevelRequirement=Player Level`, `Strength=Physique`,
+  `Dexterity=Cunning`, `Intelligence=Spirit`.
+- **Sets.** `itemSetName` → a set record with `setName` (tag),
+  `setMembers` (records) and per-piece bonus arrays indexed by pieces
+  worn − 1 (`characterOffensiveAbility = [0, 0, 65, 65, 65]` on a
+  five-piece set is "+65 Offensive Ability" from three pieces); the
+  tier shown for `n` pieces is what `n` adds over `n − 1`.
+- **Components** are all single-piece today (every one of the 107
+  `ItemRelic` records has `completedRelicLevel = 1`); the partial
+  scaling GD Stash still carries for older saves is not implemented.
+- **Coverage** (the user's transfer stashes, component storage,
+  four characters' sacks, equipment and own stashes, and the imported
+  GD Stash collection of 3,205 items: 4,114 items in all): 53,775
+  lines; unknown attributes 0 distinct after the vocabulary was
+  extended from the first run's 58 (every one a non-stat bookkeeping
+  variable — blueprint reagent quantities, quest UIDs, physics and
+  animation parameters); no missing tags; one missing record — an
+  imported item whose suffix the export spells `records/items/l`
+  followed by 41 NUL bytes (a corrupt string GD Stash wrote; the
+  `.gds` import carries it verbatim and the renderer reports it,
+  never drops it). Numbers are those of the run on 2026-09-06;
+  `examples/stat_coverage.rs` reproduces them.
+- **Departures from tq-univault's renderer**, deliberate: no
+  `attributeScalePercent` on the record's own lines (see above); the
+  duration multiplier uses `DurationMin` (Grim Dawn records carry no
+  `DurationMax` arrays worth reading); no `totalAttCount` exclusions
+  (TQ's list of uncounted base stats does not exist in GD Stash's
+  count); requirements render Grim Dawn's names.
+- **Unverified in-game:** the `%.1f` formats print "3.0 Seconds" and
+  "25.0% Chance of" as the tags spell them — GD Stash's notes
+  paraphrase the game as "3 Seconds" and "25%", so the engine may
+  trim trailing zeros; whether the game's `DamagePhysical` line
+  really shows a `+` on non-weapon flat physical damage; the scaling
+  categories above; the ceil in the requirement equations; the GD-only
+  colour letters (`^E` bonus tint, `^S` base white, `^Z` skill names,
+  `^H` highlighted numbers) are rendered from the theme, not from a
+  verified palette.
+
 ## Rust prior art (2026-09-03)
 
 - crates.io: nothing for Grim Dawn or Titan Quest ARZ/ARC/save.
