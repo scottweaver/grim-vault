@@ -30,6 +30,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use univault_engine::arc::{ArcError, ArcFile};
 use univault_engine::arz::{ArzError, ArzFile, DbRecord};
@@ -39,6 +40,7 @@ use univault_engine::text::TextDb;
 
 use crate::facets::Symbol;
 use crate::reagents::ReagentKind;
+use crate::stats::{RecordStats, Scale, SkillLevel, StatCache};
 
 /// Item quality as the game's `itemClassification` spells it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -309,6 +311,7 @@ pub struct GameData {
     databases: Vec<ArzFile>,
     text: TextDb,
     item_archives: Vec<ArcFile>,
+    stats: StatCache,
 }
 
 impl GameData {
@@ -318,7 +321,21 @@ impl GameData {
             databases,
             text,
             item_archives,
+            stats: StatCache::default(),
         }
+    }
+
+    /// The stat lines of a record at `level` under `scale`, rendered
+    /// once and shared ([`crate::stats`]). `None` when no layer has the
+    /// record.
+    #[must_use]
+    pub fn record_stats(
+        &self,
+        id: &RecordId,
+        level: SkillLevel,
+        scale: Scale,
+    ) -> Option<Arc<RecordStats>> {
+        self.stats.record_stats(self, id, level, scale)
     }
 
     /// Composes the game data: `shipped` layers override each other

@@ -18,8 +18,10 @@
 //! [`gamedata`] is the layered record database, localization, and
 //! item bitmaps, resolved into names, rarity, and footprints;
 //! [`facets`] derives from them what the game marks on an item's tile
-//! (monster infrequent, double rare, ascended or upgradeable), and
-//! [`search`] is the typed query over those facets and names.
+//! (monster infrequent, double rare, ascended or upgradeable),
+//! [`search`] is the typed query over those facets and names, and
+//! [`stats`] renders a record's variables into the game's own stat
+//! lines and assembles an item's tooltip from them.
 //!
 //! Vault: [`store`] is this app's own item store, [`bucket`] the
 //! computed type view over it, [`reagents`] the rule for what belongs
@@ -51,5 +53,6 @@ pub mod reagents;
 pub mod respec;
 pub mod search;
 pub mod settings;
+pub mod stats;
 pub mod store;
 pub mod transfer;
