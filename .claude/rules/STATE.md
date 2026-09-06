@@ -5,15 +5,18 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-06 (M5 mod characters built on
-`feat/mod-characters`, stacked on the unmerged M4 branch; both await
-the user's acceptance run)
+Last updated: 2026-09-06 (M5 mod characters plus mod and gdx3
+game-data layers on `feat/mod-characters`, stacked on the unmerged
+M4 branch; both await the user's acceptance run)
 
 ## Session handoff
-**Resume here:** check out `feat/mod-characters` (two commits ahead of
-`feat/character-editing`, which is one ahead of `main` at `9abc5fe`).
-It holds M5: custom-game (mod) characters under `save/user/` are
-listed, editable, and their vaulted items record the realm. No
+**Resume here:** check out `feat/mod-characters` (four commits ahead
+of `feat/character-editing`, which is one ahead of `main` at
+`9abc5fe`). It holds M5: custom-game (mod) characters under
+`save/user/` are listed, editable, and their vaulted items record the
+realm; every `mods/<Mod>/database/*.arz` (with its text and item
+archives) is a fill layer under the shipped ones, and `gdx3` is read
+when present. No
 remote; the user declined creating the GitHub repo for now — do not
 push unprompted (next-up item 6). The next action is the **user's
 acceptance run** with the game closed (next-up item 1), now covering
@@ -29,6 +32,12 @@ once accepted. Nothing the app writes has been read by the game yet.
 - **The user was playing during the session** (the live
   `user/_Zark/player.gdc` changed under the copy): never read live
   files, `cp` first. Scratch copies are gone with the session.
+- **Save location (user, 2026-09-06):** Steam Cloud is *disabled* for
+  Grim Dawn because cloud sync fights local save editing; with it
+  disabled the saves live in the local layout, here
+  `/Volumes/scott-games/Grim Dawn Saves/save`. The
+  `userdata/<id>/219990/remote/save` path in older notes is the
+  cloud-enabled location and is stale for this machine.
 - **Mod layout, confirmed on disk 2026-09-06:** `main/_<Name>/` and
   `user/_<Name>/` hold `player.gdc` of the same format (both user/
   characters parse fully typed and round-trip); the file never names
@@ -36,16 +45,18 @@ once accepted. Nothing the app writes has been read by the game yet.
   Each mod keeps its own `save/<Mod>/{transfer,reagents,formulas,
   transmutes}.gst` with the mod name inside (LootAscension: 10-tab
   stash, 82 reagent entries) and its own `mods/<Mod>/database/
-  <Mod>.arz`. The app reads neither yet (ARCHITECTURE "Source of
-  truth" TBD).
-- **Practical limit found:** both non-empty sacks of the mod Zark
-  hold LootAscension-only records (`quest_areah_woodchip.dbr` etc.),
-  whose footprints are unknown without the mod database, so *every*
-  placement into those sacks is refused (`Occupancy(UnknownFootprint)`)
-  and such an item can be vaulted but not placed back. Empty sacks and
-  tabs accept placements; vault out of any sack works. The mod
-  database overlay is the fix, and a design dialog (which mod, layer
-  order).
+  <Mod>.arz`. The database is now a fill layer (user decision
+  2026-09-06, ARCHITECTURE "ARZ/ARC archives"); the per-mod stash
+  folder is still unread (ARCHITECTURE "Source of truth" TBD).
+- **Resolved the same day:** the "unknown records" on the mod Zark
+  (`quest_areah_woodchip.dbr` etc.) that made its sacks refuse every
+  placement were **Fangs of Asterkarn records** — `gdx3` is installed
+  and the loaders had stopped at `gdx2` — and the same ids also exist
+  in LootAscension's database. With `gdx3` and the mod fill layers
+  read, the `--check` transcript has no unknown record, and vault →
+  place back into the mod Zark's own sack 0 ends byte-identical. The
+  install has two mods: `survivalmode` (the Crucible, with its own
+  `Text_EN.arc` and `Items.arc`) and `LootAscension` (database only).
 - **Known nits, unfiled:** single-mastery characters show the raw
   class tag; the store pane is a tile flow, not a grid; the illusion
   collection is parsed but not shown; equipped items are display-only;
@@ -54,7 +65,10 @@ once accepted. Nothing the app writes has been read by the game yet.
   modifier, the iron-bits field, the Reload/Keep-mine modal, and the
   realm-labelled picker are covered by unit tests only (synthetic
   input is banned); whether the game keeps a zero-count reagent entry
-  and whether it accepts any file this app wrote are unknown.
+  and whether it accepts any file this app wrote are unknown. The
+  mod fill rule is proven by a fixture test, not yet by a mod-only
+  item on a real character (every record on the mod Zark resolves
+  from the shipped layers once `gdx3` is read).
 - **Skill note:** `/checkpoint` and `/wrap-up` assume a remote and a
   PR; both run local equivalents here (a docs commit on the branch in
   hand, fast-forward instead of merge).
@@ -100,7 +114,7 @@ none`.
 |---|---|---|
 | `main` | trunk | at `9abc5fe` — rules layer, read stack, vault loop, GUI shell, typed `player.gdc`, reagent storage, settings fallback; 288 tests green; no remote and no GitHub repo yet |
 | `feat/character-editing` | M4: characters editable, copy, iron bits | one commit ahead of `main` (plus a checkpoint commit); 293 tests, clippy clean; CLI round trip on a copy of the user's saves re-reads lossless; awaiting the user's acceptance run before fast-forwarding |
-| `feat/mod-characters` | M5: custom-game (mod) characters under `user/`, realm in store origins | two commits ahead of `feat/character-editing`; 297 tests, clippy clean; vault + place on a copy of the mod Zark re-reads lossless; lands with M4 |
+| `feat/mod-characters` | M5: custom-game (mod) characters under `user/`, realm in store origins, mod + gdx3 game-data layers | four commits ahead of `feat/character-editing`; 301 tests, clippy clean; vault + place on a copy of the mod Zark ends byte-identical; lands with M4 |
 
 ## Next up
 
@@ -110,16 +124,16 @@ none`.
    and `/Volumes/scott-games/Grim Dawn Saves/save`, vault an item out
    of the transfer stash, one out of a main-campaign sack, and one out
    of the custom-game Zark (picker entry "Zark · custom game"), place
-   them back (the mod Zark's own sacks refuse placements — use an
-   empty sack or tab), Alt-drop one to copy it, set the iron bits,
-   then confirm in-game. Fast-forward `main` through both branches
-   once accepted.
+   them back, Alt-drop one to copy it, set the iron bits, then
+   confirm in-game. Load time now includes `gdx3` and the two mods
+   (14 s over SMB in the headless check). Fast-forward `main` through
+   both branches once accepted.
 2. **Mod support, phase 2 (design dialog first):** the per-mod stash
-   and storage under `save/<Mod>/` and the mod's database / text /
-   item archives as a further game-data layer. Decide which mod a
-   pane shows (the save dir lists the mod folders; `playmenu.cpn`
-   names the last one played) and where the overlay sits in the layer
-   order; until then a sack holding a mod-only item is a no-drop zone.
+   and storage under `save/<Mod>/` (`transfer.gst`, `reagents.gst`,
+   the mod name inside each). Decide which mod a pane shows (the save
+   dir lists the mod folders; `playmenu.cpn` names the last one
+   played) and how a mod's stash relates to the base stash and the
+   store.
 3. **M4 follow-ups:** equipment slots as drag ends (unequip to a
    sack / the store, equip from one — needs the slot-to-class rule);
    further block-1 / block-2 edits (level, attributes, skill points)
@@ -136,6 +150,22 @@ none`.
    wrap-up routine's PR steps stay inert until then.
 
 ## Most recent meaningful progress
+
+- **2026-09-06 — Mod databases and `gdx3` as game-data layers
+  (branch `feat/mod-characters`, not merged).** Core:
+  `gamedata::shipped_layers()` names base / `gdx1` / `gdx2` / `gdx3`,
+  `mod_layers()` turns a shell's listing of `mods/<Mod>/` into fill
+  layers (case-insensitive names, first `.arz` by name, folder
+  order), and `GameData::layered(shipped, mods)` composes them with
+  mods *below* everything shipped; both loaders read through it, the
+  `--check` transcript and the status bar count mod layers. Why: the
+  user authorised reading the mod databases, and the "unknown
+  records" that made the mod Zark's sacks refuse placements turned
+  out to be `gdx3` records the old three-entry constant lists never
+  read. Risk: a mod that *only* overrides shipped records changes
+  nothing here by design — if a mod character's items should show the
+  mod's names, that rule needs renegotiating; load time grows with
+  each mod's archives (Crucible's `Items.arc` is 4.6 MB).
 
 - **2026-09-06 — M5 custom-game (mod) characters (branch
   `feat/mod-characters`, stacked on M4, not merged).** Core:
