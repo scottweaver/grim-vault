@@ -15,16 +15,20 @@
 //! vault_cli <game dir> <save dir> <store.json> place-sack <id> <character> <sack> [x y]
 //! vault_cli <game dir> <save dir> <store.json> money <character> [<iron bits>]
 //! vault_cli <game dir> <save dir> <store.json> import-gds <file.gds>
+//! vault_cli <game dir> <save dir> <store.json> respec-attributes <character>
+//! vault_cli <game dir> <save dir> <store.json> respec-masteries <character>
 //! ```
 //!
 //! The `reagent` commands work the component / crafting-material
-//! storage, `reagents.gst`, the same way; the `sack` and `money`
-//! commands work a character's `player.gdc`, which is written only
-//! when every block of it is typed. `<character>` is `Name` or
-//! `main/Name` for a main-campaign character and `user/Name` for a
-//! custom-game (mod) character. `import-gds` adds a GD Stash export's
-//! items to the store, skipping entries already imported, and opens
-//! no game file.
+//! storage, `reagents.gst`, the same way; the `sack`, `money`, and
+//! `respec` commands work a character's `player.gdc`, which is
+//! written only when every block of it is typed. `<character>` is
+//! `Name` or `main/Name` for a main-campaign character and
+//! `user/Name` for a custom-game (mod) character. The `respec`
+//! commands are the plain full refunds of `grimvault_core::respec`,
+//! under the rules read from the game's own records. `import-gds`
+//! adds a GD Stash export's items to the store, skipping entries
+//! already imported, and opens no game file.
 //!
 //! `--mod NAME` works a mod's shared files under `save/<NAME>/`
 //! instead of the main campaign's; characters are the same either way.
@@ -56,6 +60,7 @@ use grimvault_core::gst::{GstFile, ReagentStorage, TransferStash};
 use grimvault_core::item::Item;
 use grimvault_core::loaded::Loaded;
 use grimvault_core::reagents::{ReagentKind, ReagentKinds};
+use grimvault_core::respec::{Reset, RespecRules};
 use grimvault_core::store::{StoredItem, StoredItemId, Timestamp, VaultStore};
 use grimvault_core::transfer::{self, ItemIndex, ReagentIndex, SackIndex, TabIndex};
 use univault_engine::ids::{GridPos, RecordId};
@@ -69,7 +74,8 @@ const USAGE: &str = "usage: vault_cli [--game DIR] [--save DIR] [--store FILE] [
                      | reagents | vault-reagent <index> <count> | place-reagent <id> \
                      | characters | vault-sack <character> <sack> <index> \
                      | place-sack <id> <character> <sack> [x y] | money <character> [<iron bits>] \
-                     | import-gds <file.gds>) \
+                     | import-gds <file.gds> \
+                     | respec-attributes <character> | respec-masteries <character>) \
                      — <character> is Name, main/Name or user/Name; paths not given come from \
                      the app's saved settings";
 
@@ -115,6 +121,10 @@ enum CharacterCommand {
     Money {
         character: CharacterArg,
         amount: Option<u32>,
+    },
+    Respec {
+        character: CharacterArg,
+        reset: Reset,
     },
 }
 
@@ -418,8 +428,62 @@ fn run_character(
                 }
             }
         }
+        CharacterCommand::Respec { character, reset } => {
+            let path = character.path(save_dir);
+            let mut player = load_player(&path)?;
+            let rules = RespecRules::load(game_data)?;
+            print_progress(character.realm, player.model());
+            let report = reset.apply(player.model_mut(), &rules)?;
+            println!("reset {reset} on {character}: {report}");
+            if report.is_noop() {
+                println!("nothing to write");
+            } else {
+                write_player(&path, &player)?;
+                print_progress(character.realm, &reparse_player(&path)?);
+            }
+        }
     }
     Ok(())
+}
+
+/// The level, the pools a respec touches, and the class.
+fn print_progress(realm: Realm, player: &PlayerFile) {
+    let header = player.header();
+    let class = if header.class_tag.is_empty() {
+        "no class"
+    } else {
+        header.class_tag.as_str()
+    };
+    println!(
+        "\ncharacter {} [{realm}] (level {}): {class}",
+        header.name, header.level
+    );
+    if let Some(bio) = player.bio() {
+        println!(
+            "  unspent: {} attribute points, {} skill points; physique {} cunning {} spirit {}; \
+             health {} energy {}",
+            bio.attribute_points_unspent,
+            bio.skill_points_unspent,
+            bio.physique,
+            bio.cunning,
+            bio.spirit,
+            bio.health,
+            bio.energy
+        );
+    }
+    if let Some(skills) = player.skills() {
+        let mastery_skills = skills
+            .skills
+            .iter()
+            .filter(|skill| skill.name.starts_with("records/skills/playerclass"))
+            .count();
+        println!(
+            "  skills: {} in block 8, {mastery_skills} under records/skills/playerclass*; \
+             masteries allowed {}",
+            skills.skills.len(),
+            skills.masteries_allowed
+        );
+    }
 }
 
 /// Every character's file, `main/` then `user/`, each in folder
@@ -593,6 +657,14 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
         ("import-gds", [file]) => Command::ImportGds {
             file: PathBuf::from(file),
         },
+        ("respec-attributes", [character]) => Command::Character(CharacterCommand::Respec {
+            character: CharacterArg::parse(character),
+            reset: Reset::Attributes,
+        }),
+        ("respec-masteries", [character]) => Command::Character(CharacterCommand::Respec {
+            character: CharacterArg::parse(character),
+            reset: Reset::Masteries,
+        }),
         _ => return Err(USAGE.into()),
     };
     Ok(Invocation {
