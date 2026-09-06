@@ -45,14 +45,23 @@ Q&A). Items marked TBD are open questions, not decisions.
   account-wide component and crafting-material storage), and the
   crafting files `save/formulas.gst` (blueprints) and
   `save/transmutes.gst` (illusions). The game owns them; this app is
-  a guest editor. `player.gdc` (in either realm), `transfer.gst`, and
-  `reagents.gst` (in the save root or any mod's folder, see the
+  a guest editor. `player.gdc` (in either realm), `transfer.gst`,
+  `reagents.gst`, `formulas.gst`, and `transmutes.gst` (the four
+  shared files in the save root or any mod's folder, see the
   campaign rule below) are the only game-owned files the app writes
   (`reagents.gst` added 2026-09-03 when block 20 was typed from the
   user's file — it is item storage, the same role as the transfer
-  stash); `formulas.gst`, `transmutes.gst`, `playmenu.cpn`, and the
-  per-character `levels_world001.map/` trees are read-only until
-  renegotiated here. (2026-09-03) A character's realm is part of its
+  stash; `formulas.gst` and `transmutes.gst` added 2026-09-06 on the
+  user's FEATURES.md request for blueprints and illusions, **adds
+  only**: the app appends entries the record database vouches for —
+  a blueprint is a record of class `ItemArtifactFormula`, an
+  illusion a record whose class maps to one of the nine slot ids —
+  and never removes, reorders, or re-homes one; `crafting_cli` and
+  the crafting pane expose no removal, and an import refuses rather
+  than moves an entry whose slot disagrees with the database);
+  `playmenu.cpn` and the per-character `levels_world001.map/` trees
+  are read-only until renegotiated here. (2026-09-03, extended
+  2026-09-06) A character's realm is part of its
   identity only through its folder, so every store record naming a
   character carries the realm explicitly (`ItemOrigin`); a record
   without one predates realms and can only be `main/`. (2026-09-06)
@@ -255,6 +264,15 @@ Q&A). Items marked TBD are open questions, not decisions.
   boundary of the same kind and gets its own entry here first.
   Falsifiable: no `.gds` writer exists anywhere in the workspace,
   and `gds::import` only ever calls `VaultStore::add`.
+- This app's own interchange documents — `grimvault-blueprints` and
+  `grimvault-illusions`, one JSON file each with the vault store's
+  envelope (`format` tag, `version`, unknown fields preserved) plus
+  the `campaign` and `exportedAt` they were taken from — carry a
+  blueprint list or an illusion collection between campaigns. Read
+  and written only by `grimvault-core::{blueprint, illusion}`; a
+  document of any other tag is refused by name, and an import adds
+  what the record database vouches for and reports the rest — never
+  removes. (2026-09-06)
 - No network services, no telemetry, no online features. stdio IPC
   for the planned MCP surface is not a network service.
   (2026-09-03)
@@ -337,6 +355,10 @@ cleanup:
   read-only (a writer or an `.ias` reader is a new boundary entry)
 - Any module implementing the save/write-back path — backup-first,
   refuse-on-mismatch, and the game's-rotation-is-untouchable rules
+- `crates/grimvault-core/src/{formulas,blueprint,illusion}.rs` and
+  `crates/grimvault-gui/src/crafting.rs` — the adds-only rule for
+  `formulas.gst` / `transmutes.gst` and the database gate on what
+  they admit
 - `crates/grimvault-gui/src/main.rs` — entry point / framework choice
 - `crates/grimvault-mcp/src/*.rs` (when it exists) — read-only and
   stdio-only

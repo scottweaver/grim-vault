@@ -219,8 +219,31 @@ AaronHutchinson `decrypt-player.cpp`, gd-edit `gdc.clj`, dreeg
   0xDEADC0DE with length-prefixed keys (`formulasVersion` = 3,
   `numEntries`, `expansionStatus`, repeated `itemName` /
   `formulaRead`). Detected and refused with a matchable error by the
-  `.gst` parser; the engine's key/value reader would parse it.
-  Read-only per ARCHITECTURE.md.
+  `.gst` parser; `grimvault-core::formulas` reads and writes it
+  (2026-09-06, writable adds-only per ARCHITECTURE.md). Layout
+  established byte by byte on the user's files: every key is a `u32`
+  length + ASCII (`begin_block` 11, `formulasVersion` 15, …), the two
+  markers are the raw little-endian words `CE FA 1D B0` /
+  `DE C0 AD DE`, the version word is 3, the count a `u32`,
+  `expansionStatus` **one byte** (7 in the `.gst` files, 3 in
+  `formulas.dst`), each entry `itemName` + `u32`-length record path
+  then `formulaRead` + `u32`, and nothing follows `end_block`. The
+  read flag is 0 or 1 in every file (0 = the in-game "new" badge on
+  a blueprint not yet viewed); the parser types it as a boolean and
+  refuses any other value, refuses version 2 (GD Stash accepts one
+  without the expansion byte; no sample), and refuses trailing bytes,
+  so an accepted file re-encodes byte-for-byte — verified on
+  `formulas.gst` (217 entries, 22,577 bytes), `formulas.dst` (177),
+  and `LootAscension/formulas.gst` (288). The game **appends** a
+  newly learned blueprint at the end with the flag at 0: the
+  LootAscension file and its `.bak` twin differed only in the count
+  and one trailing entry (`craft_armord308.dbr`, flag 0), which is
+  what this app's add does. A blueprint record is one whose `Class`
+  (and record-table type) is `ItemArtifactFormula` — every one of the
+  682 entries across the three files, and 991 such records in the
+  layered database (base + gdx1–3 + mods); its name is the
+  `description` tag, its icon `artifactFormulaBitmapName`, its
+  `itemClassification` the rarity.
 
 ### `reagents.gst` (component and crafting-material storage)
 
@@ -263,18 +286,31 @@ grim-save-parser, gd-edit) types it; the layout below was established
 
 ### `transmutes.gst` (illusion collection)
 
-Block **19** version **2**, typed read-only 2026-09-03 from the user's
-file (`gst::Illusions`); ARCHITECTURE.md keeps the file read-only.
+Block **19** version **2**, typed 2026-09-03 from the user's file
+(`gst::Illusions`); writable adds-only since 2026-09-06
+(ARCHITECTURE.md "Source of truth"; the rule is
+`grimvault-core::illusion`).
 
 - Leading word `1`; version; static zero marker; mod name string
-  (empty); expansion-status byte (7, as block 18's); `u32` slot count
-  (9).
+  (empty, or the mod's name in `save/<Mod>/transmutes.gst`);
+  expansion-status byte (7, as block 18's); `u32` slot count (9).
 - Then one nested id-0 block per equipment slot: `u32` slot id, `u32`
-  record count, then that many record-path strings. Slot ids observed
-  1, 3, 4, 5, 7, 8, 9, 14, 15 holding head, torso, legs, feet, hands,
-  off-hand (foci and shields), weapons (one nested list for every
-  weapon class), shoulders, and medals respectively; the id ↔ slot
-  mapping beyond that observation is unverified.
+  record count, then that many record-path strings. Slot ids 1, 3,
+  4, 5, 7, 8, 9, 14, 15 hold head, torso, legs, feet, hands, off-hand
+  (foci and shields), weapons (every weapon class in one list),
+  shoulders, and medals. **Verified record by record 2026-09-06** on
+  the user's main collection (592 records) and LootAscension's
+  (2,353): every record's `Class` maps to the id of the list it sits
+  in — `ArmorProtective_Head` 1, `_Chest` 3, `_Legs` 4, `_Feet` 5,
+  `_Hands` 7, `WeaponArmor_Offhand` and `WeaponArmor_Shield` 8, every
+  `WeaponMelee_*` / `WeaponHunting_*` / `WeaponMagical_Staff` class 9
+  (19 weapon classes seen, `Spear2h` included), `_Shoulders` 14,
+  `ArmorJewelry_Medal` 15 — with zero disagreements
+  (`illusion::audit`, run by `--check`). Belts, rings, and amulets
+  never appear. A new illusion is appended to its category's list;
+  the game rewrites the whole file with a fresh seed on its own
+  saves (the `.bak` twin of the main file differs only in the seed),
+  so the seed carries no meaning.
 
 ### Item serialization (inside saves and stash)
 
@@ -356,7 +392,11 @@ so the next reader can find the spot; nothing below is a transcription.
   (`formulasVersion` 3, `numEntries`, `expansionStatus`, then
   `itemName` + `formulaRead` per entry). "Enable all blueprints"
   appends every blueprint record not already listed with
-  `formulaRead = 1`.
+  `formulaRead = 1`; its blueprint query is class
+  `ItemArtifactFormula` less a hard-coded list of test / random /
+  mod-path exclusions that this app does not carry (the database
+  survey found none needing it: every record of that class in the
+  user's install resolves to a named, iconed blueprint).
 - **`reagents.gst`:** block 20 v1, `(record, count)` entries, as
   ours. Entries it cannot resolve are carried through unchanged
   (`removedItems`); it does not settle whether the game keeps a
@@ -583,17 +623,27 @@ and were corrected where the saves disagreed.
 and decoder; lib-gddb GPL-3.0 and ARZ/ARC-only scope; marius00/iagd
 MIT and the absence of a C# save decoder; GD Stash closed source
 (its jar and docs carry no license text; decompiles cleanly, read
-eyes-only); block 19's slot ids (GD Stash's constants agree with the
-nine observed); the respec rules — both records' values on every
+eyes-only); block 19's slot ids and the class → slot mapping (GD
+Stash's constants agree with the nine observed, and every record of
+the user's two collections, 2,945 in all, sits under the slot its
+class maps to); the respec rules — both records' values on every
 layer, the health / energy formula and the tree membership on every
-real save; GD
+real save; the `formulas.gst` layout, its `ItemArtifactFormula` rule,
+and the game's append-at-end behaviour (three real files, one
+game-written diff); GD
 ARZ/ARC header and entry layouts, LZ4-block compression, the extra
 decompressed-size field; TQ zlib + 2-byte ARC skip; the full XOR
 scheme and block/checksum semantics; GD item field order including
 the v8/v11 additions; the `.gds` version-3 layout end to end on both
 of the user's exports; no relevant crates.io crates.
 
-**Unverified:** whether the 8-byte ARZ entry trailer is a FILETIME or
+**Unverified:** whether the game reads a `formulas.gst` or
+`transmutes.gst` this app appended to (the round trips and a
+game-written diff are the evidence; no in-game read yet), whether it
+minds an illusion record it would not itself have unlocked (e.g. a
+mod-only record imported into the main campaign), and whether
+`formulasVersion` 2 files exist anywhere (refused, not typed);
+whether the 8-byte ARZ entry trailer is a FILETIME or
 padding (preserved verbatim either way); whether block 20's zero word
 is a mod name or a bare `u32` (identical bytes on the base game; only
 a mod's `reagents.gst` would tell); whether the game writes a

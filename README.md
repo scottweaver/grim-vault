@@ -22,8 +22,12 @@ Early. What works today:
   (`reagents.gst`) the game shows as its Components / Crafting
   Materials tabs: components and materials move between it, the
   transfer stash, and the store by drag-and-drop, counts merging by
-  record. The illusion collection (`transmutes.gst`) is read
-  losslessly but never written.
+  record.
+- Shows each campaign's learned blueprints (`formulas.gst`) and
+  unlocked illusions (`transmutes.gst`) with names and icons, adds
+  one from a searchable picker over the game's database, and exports
+  either list as a small JSON document that imports into another
+  campaign — adds only; nothing is ever removed from either file.
 - Every block of `player.gdc` is typed and re-encodes faithfully
   after an edit, so character inventories can be vaulted too; the
   first GUI shell shows characters read-only and the next milestone
@@ -84,11 +88,15 @@ to the one in the config directory):
 cargo run --release -p grimvault-core --example smoke
 cargo run --release -p grimvault-core --example vault_cli -- list
 cargo run --release -p grimvault-core --example vault_cli -- reagents
+cargo run --release -p grimvault-core --example crafting_cli -- blueprints
+cargo run --release -p grimvault-core --example crafting_cli -- --mod LootAscension illusions
 ```
 
 Any of them accepts `--game DIR`, `--save DIR`, and (for `vault_cli`)
-`--store FILE` to override the saved paths, and `--check` still takes
-`<game dir> <save dir>` explicitly.
+`--store FILE` to override the saved paths, `--mod NAME` to work a
+mod's shared files, and `--check` still takes `<game dir> <save dir>`
+explicitly. `crafting_cli` also adds, exports, and imports
+(`add-blueprint <record>`, `export-illusions <file>`, …).
 
 ## Workspace
 
