@@ -5,21 +5,33 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-06 (GD Stash sanctioned as an eyes-only
-reference and its findings recorded; the user's FEATURES.md queue
-folded into Next up; parallel feature tracks opening from `main`;
-the in-game acceptance run is still pending)
+Last updated: 2026-09-06 (six feature tracks landed on `main` at
+`f1f10f6` — `.gds` import, respecs, blueprints + illusions, item
+facets with the game's tile symbols, the item stat engine, and the
+badge-size fix; the tq-univault search view is in flight on
+`feat/search-view`; the in-game acceptance run is still pending)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
-**Resume here:** `main` at `a224d9c` holds everything; no other branch
-exists and there is no remote (the user declined creating the GitHub
-repo for now — do not push unprompted, next-up item 6). Start every
-new track on its own branch from `main`; the user wants several run
-in parallel, and next-up items 2–5 are independent of each other.
-The **user's acceptance run** (next-up item 1) is still open: nothing
-the app writes has been read by the game yet, though the user ran the
-app this session and saw the external-change reload work.
+**Resume here:** `main` at `f1f10f6` holds everything landed; there is
+no remote (the user declined creating the GitHub repo for now — do not
+push unprompted, next-up item 8). One track is in flight:
+`feat/search-view` (FEATURES.md item 10, the tq-univault search view)
+in an agent worktree — when it reports, rebase it onto `main`, run
+the gates, fast-forward. Six merged branches (`feat/gds-import`,
+`feat/respec`, `feat/blueprints-illusions`, `feat/item-facets`,
+`feat/item-stats`, `fix/tile-badges`) and their worktrees under
+`.claude/worktrees/agent-*` are still present — delete only with the
+user's say-so. Parallel tracks were integrated by rebasing each onto
+the moving `main` and fast-forwarding; every conflict so far sat in
+`lib.rs` module lists and crate docs, `app.rs` frame hooks,
+`panes/mod.rs` `DragFrame` fields, `vault_cli.rs` commands, and the
+two docs files — expect the same shape. The **user's acceptance run**
+(next-up item 1) is still open: nothing the app writes has been read
+by the game yet. The user runs `target/release/grimvault-gui` and
+rebuilds with `cargo run --release -p grimvault-gui`; their report
+that the tile badges were "not showing" (2026-09-06) was a size bug,
+not wiring — fixed in `f1f10f6` and verified on a captured window.
 
 - **GD Stash is an eyes-only reference (user, 2026-09-06):** the
   user's copy at `/Volumes/scott-games/GDStash_v190a` decompiles
@@ -36,15 +48,26 @@ app this session and saw the external-change reload work.
   slot order, and where the level / respec numbers come from
   (`records/creatures/pc/playerlevels.dbr`).
 - **The user's feature queue is `FEATURES.md`** in the repo root
-  (untracked, user-authored 2026-09-06): blueprints (per campaign;
-  show, add, export), illusions (per campaign; show, export), `.gds`
-  import (samples in the save root: `gd-stash-export.gds`, 3,205
-  items, and `reagent-export.gds`, 589 entries — GD Stash exports of
-  the user's collection), gold (done: the iron-bits field), attribute
-  respec and mastery respec ("simple reset" is enough for both). The
-  user asked for these to be built in parallel; GD Stash implements
-  every one, so each track starts by reading the matching decompiled
-  class (eyes-only).
+  (untracked, user-authored, growing): items 1–9 are landed on `main`
+  (blueprints, illusions, `.gds` import, gold, both respecs, and the
+  three item facets with search constraints); item 10 (tq-univault's
+  search view) is in flight; the user was typing items 11+ in their
+  editor at last sight — they announce additions with "new items in
+  FEATURES.md", and nothing is read until then. The user asked for
+  items to be executed on the fly, in parallel where independent, and
+  agreed that FEATURES.md gets status tags once the work lands (one
+  pass, when they are not editing it).
+- **Verifying the GUI without touching the user's setup:** seed a
+  fake `HOME` with `Library/Application Support/grim-vault/
+  settings.json` (`gameDir` = the real install, `saveDir` = a scratch
+  copy of the save tree), optionally a `vault-store.json` beside it
+  (`vault_cli … import-gds` fills one from the user's export), launch
+  `HOME=<fake> target/release/grimvault-gui`, wait ~40 s for the load,
+  and capture the window by id (`screencapture -x -o -l<id>`, the id
+  from `CGWindowListCopyWindowInfo` filtered by pid — a ten-line Swift
+  script did it this session). No synthetic input; look at what
+  renders. The user's own instance is usually running — never kill a
+  `grimvault-gui` you did not start.
 - **Gap found 2026-09-06:** the shared files come in an
   expansion-level family — `.gst` / `.gsh` (softcore / hardcore),
   `.dst` / `.dsh` (Forgotten Gods level), `.cst`, `.bst` … — and the
@@ -136,8 +159,12 @@ pairing of transfer stash / sacks / own stash / store / component
 storage, copy by holding Alt or ⌘/Ctrl on the drop, an iron-bits
 field, autosave 600 ms quiet with backup-first once per load across
 every document, external-change guard with a Reload/Keep-mine modal
-that now watches every `player.gdc`, `--check` headless mode) — 305
-tests, clippy pedantic clean. Verified on scratch copies of the
+that now watches every `player.gdc`, `--check` headless mode), and — landed the afternoon of 2026-09-06 —
+`.gds` import into the store, attribute and mastery respecs,
+blueprints and illusions per campaign (adds only), item facets with
+the game's own tile symbols and a first store search, the item stat
+engine behind the tooltip, and the badge-size fix — 417 tests, clippy
+pedantic clean. Verified on scratch copies of the
 user's install and saves. **Not yet verified: the game reading any
 file this app wrote** — the next step is the user's acceptance run
 on the real install with the game closed; the user chose to land on
@@ -152,63 +179,69 @@ none`.
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | `a224d9c` plus the GD Stash docs commit — rules layer, read stack, vault loop, GUI shell, typed `player.gdc`, reagent storage, settings fallback, M4 character editing, M5 mod characters, mod + gdx3 game-data layers, campaign selector; 305 tests green; no remote and no GitHub repo yet |
-| `docs/gdstash-reference` | GD Stash reference + FEATURES.md queue in the rules docs | docs only, fast-forwarded into `main` on landing; safe to delete |
+| `main` | trunk | at `f1f10f6` — everything through FEATURES.md item 9 plus the item stat engine; 417 tests green; no remote and no GitHub repo yet |
+| `feat/search-view` | FEATURES.md 10: tq-univault's query model and search view | in flight in an agent worktree; rebase onto `main` when it reports |
+| `feat/gds-import`, `feat/respec`, `feat/blueprints-illusions`, `feat/item-facets`, `feat/item-stats`, `fix/tile-badges`, `docs/gdstash-reference`, `docs/state-post-tracks` | landed tracks | fast-forwarded into `main`; safe to delete with the user's say-so, worktrees under `.claude/worktrees/agent-*` too |
 
 ## Next up
 
 1. **User acceptance on the real install** (game closed): launch
-   `cargo run --release -p grimvault-gui` from `main`, point Setup at `/Volumes/scott-games/steamapps/common/Grim Dawn`
-   and `/Volumes/scott-games/Grim Dawn Saves/save`, vault an item out
-   of the transfer stash, one out of a main-campaign sack, and one out
-   of the custom-game Zark (picker entry "Zark · custom game"), place
-   them back, Alt-drop one to copy it, set the iron bits, then
-   confirm in-game. The stash pane should open on LootAscension (its
-   stash is the newest); switch the campaign selector to the main
-   campaign and back, vault from the mod stash and its component
-   storage too. Load time now includes `gdx3` and the two mods (14 s
-   over SMB in the headless check). Everything is already on `main`
-   (user decision 2026-09-06); this run is what makes it trusted.
-2. **Blueprints and illusions per campaign** (FEATURES.md 1–2):
-   parse `formulas.gst` through the engine's key/value reader, show
-   each campaign's known blueprints and per-slot illusions with names
-   and icons, add a blueprint from the database's blueprint records,
-   export / import both lists as self-describing JSON (the
-   copy-between-campaigns case). Writing `formulas.gst` /
-   `transmutes.gst` moves them to ARCHITECTURE's writable list in the
-   same PR, behind backup-first. Reference (eyes-only): GD Stash
-   `GDFormulaList`, `GDTransmute`.
-3. **`.gds` import** (FEATURES.md 3): a pure `gds` parser in core
-   (layout in `docs/format-references.md`), import into the store
-   under a new `ItemOrigin` that keeps the file, the hardcore flag and
-   the soulbound owner, exact duplicates skipped; a picker in the
-   store pane. Resolves ARCHITECTURE's interchange TBD in the same PR
-   (read-only import; the store stays the authority).
-4. **Respecs** (FEATURES.md 5–6): attribute reset (points back to
-   block 2's unspent; physique / cunning / spirit to their bases from
-   `playerlevels.dbr`) and full mastery reset (both masteries' skills
-   out of block 8, their levels refunded, masteries allowed back to
-   none) through the `CharacterDoc` path. Reference (eyes-only):
-   `GDCharBio`, `GDCharSkillList.refundMastery`, `DBEnginePlayer`.
-5. **Stash file family:** decide how the `.dst` / `.gsh` twins are
+   `cargo run --release -p grimvault-gui`, vault an item out of the
+   transfer stash, a main-campaign sack, and the custom-game Zark,
+   place them back, Alt-drop a copy, set the iron bits; switch the
+   campaign selector between LootAscension and main and vault from the
+   mod stash and component storage; import a `.gds` into the store;
+   add a blueprint and an illusion; reset a spare character's
+   attributes and masteries; then confirm every one of those in-game.
+   Nothing this app writes has been read by the game yet — this run is
+   what makes `main` trusted.
+2. **Search view** (FEATURES.md 10): `feat/search-view` in flight —
+   integrate as above; verify on a captured window with the scratch
+   store (3,205 items).
+3. **FEATURES.md 11 onward** as the user announces them — one track
+   per independent item, worktree + branch from `main`, the eyes-only
+   GD Stash rule, no STATE.md edits by agents.
+4. **Stash file family:** decide how the `.dst` / `.gsh` twins are
    shown (further campaigns? a mode selector?) — design dialog first.
-6. **M4 follow-ups:** equipment slots as drag ends (slot order and
-   the `ItemSlots` rule are recorded now); level / XP edits need an
-   evaluator for `experienceLevelEquation`; a fresh seed on copy.
-7. **Game-data cache** under the config dir (names, rarity, class,
-   footprint, icon RGBA per referenced record), stamp-keyed to the
-   archives, so launches over the network mount stop re-reading
-   ~870 MB.
-8. Deferred: extract the `univault-*` crates to their own repo and
+5. **M4 follow-ups:** equipment slots as drag ends (slot order and
+   the `ItemSlots` rule are recorded); level / XP edits need an
+   evaluator for `experienceLevelEquation` (its text is recorded in
+   `docs/format-references.md`); a fresh seed on copy.
+6. **Game-data cache** under the config dir (names, rarity, class,
+   footprint, icon RGBA, stat lines per referenced record),
+   stamp-keyed to the archives, so launches over the network mount
+   stop re-reading ~870 MB.
+7. Deferred: extract the `univault-*` crates to their own repo and
    re-point tq-univault (R1–R5 done on the vendored copies).
-9. Create the GitHub repo (`scottweaver/grim-vault`, PROJECT.md's
+8. Create the GitHub repo (`scottweaver/grim-vault`, PROJECT.md's
    commented `github:` block is pre-filled) and push when ready; the
    wrap-up routine's PR steps stay inert until then.
-10. **Mod support leftovers:** refine the default campaign from
-    `playmenu.cpn` (GD Stash does not read it either) or remember the
-    last selection in settings if the newest-stash rule picks wrong.
+9. **Mod support leftovers:** refine the default campaign from
+   `playmenu.cpn` (GD Stash does not read it either) or remember the
+   last selection in settings if the newest-stash rule picks wrong.
 
 ## Most recent meaningful progress
+
+- **2026-09-06 — Six tracks landed on `main` (fast-forwards to
+  `f1f10f6`).** Built in parallel by agents in worktrees from the
+  user's FEATURES.md, rebased onto the moving `main` one by one, gates
+  run after each rebase: `.gds` import (read-only boundary, GD Stash's
+  duplicate rule, both user exports import with 0 unknown records);
+  attribute and mastery respecs under rules read from
+  `playerlevels.dbr` and `malepc01.dbr` (block 2's health / energy
+  proved to be derived pools; `masteries_allowed` is the level gate
+  and is kept); blueprints and illusions per campaign, adds only,
+  `formulas.gst` / `transmutes.gst` now writable with JSON interchange
+  between campaigns; item facets (monster infrequent, double rare,
+  ascended / upgradeable) from the record database with the game's
+  eleven tile symbols read by entry out of `UI.arc`, plus a first
+  store search; the item stat engine (53,775 lines over 4,114 real
+  items, 0 unknown attributes) in the tooltip; and the badge-size fix
+  after the user saw no badges — they were 10 px. 417 tests. Why: the
+  user asked for the queue to be executed in parallel. Risk: every
+  write path is still unverified in-game (acceptance run pending);
+  the respec, facet, and stat rules rest on record evidence, not on
+  in-game comparison; and the six worktrees still hold build caches.
 
 - **2026-09-06 — GD Stash sanctioned as an eyes-only reference
   (branch `docs/gdstash-reference`, docs only).** The user asked to
@@ -366,23 +399,6 @@ none`.
   modal are covered by unit tests, not by input into the live window
   (synthetic input is banned); and no rewritten file has been loaded
   by the game yet.
-
-- **2026-09-03 — M2 first usable loop (branch `feat/gd-read-stack`,
-  not merged).** `store.rs` (`grimvault-store` v1, monotonic ids
-  never reused, unknown fields preserved, foreign documents refused
-  as `WrongFormat`), `bucket.rs` (25 buckets in 5 groups from the
-  real class census), `transfer.rs` (occupancy, first fit,
-  `can_place_at`, vault/place with the store untouched on every
-  error), `loaded.rs` (`Loaded<T>` refuses any model that cannot
-  reproduce its file), `platform.rs` (save/game dir candidates),
-  `Item` serde. `vault_cli` on a copy: vault → place ends
-  byte-identical to the original `transfer.gst`; backups rotate. 190
-  tests. Why: this is the product's core feature (items out of the
-  shared stash into external storage and back), proven before any UI
-  exists. Risk: the game has not yet loaded a rewritten
-  `transfer.gst` — byte-identity after a round trip is strong but not
-  the same as an in-game read; first real use must be with the game
-  closed and a backup in hand (the app takes one automatically).
 
 ## Blocked / waiting
 
