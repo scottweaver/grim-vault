@@ -41,7 +41,7 @@ use thiserror::Error;
 
 use crate::campaign::Campaign;
 use crate::gdc::Realm;
-
+use crate::gds::GameMode;
 use crate::item::Item;
 use crate::transfer::{SackIndex, TabIndex};
 
@@ -128,8 +128,41 @@ pub enum ItemOrigin {
         #[serde(default = "campaign_before_mods_were_recorded")]
         campaign: Campaign,
     },
+    /// An entry of a GD Stash export (`.gds`, [`crate::gds`]): the
+    /// export's file name, and the two facts only that file records —
+    /// the mode the item was played in and the character it is
+    /// soulbound to, `None` when unbound.
+    GdStashExport {
+        file: String,
+        mode: GameMode,
+        owner: Option<String>,
+    },
     /// Provenance not recorded.
     Unknown,
+}
+
+impl fmt::Display for ItemOrigin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TransferStash { campaign, tab } => {
+                write!(f, "{campaign} transfer stash tab {tab}")
+            }
+            Self::Character { realm, name, sack } => {
+                write!(f, "character {}/{name} sack {sack}", realm.dir_name())
+            }
+            Self::CharacterStash { realm, name, tab } => {
+                write!(f, "character {}/{name} stash tab {tab}", realm.dir_name())
+            }
+            Self::ReagentStorage { campaign } => {
+                write!(f, "{campaign} component / crafting-material storage")
+            }
+            Self::GdStashExport { file, mode, owner } => match owner {
+                Some(owner) => write!(f, "GD Stash export {file} ({mode}, soulbound to {owner})"),
+                None => write!(f, "GD Stash export {file} ({mode})"),
+            },
+            Self::Unknown => f.write_str("unknown"),
+        }
+    }
 }
 
 /// Origins written before 2026-09-06 name no realm; the app then read
@@ -577,6 +610,74 @@ mod tests {
                 campaign: Campaign::Main
             }
         );
+        let bound = ItemOrigin::GdStashExport {
+            file: "gd-stash-export.gds".into(),
+            mode: GameMode::Softcore,
+            owner: Some("Zark".into()),
+        };
+        let bound_json = json!({
+            "kind": "gdStashExport",
+            "file": "gd-stash-export.gds",
+            "mode": "softcore",
+            "owner": "Zark"
+        });
+        assert_eq!(serde_json::to_value(&bound).unwrap(), bound_json);
+        assert_eq!(
+            serde_json::from_value::<ItemOrigin>(bound_json).unwrap(),
+            bound
+        );
+        let unbound = ItemOrigin::GdStashExport {
+            file: "hc.gds".into(),
+            mode: GameMode::Hardcore,
+            owner: None,
+        };
+        let unbound_json =
+            json!({ "kind": "gdStashExport", "file": "hc.gds", "mode": "hardcore", "owner": null });
+        assert_eq!(serde_json::to_value(&unbound).unwrap(), unbound_json);
+        assert_eq!(
+            serde_json::from_value::<ItemOrigin>(unbound_json).unwrap(),
+            unbound
+        );
+    }
+
+    #[test]
+    fn origins_describe_themselves() {
+        assert_eq!(
+            ItemOrigin::TransferStash {
+                campaign: Campaign::Main,
+                tab: TabIndex::new(2)
+            }
+            .to_string(),
+            "main campaign transfer stash tab 2"
+        );
+        assert_eq!(
+            ItemOrigin::Character {
+                realm: Realm::Custom,
+                name: "Zark".into(),
+                sack: SackIndex::new(1)
+            }
+            .to_string(),
+            "character user/Zark sack 1"
+        );
+        assert_eq!(
+            ItemOrigin::GdStashExport {
+                file: "gd-stash-export.gds".into(),
+                mode: GameMode::Softcore,
+                owner: Some("Zark".into()),
+            }
+            .to_string(),
+            "GD Stash export gd-stash-export.gds (softcore, soulbound to Zark)"
+        );
+        assert_eq!(
+            ItemOrigin::GdStashExport {
+                file: "hc.gds".into(),
+                mode: GameMode::Hardcore,
+                owner: None,
+            }
+            .to_string(),
+            "GD Stash export hc.gds (hardcore)"
+        );
+        assert_eq!(ItemOrigin::Unknown.to_string(), "unknown");
     }
 
     #[test]

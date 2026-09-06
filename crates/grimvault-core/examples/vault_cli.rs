@@ -14,6 +14,7 @@
 //! vault_cli <game dir> <save dir> <store.json> vault-sack <character> <sack> <index>
 //! vault_cli <game dir> <save dir> <store.json> place-sack <id> <character> <sack> [x y]
 //! vault_cli <game dir> <save dir> <store.json> money <character> [<iron bits>]
+//! vault_cli <game dir> <save dir> <store.json> import-gds <file.gds>
 //! ```
 //!
 //! The `reagent` commands work the component / crafting-material
@@ -21,7 +22,9 @@
 //! commands work a character's `player.gdc`, which is written only
 //! when every block of it is typed. `<character>` is `Name` or
 //! `main/Name` for a main-campaign character and `user/Name` for a
-//! custom-game (mod) character.
+//! custom-game (mod) character. `import-gds` adds a GD Stash export's
+//! items to the store, skipping entries already imported, and opens
+//! no game file.
 //!
 //! `--mod NAME` works a mod's shared files under `save/<NAME>/`
 //! instead of the main campaign's; characters are the same either way.
@@ -48,11 +51,12 @@ use grimvault_core::bucket::{Bucket, Group};
 use grimvault_core::campaign::Campaign;
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::{PlayerFile, Realm};
+use grimvault_core::gds;
 use grimvault_core::gst::{GstFile, ReagentStorage, TransferStash};
 use grimvault_core::item::Item;
 use grimvault_core::loaded::Loaded;
 use grimvault_core::reagents::{ReagentKind, ReagentKinds};
-use grimvault_core::store::{ItemOrigin, StoredItem, StoredItemId, Timestamp, VaultStore};
+use grimvault_core::store::{StoredItem, StoredItemId, Timestamp, VaultStore};
 use grimvault_core::transfer::{self, ItemIndex, ReagentIndex, SackIndex, TabIndex};
 use univault_engine::ids::{GridPos, RecordId};
 use univault_io::{BackupPolicy, backup_first_write, read_verified};
@@ -64,7 +68,8 @@ const USAGE: &str = "usage: vault_cli [--game DIR] [--save DIR] [--store FILE] [
                      (list | vault <tab> <index> | place <id> <tab> [x y] \
                      | reagents | vault-reagent <index> <count> | place-reagent <id> \
                      | characters | vault-sack <character> <sack> <index> \
-                     | place-sack <id> <character> <sack> [x y] | money <character> [<iron bits>]) \
+                     | place-sack <id> <character> <sack> [x y] | money <character> [<iron bits>] \
+                     | import-gds <file.gds>) \
                      — <character> is Name, main/Name or user/Name; paths not given come from \
                      the app's saved settings";
 
@@ -88,6 +93,9 @@ enum Command {
         id: StoredItemId,
     },
     Character(CharacterCommand),
+    ImportGds {
+        file: PathBuf,
+    },
 }
 
 /// The commands that work a `player.gdc`.
@@ -155,6 +163,10 @@ struct Invocation {
     command: Command,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per command, dispatched top to bottom; splitting would hide the write order"
+)]
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Invocation {
@@ -165,6 +177,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         command,
     } = parse_args(&args)?;
     let game_data = load_game_data(&game_dir)?;
+    if let Command::ImportGds { file } = &command {
+        return run_import_gds(file, &store_path, &game_data);
+    }
     let shared_dir = campaign.shared_dir(&save_dir);
     let stash_path = shared_dir.join("transfer.gst");
     let reagents_path = shared_dir.join("reagents.gst");
@@ -253,8 +268,66 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::Character(command) => {
             run_character(command, &save_dir, &store_path, &game_data, &mut store)?;
         }
+        Command::ImportGds { .. } => unreachable!("peeled off before the shared files are opened"),
     }
     Ok(())
+}
+
+/// Imports a GD Stash export into the store, backup-first as every
+/// store write is; no game file is opened.
+fn run_import_gds(
+    file: &Path,
+    store_path: &Path,
+    game_data: &GameData,
+) -> Result<(), Box<dyn Error>> {
+    let mut store = load_store(store_path)?;
+    let export = gds::parse(&read_verified(file)?)?;
+    println!(
+        "parsed {} ({}, {} entries)",
+        file.display(),
+        export.version(),
+        export.len()
+    );
+    let report = gds::import(&mut store, &export, file, game_data, now()?);
+    println!("import: {report}");
+    for (record, entries) in &report.unknown_records {
+        println!("  unknown record {record} ({entries} entries, imported anyway)");
+    }
+    if report.added.is_empty() {
+        println!("nothing new; {} left untouched", store_path.display());
+    } else {
+        write_store(store_path, &store)?;
+    }
+    print_bucket_counts(game_data, &store);
+    Ok(())
+}
+
+fn print_bucket_counts(game_data: &GameData, store: &VaultStore) {
+    println!("\nstore: {} items", store.len());
+    let mut counts: BTreeMap<Bucket, usize> = BTreeMap::new();
+    for stored in store.items() {
+        *counts
+            .entry(bucket_of(game_data, stored.item()))
+            .or_default() += 1;
+    }
+    for group in Group::ALL {
+        let buckets: Vec<(Bucket, usize)> = Bucket::ALL
+            .into_iter()
+            .filter(|bucket| bucket.group() == group)
+            .filter_map(|bucket| counts.get(&bucket).map(|count| (bucket, *count)))
+            .collect();
+        if buckets.is_empty() {
+            continue;
+        }
+        println!(
+            "  {} ({})",
+            group.label(),
+            buckets.iter().map(|(_, count)| count).sum::<usize>()
+        );
+        for (bucket, count) in buckets {
+            println!("    {} {count}", bucket.label());
+        }
+    }
 }
 
 fn run_character(
@@ -517,6 +590,9 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
             character: CharacterArg::parse(character),
             amount: Some(amount.parse()?),
         }),
+        ("import-gds", [file]) => Command::ImportGds {
+            file: PathBuf::from(file),
+        },
         _ => return Err(USAGE.into()),
     };
     Ok(Invocation {
@@ -692,7 +768,7 @@ fn print_store(game_data: &GameData, store: &VaultStore) {
                     "      {} {} — from {}, stored at {}",
                     stored.id(),
                     describe(game_data, stored.item()),
-                    origin_label(stored.origin()),
+                    stored.origin(),
                     stored.stored_at().unix_seconds()
                 );
             }
@@ -706,22 +782,4 @@ fn bucket_of(game_data: &GameData, item: &Item) -> Bucket {
         .and_then(Result::ok)
         .and_then(|info| info.class)
         .map_or(Bucket::Misc, |class| Bucket::of(&class))
-}
-
-fn origin_label(origin: &ItemOrigin) -> String {
-    match origin {
-        ItemOrigin::TransferStash { campaign, tab } => {
-            format!("{campaign} transfer stash tab {tab}")
-        }
-        ItemOrigin::Character { realm, name, sack } => {
-            format!("character {}/{name} sack {sack}", realm.dir_name())
-        }
-        ItemOrigin::CharacterStash { realm, name, tab } => {
-            format!("character {}/{name} stash tab {tab}", realm.dir_name())
-        }
-        ItemOrigin::ReagentStorage { campaign } => {
-            format!("{campaign} component / crafting-material storage")
-        }
-        ItemOrigin::Unknown => "unknown".to_string(),
-    }
 }

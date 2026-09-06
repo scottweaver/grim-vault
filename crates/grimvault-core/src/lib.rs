@@ -14,9 +14,9 @@
 //!
 //! Vault: [`store`] is this app's own item store, [`bucket`] the
 //! computed type view over it, [`reagents`] the rule for what belongs
-//! in the game's component / crafting-material storage, and
-//! [`transfer`] the pure moves between the transfer stash, that
-//! storage, and the store.
+//! in the game's component / crafting-material storage, [`transfer`]
+//! the pure moves between the transfer stash, that storage, and the
+//! store, and [`gds`] the read-only import of GD Stash's exports.
 
 pub mod block;
 pub mod blocks;
@@ -25,6 +25,7 @@ pub mod campaign;
 pub mod crypto;
 pub mod gamedata;
 pub mod gdc;
+pub mod gds;
 pub mod gst;
 pub mod item;
 pub mod loaded;
