@@ -5,66 +5,69 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-06 (checkpoint before /clear; M4 on
-`feat/character-editing`, unmerged, awaiting acceptance)
+Last updated: 2026-09-06 (M5 mod characters built on
+`feat/mod-characters`, stacked on the unmerged M4 branch; both await
+the user's acceptance run)
 
 ## Session handoff
-<!-- transient; owned by the checkpoint skill -->
+**Resume here:** check out `feat/mod-characters` (two commits ahead of
+`feat/character-editing`, which is one ahead of `main` at `9abc5fe`).
+It holds M5: custom-game (mod) characters under `save/user/` are
+listed, editable, and their vaulted items record the realm. No
+remote; the user declined creating the GitHub repo for now — do not
+push unprompted (next-up item 6). The next action is the **user's
+acceptance run** with the game closed (next-up item 1), now covering
+the custom-game Zark too; fast-forward `main` through both branches
+once accepted. Nothing the app writes has been read by the game yet.
 
-**Resume here:** check out `feat/character-editing` (`e4a508c`, one
-commit ahead of `main` at `9abc5fe`). It holds M4: sack and own-stash
-moves in every direction, copy with Alt/⌘/Ctrl on the drop, and the
-iron-bits field. No remote; the user declined creating the GitHub
-repo for now — do not push unprompted (next-up item 5). The next
-action is the **user's acceptance run** with the game closed: vault
-an item from the transfer stash and one from a character's sack,
-place them back, copy one, set the iron bits, then confirm in-game;
-fast-forward `main` once accepted. Nothing the app writes has been
-read by the game yet — `player.gdc` least of all.
-
-- **Environment left behind:** the previous session's release build
-  (pre-M4) is still running as pid 53978. Quit it
-  (`pkill -x grimvault-gui`) before launching the new one with
-  `cargo run --release -p grimvault-gui`; `target/release/` already
-  holds M4 builds of the app and `examples/vault_cli`. The real paths
-  are seeded in `~/Library/Application Support/grim-vault/settings.json`;
-  no `vault-store.json` exists yet (nothing vaulted for real).
-- **Scratch material is gone with the session:** the save copies and
-  the Zark round-trip artefacts lived in the scratchpad. Re-copy from
-  `/Volumes/scott-games/...` (never read live files while the game
-  runs; `cp` first) and re-clone the references named in
-  `docs/format-references.md` when needed. The mount was present and
-  the user was actively playing on 2026-09-03 — always reload before
-  reasoning about contents.
-- **Decisions this session, recorded only in the commit and here:**
-  a copy keeps the original's seed; equipped items stay display-only;
-  the three direct storage↔stash core ops were removed because the
-  generic lift-then-place path covers them; this checkpoint landed on
-  the feature branch because there is no remote and STATE.md is
-  authored on feature branches.
-- **Known nits, unfiled:** a single-mastery character shows the raw
-  class tag (`tagSkillClassName10`) instead of the mastery name; the
-  store pane is a uniform tile flow, not a grid; the illusion
-  collection (`transmutes.gst`) is parsed but not shown; equipped
-  items are display-only (no unequip / equip); a copy keeps the
-  original's seed, so duplicates roll identically.
+- **Environment left behind:** no app process is running;
+  `target/release/` holds fresh M5 builds of `grimvault-gui` and
+  `examples/vault_cli`. Settings are seeded in
+  `~/Library/Application Support/grim-vault/settings.json` with the
+  save dir `/Volumes/scott-games/Grim Dawn Saves/save` (not
+  `remote/save`); no real `vault-store.json` exists yet.
+- **The user was playing during the session** (the live
+  `user/_Zark/player.gdc` changed under the copy): never read live
+  files, `cp` first. Scratch copies are gone with the session.
+- **Mod layout, confirmed on disk 2026-09-06:** `main/_<Name>/` and
+  `user/_<Name>/` hold `player.gdc` of the same format (both user/
+  characters parse fully typed and round-trip); the file never names
+  a mod, and the game lists every `user/` character under every mod.
+  Each mod keeps its own `save/<Mod>/{transfer,reagents,formulas,
+  transmutes}.gst` with the mod name inside (LootAscension: 10-tab
+  stash, 82 reagent entries) and its own `mods/<Mod>/database/
+  <Mod>.arz`. The app reads neither yet (ARCHITECTURE "Source of
+  truth" TBD).
+- **Practical limit found:** both non-empty sacks of the mod Zark
+  hold LootAscension-only records (`quest_areah_woodchip.dbr` etc.),
+  whose footprints are unknown without the mod database, so *every*
+  placement into those sacks is refused (`Occupancy(UnknownFootprint)`)
+  and such an item can be vaulted but not placed back. Empty sacks and
+  tabs accept placements; vault out of any sack works. The mod
+  database overlay is the fix, and a design dialog (which mod, layer
+  order).
+- **Known nits, unfiled:** single-mastery characters show the raw
+  class tag; the store pane is a tile flow, not a grid; the illusion
+  collection is parsed but not shown; equipped items are display-only;
+  a copy keeps the original's seed.
 - **Unverified in the window:** drag-and-drop, autosave, the copy
-  modifier, the iron-bits field, and the Reload/Keep-mine modal are
-  covered by unit tests only (synthetic input is banned); whether the
-  game keeps or drops a zero-count reagent entry is unknown; whether
-  the game accepts a `player.gdc` this app wrote is unknown (the CLI
-  round trip on a copy of Zark re-reads lossless and fully typed).
-- **Skill note:** `/checkpoint` and `/wrap-up` both assume a remote
-  and a PR; both have run local equivalents in this project (a
-  docs commit on the branch in hand, fast-forward instead of merge).
+  modifier, the iron-bits field, the Reload/Keep-mine modal, and the
+  realm-labelled picker are covered by unit tests only (synthetic
+  input is banned); whether the game keeps a zero-count reagent entry
+  and whether it accepts any file this app wrote are unknown.
+- **Skill note:** `/checkpoint` and `/wrap-up` assume a remote and a
+  PR; both run local equivalents here (a docs commit on the branch in
+  hand, fast-forward instead of merge).
 
 ## Active workstream
 
 Fast track to a usable Grim Dawn tool (user decision 2026-09-03; the
 separate-repo extraction of the shared engine is deferred,
 ARCHITECTURE.md "Crate layering"). On `main` (landed by local fast-forward on 2026-09-03; no remote
-yet) **M1–M3 are done and the app runs**, and **M4 (characters editable)
-is built on `feat/character-editing`**: a five-crate workspace —
+yet) **M1–M3 are done and the app runs**, **M4 (characters editable)
+is built on `feat/character-editing`**, and **M5 (custom-game / mod
+characters under `user/`) on `feat/mod-characters` stacked on it**: a
+five-crate workspace —
 `univault-engine` (tq-univault's parsers vendored, GD LZ4 dialect),
 `univault-io` (safe-io with post-write re-read), `univault-ui`
 (art-free egui kit), `grimvault-core` (rolling-XOR codec, **every
@@ -76,13 +79,14 @@ storage `reagents.gst` typed and writable), and `grimvault-gui` (the
 egui shell: setup with dir candidates, background load with progress,
 transfer-stash grids with icons, store by Group/Bucket, characters
 with editable sacks and own-stash tabs when every block is typed
-(read-only badge otherwise), one generic move — lift into a scratch
+(read-only badge otherwise), listed `main/` then `user/` with a
+`Realm` carried by every vaulted item's origin, one generic move — lift into a scratch
 store, place out of it, restore the source on refusal — for every
 pairing of transfer stash / sacks / own stash / store / component
 storage, copy by holding Alt or ⌘/Ctrl on the drop, an iron-bits
 field, autosave 600 ms quiet with backup-first once per load across
 every document, external-change guard with a Reload/Keep-mine modal
-that now watches every `player.gdc`, `--check` headless mode) — 293
+that now watches every `player.gdc`, `--check` headless mode) — 297
 tests, clippy pedantic clean. Verified on scratch copies of the
 user's install and saves. **Not yet verified: the game reading any
 file this app wrote** — the next step is the user's acceptance run
@@ -95,35 +99,61 @@ none`.
 | Branch | Purpose | Status |
 |---|---|---|
 | `main` | trunk | at `9abc5fe` — rules layer, read stack, vault loop, GUI shell, typed `player.gdc`, reagent storage, settings fallback; 288 tests green; no remote and no GitHub repo yet |
-| `feat/character-editing` | M4: characters editable, copy, iron bits | one commit ahead of `main`; 293 tests, clippy clean; CLI round trip on a copy of the user's saves re-reads lossless; awaiting the user's acceptance run before fast-forwarding |
+| `feat/character-editing` | M4: characters editable, copy, iron bits | one commit ahead of `main` (plus a checkpoint commit); 293 tests, clippy clean; CLI round trip on a copy of the user's saves re-reads lossless; awaiting the user's acceptance run before fast-forwarding |
+| `feat/mod-characters` | M5: custom-game (mod) characters under `user/`, realm in store origins | two commits ahead of `feat/character-editing`; 297 tests, clippy clean; vault + place on a copy of the mod Zark re-reads lossless; lands with M4 |
 
 ## Next up
 
 1. **User acceptance on the real install** (game closed): launch
-   `cargo run --release -p grimvault-gui` from
-   `feat/character-editing`, point Setup at
-   `/Volumes/scott-games/steamapps/common/Grim Dawn` and
-   `/Volumes/scott-games/Grim Dawn Saves/remote/save`, vault an item
-   out of the transfer stash and one out of a sack, place them back,
-   Alt-drop one to copy it, set the iron bits, then confirm in-game.
-   Watch load time over SMB (the three `Items.arc` are ~740 MB; 9 s
-   this session). Fast-forward `main` once accepted.
-2. **M4 follow-ups:** equipment slots as drag ends (unequip to a
+   `cargo run --release -p grimvault-gui` from `feat/mod-characters`,
+   point Setup at `/Volumes/scott-games/steamapps/common/Grim Dawn`
+   and `/Volumes/scott-games/Grim Dawn Saves/save`, vault an item out
+   of the transfer stash, one out of a main-campaign sack, and one out
+   of the custom-game Zark (picker entry "Zark · custom game"), place
+   them back (the mod Zark's own sacks refuse placements — use an
+   empty sack or tab), Alt-drop one to copy it, set the iron bits,
+   then confirm in-game. Fast-forward `main` through both branches
+   once accepted.
+2. **Mod support, phase 2 (design dialog first):** the per-mod stash
+   and storage under `save/<Mod>/` and the mod's database / text /
+   item archives as a further game-data layer. Decide which mod a
+   pane shows (the save dir lists the mod folders; `playmenu.cpn`
+   names the last one played) and where the overlay sits in the layer
+   order; until then a sack holding a mod-only item is a no-drop zone.
+3. **M4 follow-ups:** equipment slots as drag ends (unequip to a
    sack / the store, equip from one — needs the slot-to-class rule);
    further block-1 / block-2 edits (level, attributes, skill points)
    through the same `CharacterDoc` path; a fresh seed on copy as an
    option.
-3. **Game-data cache** under the config dir (names, rarity, class,
+4. **Game-data cache** under the config dir (names, rarity, class,
    footprint, icon RGBA per referenced record), stamp-keyed to the
    archives, so launches over the network mount stop re-reading
    ~870 MB.
-4. Deferred: extract the `univault-*` crates to their own repo and
+5. Deferred: extract the `univault-*` crates to their own repo and
    re-point tq-univault (R1–R5 done on the vendored copies).
-5. Create the GitHub repo (`scottweaver/grim-vault`, PROJECT.md's
+6. Create the GitHub repo (`scottweaver/grim-vault`, PROJECT.md's
    commented `github:` block is pre-filled) and push when ready; the
    wrap-up routine's PR steps stay inert until then.
 
 ## Most recent meaningful progress
+
+- **2026-09-06 — M5 custom-game (mod) characters (branch
+  `feat/mod-characters`, stacked on M4, not merged).** Core:
+  `gdc::Realm { Main, Custom }` names the `main/` / `user/` folder a
+  `player.gdc` came from — the file never says — and is a field of
+  `ItemOrigin::{Character, CharacterStash}` (serde default `main` for
+  origins written before it), so a vaulted item records *which* Zark;
+  `vault_from_sack` / `vault_from_player_stash` take it. GUI: the
+  shell lists `main/` then `user/`, `CharacterDoc` / `CharacterEntry`
+  carry the realm, drag containers hold `OpenCharacter { realm,
+  file }`, the picker suffixes "· custom game", `--check` prints the
+  realm. CLI: `<character>` accepts `user/Name`; the smoke examples
+  and the real-save gate scan both folders. 297 tests. Why: the
+  user's played character is the level-91 LootAscension Zark under
+  `user/`, invisible until now. Risk: a sack holding a mod-only record
+  refuses every placement (unknown footprint) until the mod database
+  is layered in — recorded as TBD in ARCHITECTURE; and, as with M4,
+  the game has read nothing this app wrote.
 
 - **2026-09-03 — M4 characters editable (branch
   `feat/character-editing`, not merged).** Core: `ItemOrigin` now
