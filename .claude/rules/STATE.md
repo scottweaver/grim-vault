@@ -5,9 +5,10 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-06 (M5 mod characters, mod and gdx3 game-data
-layers, and the campaign selector on `feat/mod-characters`, stacked
-on the unmerged M4 branch; both await the user's acceptance run)
+Last updated: 2026-09-06 (checkpoint before /clear; M5 mod
+characters, mod and gdx3 game-data layers, and the campaign selector
+on `feat/mod-characters`, stacked on the unmerged M4 branch; both
+await the user's acceptance run)
 
 ## Session handoff
 **Resume here:** check out `feat/mod-characters` (six commits ahead
@@ -25,9 +26,22 @@ acceptance run** with the game closed (next-up item 1), now covering
 the custom-game Zark too; fast-forward `main` through both branches
 once accepted. Nothing the app writes has been read by the game yet.
 
+- **Next session's intent (user, 2026-09-06):** work several tasks
+  in parallel. Independent tracks from Next up: (a) blueprints and
+  illusions panes per campaign, (b) the game-data cache, (c) M4
+  follow-ups such as equipment slots and level or attribute edits,
+  (d) the GitHub repo and first push. Give parallel branches one
+  common base: fast-forward `main` through both branches first if
+  the acceptance run has passed, otherwise branch each track from
+  `feat/mod-characters`. The acceptance run itself stays the user's.
+- **Live use this session:** the user ran the app and watched the
+  external-change reload fire (2 to 4 s after a save, by the two-poll
+  rule). No M5 feature has been confirmed in the window yet; the
+  "unverified" list below stands.
 - **Environment left behind:** no app process is running;
-  `target/release/` holds fresh M5 builds of `grimvault-gui` and
-  `examples/vault_cli`. Settings are seeded in
+  `target/release/grimvault-gui` was built after the last code
+  commit and matches `b6b2d9e`; `examples/vault_cli` is current too.
+  Settings are seeded in
   `~/Library/Application Support/grim-vault/settings.json` with the
   save dir `/Volumes/scott-games/Grim Dawn Saves/save` (not
   `remote/save`); no real `vault-store.json` exists yet.
