@@ -10,6 +10,8 @@ pub mod reagents;
 pub mod stash;
 pub mod store;
 
+use std::path::PathBuf;
+
 use egui::{
     Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Response, RichText, Sense, Stroke,
     StrokeKind, Ui, Vec2, pos2, vec2,
@@ -58,6 +60,8 @@ pub struct DragFrame {
     pub double_click: Option<DragSource>,
     /// A character's iron bits, as the user set them.
     pub set_money: Option<(CharacterSlot, u32)>,
+    /// A GD Stash export the user picked to import into the store.
+    pub import_gds: Option<PathBuf>,
 }
 
 /// How a grid takes part in drag-and-drop.

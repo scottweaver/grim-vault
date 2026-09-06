@@ -45,7 +45,21 @@ pub fn show(
     ui.label(theme.heading("Vault store"));
     ui.label(theme.path_text(doc.path().display().to_string()));
     let store = doc.store();
-    ui.label(format!("{} items", store.len()));
+    ui.horizontal(|ui| {
+        ui.label(format!("{} items", store.len()));
+        if ui
+            .button("Import GD Stash export…")
+            .on_hover_text(
+                "Adds every item of a .gds file GD Stash exported; \
+                 entries this store already imported are skipped.",
+            )
+            .clicked()
+        {
+            frame.import_gds = rfd::FileDialog::new()
+                .add_filter("GD Stash export", &["gds"])
+                .pick_file();
+        }
+    });
 
     let mut counts: HashMap<Bucket, usize> = HashMap::new();
     for stored in store.items() {
@@ -197,9 +211,13 @@ fn store_tile(
             .show(|ui| {
                 item_tooltip(ui, cx, item);
                 ui.label(
-                    RichText::new(format!("stored item {}", stored.id()))
-                        .small()
-                        .color(cx.palette.text_weak),
+                    RichText::new(format!(
+                        "stored item {} — from {}",
+                        stored.id(),
+                        stored.origin()
+                    ))
+                    .small()
+                    .color(cx.palette.text_weak),
                 );
             });
     }

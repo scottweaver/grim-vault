@@ -5,7 +5,7 @@
 //! game's writes (a stall tq-univault paid for in its paint-driven
 //! refresh).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use egui::{
@@ -13,7 +13,9 @@ use egui::{
     Ui, pos2, vec2,
 };
 use grimvault_core::gamedata::GameData;
+use grimvault_core::gds;
 use grimvault_core::store::Timestamp;
+use univault_io::read_verified;
 use univault_ui::theme::{Palette, Theme};
 
 use crate::autosave::{Activity, Autosave, AutosaveState, Gate, Pending, Verdict};
@@ -627,6 +629,9 @@ impl World {
         if let Some((slot, money)) = frame.set_money {
             self.set_money(slot, money, toasts);
         }
+        if let Some(path) = &frame.import_gds {
+            self.import_gds(path, toasts);
+        }
         if self.drag.is_none()
             && let Some(source) = frame.double_click
         {
@@ -727,11 +732,7 @@ impl World {
     /// and remembers which document is the move's destination.
     fn perform(&mut self, mv: Move, toasts: &mut Toasts) {
         self.warm_for(mv);
-        let now = Timestamp::from_unix_seconds(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |elapsed| elapsed.as_secs()),
-        );
+        let now = now();
         let World {
             campaign,
             stash,
@@ -800,6 +801,59 @@ impl World {
             }
             Ok(Applied::Unmoved) => {}
             Err(error) => toasts.error(error.to_string()),
+        }
+    }
+
+    /// Adds a GD Stash export's items to the store; autosave then
+    /// writes the store as after any other edit. A file that cannot be
+    /// read or parsed changes nothing.
+    fn import_gds(&mut self, path: &Path, toasts: &mut Toasts) {
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let bytes = match read_verified(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                toasts.error(format!("could not read {name}: {error}"));
+                return;
+            }
+        };
+        let export = match gds::parse(&bytes) {
+            Ok(export) => export,
+            Err(error) => {
+                toasts.error(format!(
+                    "{name} is not a GD Stash export this app reads: {error}"
+                ));
+                return;
+            }
+        };
+        let report = gds::import(self.store.store_mut(), &export, path, &self.game, now());
+        if report.added.is_empty() {
+            toasts.info(format!("nothing new in {name}: {report}"));
+            return;
+        }
+        self.store.tracking_mut().mark_edited();
+        self.write_order.prioritize(Doc::Store);
+        toasts.info(format!("imported {name}: {report}"));
+        if !report.unknown_records.is_empty() {
+            let named: Vec<&str> = report
+                .unknown_records
+                .keys()
+                .take(3)
+                .map(String::as_str)
+                .collect();
+            let more = report.unknown_records.len().saturating_sub(named.len());
+            let rest = if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            };
+            toasts.error(format!(
+                "{} record(s) in {name} are unknown to the database (imported anyway): {}{rest}",
+                report.unknown_records.len(),
+                named.join(", ")
+            ));
         }
     }
 
@@ -1273,6 +1327,16 @@ mod tests {
         assert_eq!(mode_of(egui::Modifiers::COMMAND), Mode::Copy);
         assert_eq!(mode_of(egui::Modifiers::SHIFT), Mode::Move);
     }
+}
+
+/// The moment an edit is stamped with; the epoch when the clock is
+/// unset, never a refusal.
+fn now() -> Timestamp {
+    Timestamp::from_unix_seconds(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs()),
+    )
 }
 
 /// Transient outcome notifications, and the last error for the status
