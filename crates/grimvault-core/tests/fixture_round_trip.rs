@@ -5,7 +5,8 @@
 //! typing every block — an edited inventory or stash must survive
 //! encode → parse with every later block intact.
 //!
-//! The same edit checks run over every `main/_*/player.gdc` under
+//! The same edit checks run over every `main/_*/player.gdc` and
+//! `user/_*/player.gdc` under
 //! `$GRIMVAULT_SAVE_DIR` when that variable names a directory (a
 //! **copy** of a save directory, never the live one); the test passes
 //! vacuously when it is unset.
@@ -16,7 +17,7 @@ use grimvault_core::blocks::skills::SkillsVersion;
 use grimvault_core::blocks::stats::StatsVersion;
 use grimvault_core::blocks::ui::UiVersion;
 use grimvault_core::crypto::{BlockId, Decoder, EncodeError, Encoder, KeyTable};
-use grimvault_core::gdc::{InventoryState, PlayerFile, Sex};
+use grimvault_core::gdc::{InventoryState, PlayerFile, Realm, Sex};
 use grimvault_core::gst::GstFile;
 use grimvault_core::item::StashItem;
 
@@ -224,8 +225,10 @@ fn real_saves_round_trip_and_survive_edits() {
     let Some(save_dir) = std::env::var_os("GRIMVAULT_SAVE_DIR").map(PathBuf::from) else {
         return;
     };
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(save_dir.join("main"))
-        .unwrap()
+    let mut paths: Vec<PathBuf> = Realm::ALL
+        .into_iter()
+        .filter_map(|realm| std::fs::read_dir(save_dir.join(realm.dir_name())).ok())
+        .flatten()
         .flatten()
         .map(|entry| entry.path().join("player.gdc"))
         .filter(|path| path.is_file())
@@ -233,7 +236,7 @@ fn real_saves_round_trip_and_survive_edits() {
     paths.sort();
     assert!(
         !paths.is_empty(),
-        "no main/_*/player.gdc under the save dir"
+        "no main/_*/player.gdc or user/_*/player.gdc under the save dir"
     );
     let mut applied = 0;
     for path in paths {

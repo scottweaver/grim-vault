@@ -21,6 +21,7 @@ use crate::loader::{LoadStep, WorldPaths, load_world};
 use crate::panes::character::{EQUIPMENT_SLOTS, WEAPON_SLOTS};
 use crate::settings::ConfigDir;
 use crate::setup::{GameDir, SaveDir};
+use grimvault_core::gdc::Realm;
 
 pub fn run(game: &Path, save: &Path) -> ExitCode {
     match check(game, save) {
@@ -105,9 +106,10 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
     }
 
     println!(
-        "\ncharacters: {} found under {}",
+        "\ncharacters: {} found under {} and {}",
         world.characters.len(),
-        paths.save.characters_dir().display()
+        paths.save.characters_dir(Realm::Main).display(),
+        paths.save.characters_dir(Realm::Custom).display()
     );
     let mut problems = 0;
     for entry in &world.characters {
@@ -182,8 +184,9 @@ fn print_character(doc: &CharacterDoc, facts: &mut FactsCache, game: &GameData) 
         Writable::OpaqueBlock(block) => format!("read-only: block {block} not typed"),
     };
     println!(
-        "  {} — level {}, {}{}; {} iron bits; {} bytes, lossless; {access}",
+        "  {} [{}] — level {}, {}{}; {} iron bits; {} bytes, lossless; {access}",
         header.name,
+        doc.realm(),
         header.level,
         if class.is_empty() { "no class" } else { &class },
         if header.hardcore { ", hardcore" } else { "" },

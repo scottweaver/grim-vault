@@ -18,6 +18,9 @@
 //! model is unmodified; `tests/` gates that against the vendored fixture.
 
 use std::borrow::{Borrow, BorrowMut};
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
 
 use thiserror::Error;
 
@@ -68,6 +71,52 @@ pub enum GdcError {
         /// The version read.
         version: u32,
     },
+}
+
+/// Which of the game's two character folders a `player.gdc` lives in:
+/// `main/` holds main-campaign characters, `user/` the custom-game
+/// (mod) characters. The file itself does not record this — the game
+/// lists every `user/` character under every mod — so the realm is
+/// part of a character's identity only through its location, and any
+/// record that names a character (a store origin) carries it
+/// explicitly rather than deriving it from where the file was found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Realm {
+    /// The main campaign: `main/`.
+    Main,
+    /// Custom games, that is mods: `user/`.
+    Custom,
+}
+
+impl Realm {
+    /// Both realms in the order the shell lists characters.
+    pub const ALL: [Self; 2] = [Self::Main, Self::Custom];
+
+    /// The folder under the save directory holding this realm's
+    /// per-character folders.
+    #[must_use]
+    pub const fn dir_name(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Custom => "user",
+        }
+    }
+
+    /// The realm whose folder is called `name`.
+    #[must_use]
+    pub fn parse_dir_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|realm| realm.dir_name() == name)
+    }
+}
+
+impl fmt::Display for Realm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Main => "main campaign",
+            Self::Custom => "custom game",
+        })
+    }
 }
 
 /// Character sex flag. `false`/`true` on the wire; the mapping is
@@ -1058,5 +1107,24 @@ mod tests {
             file.encode(),
             Err(SaveEncodeError::OpaqueRekeyed { block, .. }) if block == BlockId::new(9)
         ));
+    }
+
+    #[test]
+    fn realm_dir_names_round_trip() {
+        for realm in Realm::ALL {
+            assert_eq!(Realm::parse_dir_name(realm.dir_name()), Some(realm));
+        }
+        assert_eq!(Realm::Main.dir_name(), "main");
+        assert_eq!(Realm::Custom.dir_name(), "user");
+        assert_eq!(Realm::parse_dir_name("mods"), None);
+    }
+
+    #[test]
+    fn realms_serialize_as_camel_case_tags() {
+        assert_eq!(serde_json::to_string(&Realm::Main).unwrap(), "\"main\"");
+        assert_eq!(
+            serde_json::from_str::<Realm>("\"custom\"").unwrap(),
+            Realm::Custom
+        );
     }
 }

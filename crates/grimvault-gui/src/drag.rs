@@ -11,7 +11,7 @@
 
 use egui::Vec2;
 use grimvault_core::gamedata::Footprint;
-use grimvault_core::gdc::PlayerFile;
+use grimvault_core::gdc::{PlayerFile, Realm};
 use grimvault_core::gst::{ReagentStorage, TransferStash};
 use grimvault_core::item::Item;
 use grimvault_core::reagents::{ReagentKind, ReagentKinds};
@@ -289,6 +289,13 @@ pub enum ApplyError {
     SourceGone,
 }
 
+/// A character open for editing: its file and the realm the store
+/// records as the origin of anything lifted out of it.
+pub struct OpenCharacter<'a> {
+    pub realm: Realm,
+    pub file: &'a mut PlayerFile,
+}
+
 /// Every container a move may touch; `reagents` is `None` while
 /// `reagents.gst` is absent or unusable, and a character is `None`
 /// while unreadable or read-only.
@@ -296,21 +303,21 @@ pub struct Containers<'a> {
     pub stash: &'a mut TransferStash,
     pub store: &'a mut VaultStore,
     pub reagents: Option<&'a mut ReagentStorage>,
-    pub characters: Vec<Option<&'a mut PlayerFile>>,
+    pub characters: Vec<Option<OpenCharacter<'a>>>,
 }
 
-impl Containers<'_> {
-    fn character(&mut self, slot: CharacterSlot) -> Result<&mut PlayerFile, ApplyError> {
+impl<'a> Containers<'a> {
+    fn character(&mut self, slot: CharacterSlot) -> Result<&mut OpenCharacter<'a>, ApplyError> {
         self.characters
             .get_mut(slot.value())
-            .and_then(|player| player.as_deref_mut())
+            .and_then(Option::as_mut)
             .ok_or(ApplyError::CharacterNotEditable(slot))
     }
 
-    fn character_ref(&self, slot: CharacterSlot) -> Result<&PlayerFile, ApplyError> {
+    fn character_ref(&self, slot: CharacterSlot) -> Result<&OpenCharacter<'a>, ApplyError> {
         self.characters
             .get(slot.value())
-            .and_then(|player| player.as_deref())
+            .and_then(Option::as_ref)
             .ok_or(ApplyError::CharacterNotEditable(slot))
     }
 
@@ -386,8 +393,8 @@ pub fn peek(
             container: Container::Sack { character, sack },
             index,
         } => {
-            let player = containers.character_ref(character)?;
-            player
+            let open = containers.character_ref(character)?;
+            open.file
                 .inventory()
                 .and_then(|inventory| inventory.sacks().get(slot(sack.value())?))
                 .and_then(|contents| contents.items.get(index.value()))
@@ -395,7 +402,8 @@ pub fn peek(
                     (
                         placed.item.clone(),
                         ItemOrigin::Character {
-                            name: player.character_name().to_owned(),
+                            realm: open.realm,
+                            name: open.file.character_name().to_owned(),
                             sack,
                         },
                     )
@@ -405,15 +413,16 @@ pub fn peek(
             container: Container::CharacterStash { character, tab },
             index,
         } => {
-            let player = containers.character_ref(character)?;
-            player
+            let open = containers.character_ref(character)?;
+            open.file
                 .stash()
                 .and_then(|stash| grid_item(&stash.tabs, tab, index))
                 .map(|item| {
                     (
                         item,
                         ItemOrigin::CharacterStash {
-                            name: player.character_name().to_owned(),
+                            realm: open.realm,
+                            name: open.file.character_name().to_owned(),
                             tab,
                         },
                     )
@@ -472,17 +481,17 @@ fn lift(
         DragSource::Grid {
             container: Container::Sack { character, sack },
             index,
-        } => transfer::vault_from_sack(containers.character(character)?, sack, index, into, now)?,
+        } => {
+            let open = containers.character(character)?;
+            transfer::vault_from_sack(open.file, open.realm, sack, index, into, now)?
+        }
         DragSource::Grid {
             container: Container::CharacterStash { character, tab },
             index,
-        } => transfer::vault_from_player_stash(
-            containers.character(character)?,
-            tab,
-            index,
-            into,
-            now,
-        )?,
+        } => {
+            let open = containers.character(character)?;
+            transfer::vault_from_player_stash(open.file, open.realm, tab, index, into, now)?
+        }
         DragSource::Store(id) => {
             let (item, origin) = containers
                 .store
@@ -521,24 +530,24 @@ fn place(
             container: Container::Sack { character, sack },
             cell,
         } => {
-            let player = containers.character(character)?;
+            let player = &mut *containers.character(character)?.file;
             transfer::place_in_sack_at(from, id, player, sack, cell, facts)?;
             Landing::Cell(cell)
         }
         DropTarget::Container(Container::Sack { character, sack }) => {
-            let player = containers.character(character)?;
+            let player = &mut *containers.character(character)?.file;
             Landing::Cell(transfer::place_in_sack(from, id, player, sack, facts)?)
         }
         DropTarget::Cell {
             container: Container::CharacterStash { character, tab },
             cell,
         } => {
-            let player = containers.character(character)?;
+            let player = &mut *containers.character(character)?.file;
             transfer::place_in_player_stash_at(from, id, player, tab, cell, facts)?;
             Landing::Cell(cell)
         }
         DropTarget::Container(Container::CharacterStash { character, tab }) => {
-            let player = containers.character(character)?;
+            let player = &mut *containers.character(character)?.file;
             Landing::Cell(transfer::place_in_player_stash(
                 from, id, player, tab, facts,
             )?)
@@ -578,7 +587,9 @@ impl Snapshot {
                     .ok_or(ApplyError::NoReagentStorage)?
                     .clone(),
             ),
-            Doc::Character(slot) => Self::Character(slot, containers.character_ref(slot)?.clone()),
+            Doc::Character(slot) => {
+                Self::Character(slot, containers.character_ref(slot)?.file.clone())
+            }
         })
     }
 
@@ -595,7 +606,7 @@ impl Snapshot {
             }
             Self::Character(slot, player) => {
                 if let Ok(target) = containers.character(slot) {
-                    *target = player;
+                    *target.file = player;
                 }
             }
         }
@@ -845,7 +856,10 @@ mod tests {
                 stash: &mut self.stash,
                 store: &mut self.store,
                 reagents: self.reagents.as_mut(),
-                characters: vec![self.player.as_mut()],
+                characters: vec![self.player.as_mut().map(|file| OpenCharacter {
+                    realm: Realm::Main,
+                    file,
+                })],
             };
             apply(mv, &mut containers, &table(), NOW)
         }
@@ -1317,6 +1331,7 @@ mod tests {
         assert_eq!(
             world.store.get(id).unwrap().origin(),
             &ItemOrigin::Character {
+                realm: Realm::Main,
                 name: "Sif".into(),
                 sack: SackIndex::MAIN
             }
@@ -1340,6 +1355,7 @@ mod tests {
         assert_eq!(
             world.store.get(id).unwrap().origin(),
             &ItemOrigin::CharacterStash {
+                realm: Realm::Main,
                 name: "Sif".into(),
                 tab: TAB0
             }

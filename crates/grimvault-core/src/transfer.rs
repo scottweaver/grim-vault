@@ -37,7 +37,7 @@ use univault_engine::ids::{GridPos, RecordId};
 
 use crate::block::StashTab;
 use crate::gamedata::{Footprint, GameData};
-use crate::gdc::{PlayerFile, Sack};
+use crate::gdc::{PlayerFile, Realm, Sack};
 use crate::gst::{ReagentEntry, ReagentStorage, TransferStash};
 use crate::item::{Item, SackItem, StashItem};
 use crate::reagents::ReagentKinds;
@@ -393,7 +393,8 @@ pub fn place_in_stash_at(
 }
 
 /// Removes item `index` from tab `tab` of `player`'s own stash and
-/// stores it with [`ItemOrigin::CharacterStash`].
+/// stores it with [`ItemOrigin::CharacterStash`] under `realm`, the
+/// folder the file was read from, which the file itself never names.
 ///
 /// # Errors
 /// [`TransferError::NoPlayerStash`], [`TransferError::NoSuchTab`] or
@@ -401,6 +402,7 @@ pub fn place_in_stash_at(
 /// on error.
 pub fn vault_from_player_stash(
     player: &mut PlayerFile,
+    realm: Realm,
     tab: TabIndex,
     index: ItemIndex,
     store: &mut VaultStore,
@@ -408,7 +410,11 @@ pub fn vault_from_player_stash(
 ) -> Result<StoredItemId, TransferError> {
     let name = player.character_name().to_owned();
     let placed = take_from_tabs(player_tabs_mut(player)?, tab, index)?;
-    Ok(store.add(placed.item, ItemOrigin::CharacterStash { name, tab }, at))
+    Ok(store.add(
+        placed.item,
+        ItemOrigin::CharacterStash { realm, name, tab },
+        at,
+    ))
 }
 
 /// Moves stored item `id` into the first free spot of tab `tab` of
@@ -558,6 +564,7 @@ pub fn can_place_in_sack_at(
 /// unchanged on error.
 pub fn vault_from_sack(
     player: &mut PlayerFile,
+    realm: Realm,
     sack: SackIndex,
     index: ItemIndex,
     store: &mut VaultStore,
@@ -569,7 +576,7 @@ pub fn vault_from_sack(
         return Err(TransferError::NoSuchSackItem { sack, index });
     }
     let placed = contents.items.remove(index.value());
-    Ok(store.add(placed.item, ItemOrigin::Character { name, sack }, at))
+    Ok(store.add(placed.item, ItemOrigin::Character { realm, name, sack }, at))
 }
 
 /// Moves stored item `id` into the first free spot of sack `sack`,
@@ -1552,11 +1559,14 @@ mod tests {
                 player_with_stash(vec![], vec![tab(8, 16, vec![placed(CLUSTER, 1.0, 6.0)])]);
             let mut store = VaultStore::new();
 
-            let id = vault_from_player_stash(&mut player, TAB0, FIRST, &mut store, NOW).unwrap();
+            let id =
+                vault_from_player_stash(&mut player, Realm::Main, TAB0, FIRST, &mut store, NOW)
+                    .unwrap();
             assert!(stash_tabs_of(&player)[0].items.is_empty());
             assert_eq!(
                 store.get(id).unwrap().origin(),
                 &ItemOrigin::CharacterStash {
+                    realm: Realm::Main,
                     name: "Sif".into(),
                     tab: TAB0
                 }
@@ -1571,7 +1581,9 @@ mod tests {
                 vec![placed(CLUSTER, 0.0, 0.0)]
             );
 
-            let id = vault_from_player_stash(&mut player, TAB0, FIRST, &mut store, NOW).unwrap();
+            let id =
+                vault_from_player_stash(&mut player, Realm::Main, TAB0, FIRST, &mut store, NOW)
+                    .unwrap();
             place_in_player_stash_at(&mut store, id, &mut player, TAB0, at(3, 4), &footprints)
                 .unwrap();
             assert_eq!(
@@ -1589,11 +1601,25 @@ mod tests {
             let id = store.add(item(LEGS), ItemOrigin::Unknown, NOW);
             let before = (player.clone(), store.clone());
             assert_eq!(
-                vault_from_player_stash(&mut player, TabIndex::new(1), FIRST, &mut store, NOW),
+                vault_from_player_stash(
+                    &mut player,
+                    Realm::Main,
+                    TabIndex::new(1),
+                    FIRST,
+                    &mut store,
+                    NOW
+                ),
                 Err(TransferError::NoSuchTab(TabIndex::new(1)))
             );
             assert_eq!(
-                vault_from_player_stash(&mut player, TAB0, ItemIndex::new(1), &mut store, NOW),
+                vault_from_player_stash(
+                    &mut player,
+                    Realm::Main,
+                    TAB0,
+                    ItemIndex::new(1),
+                    &mut store,
+                    NOW
+                ),
                 Err(TransferError::NoSuchItem {
                     tab: TAB0,
                     index: ItemIndex::new(1)
@@ -1615,7 +1641,7 @@ mod tests {
 
             let mut untyped = PlayerFile::from_parts(7, player.header().clone(), vec![]);
             assert_eq!(
-                vault_from_player_stash(&mut untyped, TAB0, FIRST, &mut store, NOW),
+                vault_from_player_stash(&mut untyped, Realm::Main, TAB0, FIRST, &mut store, NOW),
                 Err(TransferError::NoPlayerStash)
             );
             assert_eq!(
@@ -1653,14 +1679,22 @@ mod tests {
             let mut player = player(vec![sack(vec![in_sack(CLUSTER, 1, 6)])]);
             let mut store = VaultStore::new();
 
-            let id =
-                vault_from_sack(&mut player, MAIN, ItemIndex::new(0), &mut store, NOW).unwrap();
+            let id = vault_from_sack(
+                &mut player,
+                Realm::Main,
+                MAIN,
+                ItemIndex::new(0),
+                &mut store,
+                NOW,
+            )
+            .unwrap();
             assert!(sacks_of(&player)[0].items.is_empty());
             let stored = store.get(id).unwrap();
             assert_eq!(stored.item(), &item(CLUSTER));
             assert_eq!(
                 stored.origin(),
                 &ItemOrigin::Character {
+                    realm: Realm::Main,
                     name: "Sif".into(),
                     sack: MAIN
                 }
@@ -1760,11 +1794,25 @@ mod tests {
             let mut player = player(vec![sack(vec![in_sack(CLUSTER, 1, 6)])]);
             let mut store = VaultStore::new();
             assert_eq!(
-                vault_from_sack(&mut player, EXTRA, ItemIndex::new(0), &mut store, NOW),
+                vault_from_sack(
+                    &mut player,
+                    Realm::Main,
+                    EXTRA,
+                    ItemIndex::new(0),
+                    &mut store,
+                    NOW
+                ),
                 Err(TransferError::NoSuchSack(EXTRA))
             );
             assert_eq!(
-                vault_from_sack(&mut player, MAIN, ItemIndex::new(1), &mut store, NOW),
+                vault_from_sack(
+                    &mut player,
+                    Realm::Main,
+                    MAIN,
+                    ItemIndex::new(1),
+                    &mut store,
+                    NOW
+                ),
                 Err(TransferError::NoSuchSackItem {
                     sack: MAIN,
                     index: ItemIndex::new(1)
@@ -1775,7 +1823,14 @@ mod tests {
 
             let mut untyped = PlayerFile::from_parts(7, player.header().clone(), vec![]);
             assert_eq!(
-                vault_from_sack(&mut untyped, MAIN, ItemIndex::new(0), &mut store, NOW),
+                vault_from_sack(
+                    &mut untyped,
+                    Realm::Main,
+                    MAIN,
+                    ItemIndex::new(0),
+                    &mut store,
+                    NOW
+                ),
                 Err(TransferError::NoInventory)
             );
             assert_eq!(

@@ -5,7 +5,7 @@
 //! cargo run -p grimvault-core --example save_smoke -- /path/to/copy/of/save
 //! ```
 //!
-//! For every `main/_*/player.gdc`: character, inventory, equipment and
+//! For every `main/_*/player.gdc` and `user/_*/player.gdc`: character, inventory, equipment and
 //! stash summary, the block ids seen (a `~` suffix marks an opaque
 //! block; every block the game writes should be typed), whether an
 //! unmodified re-encode is byte-identical, and whether an edited model
@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use grimvault_core::block::{OpaqueBlock, OpaqueReason, SaveEncodeError, StashTab};
-use grimvault_core::gdc::{Block, PlayerFile};
+use grimvault_core::gdc::{Block, PlayerFile, Realm};
 use grimvault_core::gst::{GstBlock, GstError, GstFile};
 use grimvault_core::item::StashItem;
 
@@ -53,7 +53,14 @@ fn main() -> ExitCode {
 }
 
 fn player_files(save_dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(save_dir.join("main")) else {
+    Realm::ALL
+        .into_iter()
+        .flat_map(|realm| player_files_under(&save_dir.join(realm.dir_name())))
+        .collect()
+}
+
+fn player_files_under(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut files: Vec<PathBuf> = entries

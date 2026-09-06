@@ -21,7 +21,7 @@ use std::time::SystemTime;
 
 use grimvault_core::block::SaveEncodeError;
 use grimvault_core::crypto::BlockId;
-use grimvault_core::gdc::{GdcError, PlayerFile};
+use grimvault_core::gdc::{GdcError, PlayerFile, Realm};
 use grimvault_core::gst::{GstError, GstFile, ReagentStorage, TransferStash};
 use grimvault_core::loaded::{LoadError, Loaded};
 use grimvault_core::store::{StoreError, VaultStore};
@@ -97,8 +97,8 @@ pub enum SaveError {
     ReadOnly { path: PathBuf, block: BlockId },
 }
 
-/// Position of a character in the shell's list, as `main/` orders
-/// them.
+/// Position of a character in the shell's list: `main/` in folder
+/// order, then `user/`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CharacterSlot(usize);
 
@@ -587,20 +587,33 @@ pub enum Writable {
 /// only while [`Writable::Yes`].
 #[derive(Debug)]
 pub struct CharacterDoc {
+    realm: Realm,
     tracking: Tracking,
     loaded: Loaded<PlayerFile>,
 }
 
 impl CharacterDoc {
-    /// Reads and gates a `player.gdc`.
+    /// Reads and gates a `player.gdc` found under `realm`'s folder.
     ///
     /// # Errors
     /// [`CharacterOpenError`].
-    pub fn open(path: PathBuf) -> Result<Self, CharacterOpenError> {
+    pub fn open(realm: Realm, path: PathBuf) -> Result<Self, CharacterOpenError> {
         let bytes = read_verified(&path)?;
         let tracking = Tracking::fresh(path);
         let loaded = Loaded::<PlayerFile>::load(bytes)?;
-        Ok(Self { tracking, loaded })
+        Ok(Self {
+            realm,
+            tracking,
+            loaded,
+        })
+    }
+
+    /// The folder the file was read from, which the file itself
+    /// never names; the store records it with every item vaulted
+    /// from this character.
+    #[must_use]
+    pub fn realm(&self) -> Realm {
+        self.realm
     }
 
     #[must_use]
@@ -678,18 +691,19 @@ impl CharacterDoc {
     /// # Errors
     /// [`CharacterOpenError`].
     pub fn reload(&mut self) -> Result<(), CharacterOpenError> {
-        *self = Self::open(self.tracking.path.clone())?;
+        *self = Self::open(self.realm, self.tracking.path.clone())?;
         Ok(())
     }
 }
 
-/// One `main/*/player.gdc`, however it fared.
+/// One `main/*/player.gdc` or `user/*/player.gdc`, however it fared.
 #[derive(Debug)]
 pub enum CharacterEntry {
     Loaded(CharacterDoc),
     /// Present but unreadable; `stamp` is the file as it was found, so
     /// the guard only reacts when it changes again.
     Failed {
+        realm: Realm,
         path: PathBuf,
         stamp: Option<FileStamp>,
         error: CharacterOpenError,
@@ -697,11 +711,24 @@ pub enum CharacterEntry {
 }
 
 impl CharacterEntry {
-    fn open(path: PathBuf) -> Self {
+    fn open(realm: Realm, path: PathBuf) -> Self {
         let stamp = stamp_of(&path);
-        match CharacterDoc::open(path.clone()) {
+        match CharacterDoc::open(realm, path.clone()) {
             Ok(doc) => Self::Loaded(doc),
-            Err(error) => Self::Failed { path, stamp, error },
+            Err(error) => Self::Failed {
+                realm,
+                path,
+                stamp,
+                error,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn realm(&self) -> Realm {
+        match self {
+            Self::Loaded(doc) => doc.realm(),
+            Self::Failed { realm, .. } => *realm,
         }
     }
 
@@ -764,18 +791,33 @@ impl CharacterEntry {
     pub fn reload(&mut self) -> Result<(), CharacterOpenError> {
         match self {
             Self::Loaded(doc) => doc.reload(),
-            Self::Failed { path, .. } => {
-                *self = Self::open(path.clone());
+            Self::Failed { realm, path, .. } => {
+                *self = Self::open(*realm, path.clone());
                 Ok(())
             }
         }
     }
 }
 
-/// Every character under `main/`, in folder order, failures included.
+/// Every character under `main/` then `user/`, each in folder order,
+/// failures included; a realm whose folder is absent contributes
+/// nothing.
 #[must_use]
 pub fn open_characters(save_dir: &SaveDir) -> Vec<CharacterEntry> {
-    let Ok(entries) = std::fs::read_dir(save_dir.characters_dir()) else {
+    Realm::ALL
+        .into_iter()
+        .flat_map(|realm| {
+            character_files(&save_dir.characters_dir(realm))
+                .into_iter()
+                .map(move |path| CharacterEntry::open(realm, path))
+        })
+        .collect()
+}
+
+/// The `player.gdc` of every character folder under `dir`, in folder
+/// order.
+fn character_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut folders: Vec<PathBuf> = entries
@@ -788,7 +830,6 @@ pub fn open_characters(save_dir: &SaveDir) -> Vec<CharacterEntry> {
         .into_iter()
         .map(|folder| folder.join("player.gdc"))
         .filter(|path| path.is_file())
-        .map(CharacterEntry::open)
         .collect()
 }
 
@@ -1013,8 +1054,9 @@ mod tests {
         let path = folder.join("player.gdc");
         std::fs::write(&path, FIXTURE).unwrap();
 
-        let mut doc = CharacterDoc::open(path.clone()).unwrap();
+        let mut doc = CharacterDoc::open(Realm::Main, path.clone()).unwrap();
         assert_eq!(doc.name(), "Laurana");
+        assert_eq!(doc.realm(), Realm::Main);
         assert_eq!(doc.writable(), Writable::Yes);
         assert_eq!(doc.baseline_len(), FIXTURE.len());
         assert_eq!(doc.tracking().backup(), Backup::Armed);
@@ -1064,7 +1106,7 @@ mod tests {
         .unwrap();
         std::fs::write(&path, enc.finish()).unwrap();
 
-        let mut doc = CharacterDoc::open(path).unwrap();
+        let mut doc = CharacterDoc::open(Realm::Custom, path).unwrap();
         assert_eq!(doc.name(), "Sif");
         assert_eq!(doc.writable(), Writable::OpaqueBlock(BlockId::new(99)));
         assert!(matches!(
@@ -1078,12 +1120,42 @@ mod tests {
     #[test]
     fn character_labels_fall_back_to_the_folder_name() {
         let entry = CharacterEntry::Failed {
-            path: PathBuf::from("/saves/main/_Sif/player.gdc"),
+            realm: Realm::Custom,
+            path: PathBuf::from("/saves/user/_Sif/player.gdc"),
             stamp: None,
             error: CharacterOpenError::Read(io::Error::other("nope")),
         };
         assert_eq!(entry.label(), "Sif");
+        assert_eq!(entry.realm(), Realm::Custom);
         assert_eq!(entry.edits(), Edits::Saved);
         assert!(entry.doc().is_none());
+    }
+
+    #[test]
+    fn characters_are_listed_main_campaign_first_then_custom_games() {
+        let scratch = Scratch::new("realms");
+        std::fs::write(scratch.0.join("transfer.gst"), b"").unwrap();
+        for folder in ["user/_Zark", "main/_Sif", "main/_Aria"] {
+            let folder = scratch.0.join(folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("player.gdc"), FIXTURE).unwrap();
+        }
+        std::fs::create_dir_all(scratch.0.join("main/_NoFile")).unwrap();
+
+        let listed: Vec<(Realm, PathBuf)> = open_characters(&SaveDir::parse(&scratch.0).unwrap())
+            .iter()
+            .map(|entry| {
+                assert!(entry.doc().is_some(), "{}", entry.path().display());
+                (entry.realm(), entry.path().to_path_buf())
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                (Realm::Main, scratch.0.join("main/_Aria/player.gdc")),
+                (Realm::Main, scratch.0.join("main/_Sif/player.gdc")),
+                (Realm::Custom, scratch.0.join("user/_Zark/player.gdc")),
+            ]
+        );
     }
 }

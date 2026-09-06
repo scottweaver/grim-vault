@@ -18,6 +18,7 @@ use super::{
 use crate::documents::{Backup, CharacterDoc, CharacterEntry, CharacterSlot, Edits, Writable};
 use crate::drag::Container;
 use crate::theme::{FITS, UNKNOWN_RARITY, rarity_color};
+use grimvault_core::gdc::Realm;
 
 /// Which of the character's containers is showing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,17 +90,13 @@ pub fn show(
         ui.label(theme.heading("Characters"));
         let selected_label = characters
             .get(view.selected)
-            .map_or_else(|| "none".to_string(), CharacterEntry::label);
+            .map_or_else(|| "none".to_string(), picker_label);
         let before = view.selected;
         egui::ComboBox::from_id_salt("character-picker")
             .selected_text(selected_label)
             .show_ui(ui, |ui| {
                 for (slot, entry) in characters.iter().enumerate() {
-                    let label = match entry {
-                        CharacterEntry::Loaded(_) => entry.label(),
-                        CharacterEntry::Failed { .. } => format!("{} (unreadable)", entry.label()),
-                    };
-                    ui.selectable_value(&mut view.selected, slot, label);
+                    ui.selectable_value(&mut view.selected, slot, picker_label(entry));
                 }
             });
         if view.selected != before {
@@ -111,7 +108,7 @@ pub fn show(
     });
     match characters.get(view.selected) {
         None => {
-            ui.weak("No characters under main/.");
+            ui.weak("No characters under main/ or user/.");
         }
         Some(CharacterEntry::Failed { path, error, .. }) => {
             ui.colored_label(cx.palette.error, format!("{}: {error}", path.display()));
@@ -126,6 +123,21 @@ pub fn show(
             frame,
         ),
     }
+}
+
+/// The picker's entry: the name, the realm when it is not the main
+/// campaign (the same name can exist in both), and whether the file
+/// could be read.
+fn picker_label(entry: &CharacterEntry) -> String {
+    let realm = match entry.realm() {
+        Realm::Main => "",
+        Realm::Custom => " · custom game",
+    };
+    let state = match entry {
+        CharacterEntry::Loaded(_) => "",
+        CharacterEntry::Failed { .. } => " (unreadable)",
+    };
+    format!("{}{realm}{state}", entry.label())
 }
 
 fn access_badge(ui: &mut Ui, doc: &CharacterDoc, cx: &PaneCtx<'_>) {

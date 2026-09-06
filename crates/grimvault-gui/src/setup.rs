@@ -6,6 +6,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use grimvault_core::gdc::Realm;
 use grimvault_core::platform::{
     GAME_DIR_MARKER, SAVE_DIR_MARKERS, game_dir_candidates, save_dir_candidates,
     steam_cloud_save_dir,
@@ -103,10 +104,12 @@ impl SaveDir {
         self.0.join("reagents.gst")
     }
 
-    /// The directory of per-character folders.
+    /// The per-character folders of `realm`: `main/` for the main
+    /// campaign, `user/` for custom games (mods). Only `main/` is a
+    /// marker; `user/` appears once a custom-game character exists.
     #[must_use]
-    pub fn characters_dir(&self) -> PathBuf {
-        self.0.join("main")
+    pub fn characters_dir(&self, realm: Realm) -> PathBuf {
+        self.0.join(realm.dir_name())
     }
 }
 
@@ -289,7 +292,8 @@ mod tests {
         std::fs::create_dir_all(scratch.0.join("main")).unwrap();
         let save = SaveDir::parse(&scratch.0).unwrap();
         assert_eq!(save.transfer_stash(), scratch.0.join("transfer.gst"));
-        assert_eq!(save.characters_dir(), scratch.0.join("main"));
+        assert_eq!(save.characters_dir(Realm::Main), scratch.0.join("main"));
+        assert_eq!(save.characters_dir(Realm::Custom), scratch.0.join("user"));
     }
 
     #[test]

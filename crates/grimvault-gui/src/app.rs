@@ -23,6 +23,7 @@ use crate::documents::{
 };
 use crate::drag::{
     self, Applied, Containers, DragSource, DragState, DropTarget, Fit, Landing, Mode, Move,
+    OpenCharacter,
 };
 use crate::facts::FactsCache;
 use crate::grid::CELL_PX;
@@ -676,7 +677,13 @@ impl World {
             reagents: reagents.doc_mut().map(ReagentDoc::storage_mut),
             characters: characters
                 .iter_mut()
-                .map(|entry| entry.doc_mut().and_then(|doc| doc.file_mut().ok()))
+                .map(|entry| {
+                    let doc = entry.doc_mut()?;
+                    let realm = doc.realm();
+                    doc.file_mut()
+                        .ok()
+                        .map(|file| OpenCharacter { realm, file })
+                })
                 .collect(),
         };
         let carried = drag::peek(&containers, mv.source)

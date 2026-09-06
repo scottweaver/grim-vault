@@ -12,7 +12,7 @@ use std::error::Error;
 use std::fs;
 use std::path::Path;
 
-use grimvault_core::gdc::PlayerFile;
+use grimvault_core::gdc::{PlayerFile, Realm};
 use grimvault_core::gst::GstFile;
 
 use support::{cli_paths, describe, load_game_data};
@@ -26,7 +26,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let game_data = load_game_data(&paths.game_dir)?;
     let save_dir: &Path = &paths.save_dir;
 
-    let mut characters: Vec<_> = fs::read_dir(save_dir.join("main"))?
+    let mut characters: Vec<_> = Realm::ALL
+        .into_iter()
+        .filter_map(|realm| fs::read_dir(save_dir.join(realm.dir_name())).ok())
+        .flatten()
         .filter_map(Result::ok)
         .map(|entry| entry.path().join("player.gdc"))
         .filter(|path| path.is_file())

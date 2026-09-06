@@ -187,8 +187,14 @@ AaronHutchinson `decrypt-player.cpp`, gd-edit `gdc.clj`, dreeg
   (the item-bitmap footprint rule). Corroborated 2026-09-03 by item
   extents: the fixture's packed sacks reach exactly x+w = 12 / 8 and
   y+h = 8, the real saves stay within. `transfer::SackDimensions`.
-- Location: `save/main/_<Name>/player.gdc`; the game's own rotation
-  is `player.g00` / `player.g01` (never ours to touch).
+- Location: `save/main/_<Name>/player.gdc` (main campaign) or
+  `save/user/_<Name>/player.gdc` (custom games — every mod shares the
+  folder, and the header carries no mod name; confirmed 2026-09-06 on
+  the user's LootAscension character, which parses fully typed and
+  round-trips like a main one); the game's own rotation is
+  `player.g00`… (`.g06` observed; never ours to touch). A mod's own
+  stash and storage live beside them under `save/<Mod>/` with the mod
+  name inside each `.gst`.
 
 ### `transfer.gst` (shared stash), `formulas.gst`
 

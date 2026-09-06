@@ -53,6 +53,7 @@ On first run the app asks for two directories:
 
 - **Game dir** — the Grim Dawn install (contains `database/database.arz`).
 - **Save dir** — the folder holding `transfer.gst` and `main/`
+  (mod characters under `user/` are listed too)
   (`Documents/My Games/Grim Dawn/save`, or Steam cloud:
   `<Steam>/userdata/<account>/219990/remote/save`).
 

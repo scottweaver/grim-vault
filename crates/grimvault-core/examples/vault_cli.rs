@@ -18,8 +18,10 @@
 //!
 //! The `reagent` commands work the component / crafting-material
 //! storage, `reagents.gst`, the same way; the `sack` and `money`
-//! commands work a character's `main/_<character>/player.gdc`, which
-//! is written only when every block of it is typed.
+//! commands work a character's `player.gdc`, which is written only
+//! when every block of it is typed. `<character>` is `Name` or
+//! `main/Name` for a main-campaign character and `user/Name` for a
+//! custom-game (mod) character.
 //!
 //! Write policy. Each invocation is one load, so every file goes
 //! through `backup_first_write` under the `grimvault-bak` policy (five
@@ -35,12 +37,13 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use grimvault_core::bucket::{Bucket, Group};
 use grimvault_core::gamedata::GameData;
-use grimvault_core::gdc::PlayerFile;
+use grimvault_core::gdc::{PlayerFile, Realm};
 use grimvault_core::gst::{GstFile, ReagentStorage, TransferStash};
 use grimvault_core::item::Item;
 use grimvault_core::loaded::Loaded;
@@ -58,7 +61,8 @@ const USAGE: &str = "usage: vault_cli [--game DIR] [--save DIR] [--store FILE] \
                      | reagents | vault-reagent <index> <count> | place-reagent <id> \
                      | characters | vault-sack <character> <sack> <index> \
                      | place-sack <id> <character> <sack> [x y] | money <character> [<iron bits>]) \
-                     — paths not given come from the app's saved settings";
+                     — <character> is Name, main/Name or user/Name; paths not given come from \
+                     the app's saved settings";
 
 enum Command {
     List,
@@ -86,20 +90,57 @@ enum Command {
 enum CharacterCommand {
     List,
     VaultSack {
-        character: String,
+        character: CharacterArg,
         sack: SackIndex,
         index: ItemIndex,
     },
     PlaceSack {
         id: StoredItemId,
-        character: String,
+        character: CharacterArg,
         sack: SackIndex,
         pos: Option<GridPos>,
     },
     Money {
-        character: String,
+        character: CharacterArg,
         amount: Option<u32>,
     },
+}
+
+/// A character named on the command line: `Name` or `main/Name` for
+/// the main campaign, `user/Name` for a custom-game (mod) character.
+struct CharacterArg {
+    realm: Realm,
+    name: String,
+}
+
+impl CharacterArg {
+    fn parse(raw: &str) -> Self {
+        raw.split_once('/')
+            .and_then(|(dir, name)| Realm::parse_dir_name(dir).map(|realm| (realm, name)))
+            .map_or_else(
+                || Self {
+                    realm: Realm::Main,
+                    name: raw.to_owned(),
+                },
+                |(realm, name)| Self {
+                    realm,
+                    name: name.to_owned(),
+                },
+            )
+    }
+
+    fn path(&self, save_dir: &Path) -> PathBuf {
+        save_dir
+            .join(self.realm.dir_name())
+            .join(format!("_{}", self.name))
+            .join("player.gdc")
+    }
+}
+
+impl fmt::Display for CharacterArg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.realm.dir_name(), self.name)
+    }
 }
 
 struct Invocation {
@@ -216,9 +257,9 @@ fn run_character(
 ) -> Result<(), Box<dyn Error>> {
     match command {
         CharacterCommand::List => {
-            for path in character_paths(save_dir)? {
+            for (realm, path) in character_paths(save_dir)? {
                 let player = load_player(&path)?;
-                print_character(game_data, player.model());
+                print_character(game_data, realm, player.model());
             }
         }
         CharacterCommand::VaultSack {
@@ -226,13 +267,20 @@ fn run_character(
             sack,
             index,
         } => {
-            let path = character_path(save_dir, &character);
+            let path = character.path(save_dir);
             let mut player = load_player(&path)?;
-            let id = transfer::vault_from_sack(player.model_mut(), sack, index, store, now()?)?;
+            let id = transfer::vault_from_sack(
+                player.model_mut(),
+                character.realm,
+                sack,
+                index,
+                store,
+                now()?,
+            )?;
             println!("vaulted {character}'s sack {sack} item {index} as stored item {id}");
             write_store(store_path, store)?;
             write_player(&path, &player)?;
-            print_character(game_data, &reparse_player(&path)?);
+            print_character(game_data, character.realm, &reparse_player(&path)?);
             print_store(game_data, store);
         }
         CharacterCommand::PlaceSack {
@@ -241,7 +289,7 @@ fn run_character(
             sack,
             pos,
         } => {
-            let path = character_path(save_dir, &character);
+            let path = character.path(save_dir);
             let mut player = load_player(&path)?;
             let landed = match pos {
                 Some(pos) => {
@@ -263,11 +311,11 @@ fn run_character(
             );
             write_player(&path, &player)?;
             write_store(store_path, store)?;
-            print_character(game_data, &reparse_player(&path)?);
+            print_character(game_data, character.realm, &reparse_player(&path)?);
             print_store(game_data, store);
         }
         CharacterCommand::Money { character, amount } => {
-            let path = character_path(save_dir, &character);
+            let path = character.path(save_dir);
             let mut player = load_player(&path)?;
             let info = player
                 .model_mut()
@@ -292,21 +340,24 @@ fn run_character(
     Ok(())
 }
 
-fn character_path(save_dir: &Path, character: &str) -> PathBuf {
-    save_dir
-        .join("main")
-        .join(format!("_{character}"))
-        .join("player.gdc")
-}
-
-fn character_paths(save_dir: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(save_dir.join("main"))?
-        .flatten()
-        .map(|entry| entry.path().join("player.gdc"))
-        .filter(|path| path.is_file())
-        .collect();
-    paths.sort();
-    Ok(paths)
+/// Every character's file, `main/` then `user/`, each in folder
+/// order; an absent `user/` contributes nothing.
+fn character_paths(save_dir: &Path) -> Result<Vec<(Realm, PathBuf)>, Box<dyn Error>> {
+    let mut found = Vec::new();
+    for realm in Realm::ALL {
+        let dir = save_dir.join(realm.dir_name());
+        if !dir.is_dir() {
+            continue;
+        }
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)?
+            .flatten()
+            .map(|entry| entry.path().join("player.gdc"))
+            .filter(|path| path.is_file())
+            .collect();
+        paths.sort();
+        found.extend(paths.into_iter().map(|path| (realm, path)));
+    }
+    Ok(found)
 }
 
 fn load_player(path: &Path) -> Result<Loaded<PlayerFile>, Box<dyn Error>> {
@@ -353,10 +404,10 @@ fn reparse_player(path: &Path) -> Result<PlayerFile, Box<dyn Error>> {
     Ok(file)
 }
 
-fn print_character(game_data: &GameData, player: &PlayerFile) {
+fn print_character(game_data: &GameData, realm: Realm, player: &PlayerFile) {
     let header = player.header();
     println!(
-        "\ncharacter {} (level {}): {} iron bits",
+        "\ncharacter {} [{realm}] (level {}): {} iron bits",
         header.name,
         header.level,
         player.character_info().map_or(0, |info| info.money)
@@ -427,21 +478,21 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
         ("characters", []) => Command::Character(CharacterCommand::List),
         ("vault-sack", [character, sack, index]) => {
             Command::Character(CharacterCommand::VaultSack {
-                character: character.clone(),
+                character: CharacterArg::parse(character),
                 sack: SackIndex::new(sack.parse()?),
                 index: ItemIndex::new(index.parse()?),
             })
         }
         ("place-sack", [id, character, sack]) => Command::Character(CharacterCommand::PlaceSack {
             id: StoredItemId::new(id.parse()?),
-            character: character.clone(),
+            character: CharacterArg::parse(character),
             sack: SackIndex::new(sack.parse()?),
             pos: None,
         }),
         ("place-sack", [id, character, sack, x, y]) => {
             Command::Character(CharacterCommand::PlaceSack {
                 id: StoredItemId::new(id.parse()?),
-                character: character.clone(),
+                character: CharacterArg::parse(character),
                 sack: SackIndex::new(sack.parse()?),
                 pos: Some(GridPos {
                     x: x.parse()?,
@@ -450,11 +501,11 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
             })
         }
         ("money", [character]) => Command::Character(CharacterCommand::Money {
-            character: character.clone(),
+            character: CharacterArg::parse(character),
             amount: None,
         }),
         ("money", [character, amount]) => Command::Character(CharacterCommand::Money {
-            character: character.clone(),
+            character: CharacterArg::parse(character),
             amount: Some(amount.parse()?),
         }),
         _ => return Err(USAGE.into()),
@@ -650,8 +701,12 @@ fn bucket_of(game_data: &GameData, item: &Item) -> Bucket {
 fn origin_label(origin: &ItemOrigin) -> String {
     match origin {
         ItemOrigin::TransferStash { tab } => format!("transfer stash tab {tab}"),
-        ItemOrigin::Character { name, sack } => format!("character {name} sack {sack}"),
-        ItemOrigin::CharacterStash { name, tab } => format!("character {name} stash tab {tab}"),
+        ItemOrigin::Character { realm, name, sack } => {
+            format!("character {}/{name} sack {sack}", realm.dir_name())
+        }
+        ItemOrigin::CharacterStash { realm, name, tab } => {
+            format!("character {}/{name} stash tab {tab}", realm.dir_name())
+        }
         ItemOrigin::ReagentStorage => "component / crafting-material storage".to_string(),
         ItemOrigin::Unknown => "unknown".to_string(),
     }

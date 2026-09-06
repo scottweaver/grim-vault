@@ -38,18 +38,30 @@ Q&A). Items marked TBD are open questions, not decisions.
 ## Source of truth
 
 - The game's own files are the authoritative store for character
-  data: `save/main/_<Name>/player.gdc` (character),
+  data: `save/main/_<Name>/player.gdc` (main-campaign character) and
+  `save/user/_<Name>/player.gdc` (custom-game character — every mod
+  shares `user/`, and the file does not name a mod; added 2026-09-06),
   `save/transfer.gst` (shared stash), `save/reagents.gst` (the
   account-wide component and crafting-material storage), and the
   crafting files `save/formulas.gst` (blueprints) and
   `save/transmutes.gst` (illusions). The game owns them; this app is
-  a guest editor. `player.gdc`, `transfer.gst`, and `reagents.gst`
-  are the only game-owned files the app writes (`reagents.gst` added
-  2026-09-03 when block 20 was typed from the user's file — it is
-  item storage, the same role as the transfer stash);
-  `formulas.gst`, `transmutes.gst`, `playmenu.cpn`, and the
+  a guest editor. `player.gdc` (in either realm), `transfer.gst`, and
+  `reagents.gst` are the only game-owned files the app writes
+  (`reagents.gst` added 2026-09-03 when block 20 was typed from the
+  user's file — it is item storage, the same role as the transfer
+  stash); `formulas.gst`, `transmutes.gst`, `playmenu.cpn`, and the
   per-character `levels_world001.map/` trees are read-only until
-  renegotiated here. (2026-09-03)
+  renegotiated here. (2026-09-03) A character's realm is part of its
+  identity only through its folder, so every store record naming a
+  character carries the realm explicitly (`ItemOrigin`); a record
+  without one predates realms and can only be `main/`. (2026-09-06)
+  TBD (2026-09-06): each mod also keeps its own stash and storage
+  under `save/<Mod>/` (`transfer.gst`, `reagents.gst`,
+  `formulas.gst`, `transmutes.gst`, the mod name inside each file)
+  and its own record overlay `mods/<Mod>/database/<Mod>.arz`; the
+  app reads neither yet, so a mod-only item shows as an unknown
+  record. Reading them is a design dialog: which mod's stash a pane
+  shows, and where the mod overlay sits in the database layer order.
 - The game keeps its own backup rotation (`transfer.t00`–`.t09`,
   `player.g00`/`.g01`). Those slots are the game's: the app never
   writes, renames, or deletes them, and never treats one as a write

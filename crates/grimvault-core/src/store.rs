@@ -39,6 +39,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
+use crate::gdc::Realm;
+
 use crate::item::Item;
 use crate::transfer::{SackIndex, TabIndex};
 
@@ -102,13 +104,30 @@ pub enum ItemOrigin {
     /// A tab of `transfer.gst`.
     TransferStash { tab: TabIndex },
     /// A sack of a character's inventory (`player.gdc` block 3).
-    Character { name: String, sack: SackIndex },
+    Character {
+        #[serde(default = "realm_before_realms_were_recorded")]
+        realm: Realm,
+        name: String,
+        sack: SackIndex,
+    },
     /// A tab of a character's own stash (`player.gdc` block 4).
-    CharacterStash { name: String, tab: TabIndex },
+    CharacterStash {
+        #[serde(default = "realm_before_realms_were_recorded")]
+        realm: Realm,
+        name: String,
+        tab: TabIndex,
+    },
     /// The component / crafting-material storage, `reagents.gst`.
     ReagentStorage,
     /// Provenance not recorded.
     Unknown,
+}
+
+/// Origins written before 2026-09-06 name no realm; the app then read
+/// only `main/`, so such an origin can only be a main-campaign
+/// character.
+const fn realm_before_realms_were_recorded() -> Realm {
+    Realm::Main
 }
 
 /// One store entry: the item, its identity in the store, and its
@@ -497,20 +516,22 @@ mod tests {
     #[test]
     fn origins_are_tagged_by_kind() {
         let character = ItemOrigin::Character {
+            realm: Realm::Main,
             name: "Sif".into(),
             sack: SackIndex::new(2),
         };
         assert_eq!(
             serde_json::to_value(&character).unwrap(),
-            json!({ "kind": "character", "name": "Sif", "sack": 2 })
+            json!({ "kind": "character", "realm": "main", "name": "Sif", "sack": 2 })
         );
         let stash = ItemOrigin::CharacterStash {
+            realm: Realm::Custom,
             name: "Sif".into(),
             tab: TabIndex::new(1),
         };
         assert_eq!(
             serde_json::to_value(&stash).unwrap(),
-            json!({ "kind": "characterStash", "name": "Sif", "tab": 1 })
+            json!({ "kind": "characterStash", "realm": "custom", "name": "Sif", "tab": 1 })
         );
         assert_eq!(
             serde_json::to_value(ItemOrigin::Unknown).unwrap(),
@@ -519,6 +540,33 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ItemOrigin::ReagentStorage).unwrap(),
             json!({ "kind": "reagentStorage" })
+        );
+    }
+
+    #[test]
+    fn an_origin_without_a_realm_came_from_the_main_campaign() {
+        let origin: ItemOrigin =
+            serde_json::from_value(json!({ "kind": "character", "name": "Sif", "sack": 0 }))
+                .unwrap();
+        assert_eq!(
+            origin,
+            ItemOrigin::Character {
+                realm: Realm::Main,
+                name: "Sif".into(),
+                sack: SackIndex::new(0),
+            }
+        );
+        let origin: ItemOrigin = serde_json::from_value(
+            json!({ "kind": "characterStash", "realm": "custom", "name": "Zark", "tab": 3 }),
+        )
+        .unwrap();
+        assert_eq!(
+            origin,
+            ItemOrigin::CharacterStash {
+                realm: Realm::Custom,
+                name: "Zark".into(),
+                tab: TabIndex::new(3),
+            }
         );
     }
 }
