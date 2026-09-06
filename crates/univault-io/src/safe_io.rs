@@ -27,7 +27,8 @@
 
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -102,6 +103,44 @@ pub fn read_verified(path: &Path) -> io::Result<Vec<u8>> {
         None => Ok(bytes),
         Some(mismatch) => Err(io::Error::new(io::ErrorKind::InvalidData, mismatch)),
     }
+}
+
+/// Reads only the given byte ranges of a file, bypassing the local
+/// page cache, each checked against the file's own metadata before it
+/// is read — the way to take a few entries out of a very large
+/// archive without reading the rest. Returns the ranges' bytes in the
+/// order given.
+///
+/// # Errors
+///
+/// Any failure opening, seeking, or reading the file, and
+/// [`io::ErrorKind::InvalidData`] when a range reaches past the length
+/// the metadata reports — a stale or truncated view of the file — so
+/// the caller sees a failed read rather than a short one.
+pub fn read_ranges(path: &Path, ranges: &[Range<u64>]) -> io::Result<Vec<Vec<u8>>> {
+    let mut file = File::open(path)?;
+    set_nocache(&file);
+    let on_disk = file.metadata()?.len();
+    ranges
+        .iter()
+        .map(|range| {
+            if range.end > on_disk || range.start > range.end {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "range {}..{} lies outside a file whose metadata says {on_disk} bytes",
+                        range.start, range.end
+                    ),
+                ));
+            }
+            let len = usize::try_from(range.end - range.start)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "range too large"))?;
+            file.seek(SeekFrom::Start(range.start))?;
+            let mut bytes = vec![0; len];
+            file.read_exact(&mut bytes)?;
+            Ok(bytes)
+        })
+        .collect()
 }
 
 /// Backs `path` up beside itself, syncs the backup, prunes backups
@@ -487,6 +526,20 @@ mod tests {
         fs::write(&target, b"stash bytes").unwrap();
         assert_eq!(read_verified(&target).unwrap(), b"stash bytes");
         assert!(read_verified(&scratch.path("absent.dxb")).is_err());
+    }
+
+    #[test]
+    fn read_ranges_returns_each_range_and_refuses_one_past_the_end() {
+        let scratch = Scratch::new("ranges");
+        let target = scratch.path("UI.arc");
+        fs::write(&target, b"0123456789abcdef").unwrap();
+        assert_eq!(
+            read_ranges(&target, &[0..4, 10..16, 5..5]).unwrap(),
+            vec![b"0123".to_vec(), b"abcdef".to_vec(), Vec::new()]
+        );
+        let past_the_end = read_ranges(&target, &[0..4, 12..17]).unwrap_err();
+        assert_eq!(past_the_end.kind(), io::ErrorKind::InvalidData);
+        assert!(read_ranges(&scratch.path("absent.arc"), &[0..1, 2..3]).is_err());
     }
 
     #[test]

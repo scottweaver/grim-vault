@@ -8,4 +8,6 @@
 
 pub mod safe_io;
 
-pub use safe_io::{BackupPolicy, backup_first_write, read_verified, write_synced, write_uncached};
+pub use safe_io::{
+    BackupPolicy, backup_first_write, read_ranges, read_verified, write_synced, write_uncached,
+};

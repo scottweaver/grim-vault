@@ -14,8 +14,15 @@
 //! the archive's [`Codec`] (zlib for Titan Quest, LZ4 block for Grim
 //! Dawn — the layout is otherwise identical). A 0x03 byte where a
 //! name should start marks an inactive ("null file") entry.
+//!
+//! Two ways in: [`ArcFile`] holds the whole archive in memory and
+//! extracts on demand; [`ArcIndex`] is the directory alone, parsed
+//! from the header and the table region, and hands back the byte
+//! ranges an entry occupies so a shell can read a few entries out of
+//! a 240 MB archive without reading the rest.
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use crate::codec::{Codec, CodecError};
 use crate::ids::normalize;
@@ -25,8 +32,23 @@ use crate::reader::{ByteReader, ReadError};
 /// which contained files extract on demand.
 pub struct ArcFile {
     data: Vec<u8>,
+    index: ArcIndex,
+}
+
+/// The directory of a `.arc` archive without its contents: every
+/// active entry's name and where its bytes lie in the file.
+pub struct ArcIndex {
     codec: Codec,
     entries: HashMap<String, DirEntry>,
+}
+
+/// The counts and table offset from the fixed header — enough to know
+/// which byte range the directory tables occupy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArcHeader {
+    entry_count: usize,
+    part_count: usize,
+    toc_offset: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -36,15 +58,47 @@ struct Part {
     real_size: usize,
 }
 
+#[derive(Clone)]
 enum Storage {
     Stored { offset: usize },
     Parts(Vec<Part>),
 }
 
+#[derive(Clone)]
 struct DirEntry {
     name: String,
     real_size: usize,
     storage: Storage,
+}
+
+/// One entry's place in the archive file: the absolute byte ranges to
+/// read, which [`ArcIndex::assemble`] turns back into the file.
+#[derive(Clone)]
+pub struct Located {
+    entry: DirEntry,
+}
+
+impl Located {
+    /// The entry's name as the archive spells it.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.entry.name
+    }
+
+    /// The byte ranges holding the entry, in assembly order: one for a
+    /// stored entry, one per part otherwise.
+    #[must_use]
+    pub fn ranges(&self) -> Vec<Range<usize>> {
+        match &self.entry.storage {
+            Storage::Stored { offset } => {
+                std::iter::once(*offset..offset.saturating_add(self.entry.real_size)).collect()
+            }
+            Storage::Parts(parts) => parts
+                .iter()
+                .map(|part| part.offset..part.offset.saturating_add(part.compressed_size))
+                .collect(),
+        }
+    }
 }
 
 /// Errors from parsing an ARC archive or extracting a file from it.
@@ -60,6 +114,12 @@ pub enum ArcError {
     TruncatedDirectory,
     #[error("entry {name}: data range outside the file")]
     DataOutOfRange { name: String },
+    #[error("entry {name}: given {actual} byte ranges, the directory lists {expected}")]
+    RangeCount {
+        name: String,
+        expected: usize,
+        actual: usize,
+    },
     #[error("entry {name}: part {part}: decompression failed: {source}")]
     Decompress {
         name: String,
@@ -76,26 +136,60 @@ pub enum ArcError {
     Read(#[from] ReadError),
 }
 
-impl ArcFile {
-    /// Parses the archive directory. File contents stay in place until
-    /// [`ArcFile::file`] extracts them with `codec`.
+impl ArcHeader {
+    /// Bytes the header occupies at the start of the file.
+    pub const LEN: usize = 0x1C;
+
+    /// Parses the header from the first [`Self::LEN`] bytes of the
+    /// file (a longer slice is fine).
     ///
     /// # Errors
-    /// Any structural error in the header or directory tables.
-    pub fn parse(data: Vec<u8>, codec: Codec) -> Result<Self, ArcError> {
-        if data.len() < 0x21 || &data[..3] != b"ARC" {
+    /// [`ArcError::NotArc`] for a short or unmarked slice, an invalid
+    /// count or offset otherwise.
+    pub fn parse(bytes: &[u8]) -> Result<Self, ArcError> {
+        if bytes.len() < Self::LEN || &bytes[..3] != b"ARC" {
             return Err(ArcError::NotArc);
         }
-        let mut header = ByteReader::at(&data, 0x08);
-        let entry_count = count_field(header.read_i32()?, "entry")?;
-        let part_count = count_field(header.read_i32()?, "part")?;
-        let toc_offset = {
-            let offset = ByteReader::at(&data, 0x18).read_i32()?;
-            usize::try_from(offset).map_err(|_| ArcError::InvalidOffset { offset })?
-        };
+        let mut counts = ByteReader::at(bytes, 0x08);
+        let entry_count = count_field(counts.read_i32()?, "entry")?;
+        let part_count = count_field(counts.read_i32()?, "part")?;
+        let offset = ByteReader::at(bytes, 0x18).read_i32()?;
+        let toc_offset = usize::try_from(offset).map_err(|_| ArcError::InvalidOffset { offset })?;
+        Ok(Self {
+            entry_count,
+            part_count,
+            toc_offset,
+        })
+    }
 
-        let mut reader = ByteReader::at(&data, toc_offset);
-        let parts = (0..part_count)
+    /// The byte range of the directory tables — the part table, the
+    /// names, and the directory records — which run from the table
+    /// offset to the end of a `file_len`-byte file.
+    ///
+    /// # Errors
+    /// [`ArcError::InvalidOffset`] when the table offset lies past the
+    /// end of the file.
+    pub fn tables_range(&self, file_len: usize) -> Result<Range<usize>, ArcError> {
+        if self.toc_offset > file_len {
+            return Err(ArcError::InvalidOffset {
+                offset: i32::try_from(self.toc_offset).unwrap_or(i32::MAX),
+            });
+        }
+        Ok(self.toc_offset..file_len)
+    }
+}
+
+impl ArcIndex {
+    /// Parses the directory from the bytes of
+    /// [`ArcHeader::tables_range`]. Contents are located by
+    /// [`ArcIndex::locate`] and rebuilt by [`ArcIndex::assemble`] with
+    /// `codec`.
+    ///
+    /// # Errors
+    /// Any structural error in the directory tables.
+    pub fn parse(header: ArcHeader, tables: &[u8], codec: Codec) -> Result<Self, ArcError> {
+        let mut reader = ByteReader::at(tables, 0);
+        let parts = (0..header.part_count)
             .map(|_| {
                 let offset = count_field(reader.read_i32()?, "part offset")?;
                 let compressed_size = count_field(reader.read_i32()?, "part size")?;
@@ -109,16 +203,17 @@ impl ArcFile {
             .collect::<Result<Vec<_>, ArcError>>()?;
         let names_offset = reader.pos();
 
-        let directory_bytes = entry_count
+        let directory_bytes = header
+            .entry_count
             .checked_mul(44)
             .ok_or(ArcError::TruncatedDirectory)?;
-        let directory_start = data
+        let directory_start = tables
             .len()
             .checked_sub(directory_bytes)
             .ok_or(ArcError::TruncatedDirectory)?;
 
-        let raw_records = read_directory(&data, directory_start, entry_count)?;
-        let mut names = ByteReader::at(&data, names_offset);
+        let raw_records = read_directory(tables, directory_start, header.entry_count)?;
+        let mut names = ByteReader::at(tables, names_offset);
         let mut entries = HashMap::new();
         for raw in raw_records {
             let Some(storage) = raw.storage(&parts) else {
@@ -136,11 +231,7 @@ impl ArcFile {
                 },
             );
         }
-        Ok(Self {
-            data,
-            codec,
-            entries,
-        })
+        Ok(Self { codec, entries })
     }
 
     /// The codec compressed parts inflate with.
@@ -149,37 +240,61 @@ impl ArcFile {
         self.codec
     }
 
-    /// Extracts one contained file by its internal path (matched
+    /// Where an entry lies, by its internal path (matched
     /// case-insensitively with `/` and `\` interchangeable). `None`
     /// when the archive has no such entry.
     #[must_use]
-    pub fn file(&self, name: &str) -> Option<Result<Vec<u8>, ArcError>> {
-        let entry = self.entries.get(&normalize(name))?;
-        Some(self.extract(entry))
+    pub fn locate(&self, name: &str) -> Option<Located> {
+        self.entries.get(&normalize(name)).map(|entry| Located {
+            entry: entry.clone(),
+        })
     }
 
+    /// Every active entry's name, in no particular order.
     pub fn file_names(&self) -> impl Iterator<Item = &str> {
         self.entries.values().map(|entry| entry.name.as_str())
     }
 
-    fn extract(&self, entry: &DirEntry) -> Result<Vec<u8>, ArcError> {
+    /// Rebuilds an entry from the bytes of each of its
+    /// [`Located::ranges`], in order: a stored entry is copied, parts
+    /// are inflated and concatenated, and the result is checked
+    /// against the directory's size.
+    ///
+    /// # Errors
+    /// [`ArcError::RangeCount`] when the slices do not pair up with the
+    /// ranges, [`ArcError::DataOutOfRange`] when a slice is not the
+    /// length of its range, then the decompression and size errors of
+    /// extraction.
+    pub fn assemble(&self, located: &Located, ranges: &[&[u8]]) -> Result<Vec<u8>, ArcError> {
+        let entry = &located.entry;
         let out_of_range = || ArcError::DataOutOfRange {
             name: entry.name.clone(),
         };
+        let expected = match &entry.storage {
+            Storage::Stored { .. } => 1,
+            Storage::Parts(parts) => parts.len(),
+        };
+        if ranges.len() != expected {
+            return Err(ArcError::RangeCount {
+                name: entry.name.clone(),
+                expected,
+                actual: ranges.len(),
+            });
+        }
         match &entry.storage {
-            Storage::Stored { offset } => offset
-                .checked_add(entry.real_size)
-                .and_then(|end| self.data.get(*offset..end))
-                .map(<[u8]>::to_vec)
-                .ok_or_else(out_of_range),
+            Storage::Stored { .. } => {
+                if ranges[0].len() == entry.real_size {
+                    Ok(ranges[0].to_vec())
+                } else {
+                    Err(out_of_range())
+                }
+            }
             Storage::Parts(parts) => {
                 let mut out = Vec::with_capacity(entry.real_size);
-                for (index, part) in parts.iter().enumerate() {
-                    let compressed = part
-                        .offset
-                        .checked_add(part.compressed_size)
-                        .and_then(|end| self.data.get(part.offset..end))
-                        .ok_or_else(out_of_range)?;
+                for (index, (part, compressed)) in parts.iter().zip(ranges).enumerate() {
+                    if compressed.len() != part.compressed_size {
+                        return Err(out_of_range());
+                    }
                     let inflated = self.inflate_part(part, compressed).map_err(|source| {
                         ArcError::Decompress {
                             name: entry.name.clone(),
@@ -212,6 +327,50 @@ impl ArcFile {
             Codec::Lz4Block if compressed.len() == part.real_size => Ok(compressed.to_vec()),
             Codec::Zlib | Codec::Lz4Block => self.codec.decompress(compressed, part.real_size),
         }
+    }
+}
+
+impl ArcFile {
+    /// Parses the archive directory. File contents stay in place until
+    /// [`ArcFile::file`] extracts them with `codec`.
+    ///
+    /// # Errors
+    /// Any structural error in the header or directory tables.
+    pub fn parse(data: Vec<u8>, codec: Codec) -> Result<Self, ArcError> {
+        let header = ArcHeader::parse(&data)?;
+        let tables = header.tables_range(data.len())?;
+        let index = ArcIndex::parse(header, &data[tables], codec)?;
+        Ok(Self { data, index })
+    }
+
+    /// The codec compressed parts inflate with.
+    #[must_use]
+    pub fn codec(&self) -> Codec {
+        self.index.codec()
+    }
+
+    /// Extracts one contained file by its internal path (matched
+    /// case-insensitively with `/` and `\` interchangeable). `None`
+    /// when the archive has no such entry.
+    #[must_use]
+    pub fn file(&self, name: &str) -> Option<Result<Vec<u8>, ArcError>> {
+        let located = self.index.locate(name)?;
+        let slices: Option<Vec<&[u8]>> = located
+            .ranges()
+            .into_iter()
+            .map(|range| self.data.get(range))
+            .collect();
+        Some(match slices {
+            Some(slices) => self.index.assemble(&located, &slices),
+            None => Err(ArcError::DataOutOfRange {
+                name: located.name().to_string(),
+            }),
+        })
+    }
+
+    /// Every active entry's name, in no particular order.
+    pub fn file_names(&self) -> impl Iterator<Item = &str> {
+        self.index.file_names()
     }
 }
 
@@ -486,6 +645,25 @@ mod tests {
         [SPLIT_A, SPLIT_B].concat()
     }
 
+    /// The ranged path a shell takes: header, tables, then only the
+    /// entry's own bytes.
+    fn index_of(file: &[u8], codec: Codec) -> ArcIndex {
+        let header = ArcHeader::parse(&file[..ArcHeader::LEN]).unwrap();
+        let tables = header.tables_range(file.len()).unwrap();
+        ArcIndex::parse(header, &file[tables], codec).unwrap()
+    }
+
+    fn read_through_index(file: &[u8], codec: Codec, name: &str) -> Result<Vec<u8>, ArcError> {
+        let index = index_of(file, codec);
+        let located = index.locate(name).unwrap();
+        let slices: Vec<&[u8]> = located
+            .ranges()
+            .into_iter()
+            .map(|range| &file[range])
+            .collect();
+        index.assemble(&located, &slices)
+    }
+
     #[test]
     fn extracts_stored_entries() {
         for codec in CODECS {
@@ -504,6 +682,67 @@ mod tests {
                 "{codec:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_index_locates_and_assembles_exactly_what_the_file_extracts() {
+        for codec in CODECS {
+            let file = sample_arc(codec);
+            assert_eq!(
+                read_through_index(&file, codec, "text/stored.txt").unwrap(),
+                STORED
+            );
+            assert_eq!(
+                read_through_index(&file, codec, "TEXT\\SPLIT.TXT").unwrap(),
+                split_full(),
+                "{codec:?}"
+            );
+            let index = index_of(&file, codec);
+            assert_eq!(index.locate("text\\split.txt").unwrap().ranges().len(), 2);
+            assert!(index.locate("text\\missing.txt").is_none());
+            let mut names: Vec<&str> = index.file_names().collect();
+            names.sort_unstable();
+            assert_eq!(names, vec!["text\\split.txt", "text\\stored.txt"]);
+        }
+    }
+
+    #[test]
+    fn assembling_from_the_wrong_slices_is_refused() {
+        let file = sample_arc(Codec::Lz4Block);
+        let index = index_of(&file, Codec::Lz4Block);
+        let split = index.locate("text\\split.txt").unwrap();
+        assert!(matches!(
+            index.assemble(&split, &[SPLIT_A]),
+            Err(ArcError::RangeCount {
+                expected: 2,
+                actual: 1,
+                ..
+            })
+        ));
+        let ranges = split.ranges();
+        assert!(matches!(
+            index.assemble(&split, &[&file[ranges[0].clone()], b"short"]),
+            Err(ArcError::DataOutOfRange { .. })
+        ));
+        let stored = index.locate("text\\stored.txt").unwrap();
+        assert!(matches!(
+            index.assemble(&stored, &[b"wrong length"]),
+            Err(ArcError::DataOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn the_header_needs_its_full_length_and_a_table_inside_the_file() {
+        let file = sample_arc(Codec::Zlib);
+        assert!(matches!(
+            ArcHeader::parse(&file[..ArcHeader::LEN - 1]),
+            Err(ArcError::NotArc)
+        ));
+        let header = ArcHeader::parse(&file).unwrap();
+        assert!(matches!(
+            header.tables_range(ArcHeader::LEN),
+            Err(ArcError::InvalidOffset { .. })
+        ));
     }
 
     #[test]
