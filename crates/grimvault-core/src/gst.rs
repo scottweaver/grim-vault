@@ -19,17 +19,27 @@
 //! file. A modelled block at a version this crate does not lay out is
 //! carried opaquely. `formulas.gst` is **not** obfuscated at all — it
 //! is a plaintext `begin_block` / `end_block` key-value format — and
-//! is refused with [`GstError::PlaintextKeyValueFormat`].
+//! is refused here with [`GstError::PlaintextKeyValueFormat`];
+//! [`crate::formulas`] reads it.
 
 use std::fmt;
 
 use thiserror::Error;
+use univault_engine::ids::normalize;
 
 use crate::block::{
     Dispatch, OpaqueBlock, OpaqueReason, SaveEncodeError, StashTab, length_word, read_block,
 };
 use crate::crypto::{BlockId, DecodeError, Decoder, Encoder};
 use crate::item::ContainerVersion;
+
+/// Whether an add to a record list — the blueprint list, the illusion
+/// collection — changed it. Both are sets the game only grows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Added {
+    Added,
+    AlreadyKnown,
+}
 
 const TRANSFER_STASH_MIN_VERSION: u32 = 5;
 const PLAINTEXT_PREAMBLE: &[u8] = b"\x0b\x00\x00\x00begin_block";
@@ -300,9 +310,9 @@ impl IllusionSlot {
     }
 }
 
-/// Block 19: the illusion collection (`transmutes.gst`). Typed so the
-/// file is understood, but read-only per ARCHITECTURE.md — nothing in
-/// this crate edits it.
+/// Block 19: the illusion collection (`transmutes.gst`). Writable
+/// since 2026-09-06 for adds only — [`crate::illusion`] holds the
+/// rule for which list a record joins; nothing removes an entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Illusions {
     /// Layout version.
@@ -348,6 +358,44 @@ impl Illusions {
     #[must_use]
     pub fn total_count(&self) -> usize {
         self.slots.iter().map(|slot| slot.records.len()).sum()
+    }
+
+    /// The list stored under a slot id, when the file has one.
+    #[must_use]
+    pub fn slot(&self, id: u32) -> Option<&IllusionSlot> {
+        self.slots.iter().find(|slot| slot.slot == id)
+    }
+
+    /// Whether any list holds `record`; record paths compare the way
+    /// the game's database keys do (case-insensitive, either slash).
+    #[must_use]
+    pub fn contains(&self, record: &str) -> bool {
+        let wanted = normalize(record);
+        self.slots
+            .iter()
+            .flat_map(|slot| slot.records.iter())
+            .any(|listed| normalize(listed) == wanted)
+    }
+
+    /// Appends `record` to the list under `slot` — created at the end
+    /// of the file when absent — unless some list already holds it.
+    pub fn add(&mut self, slot: u32, record: String) -> Added {
+        if self.contains(&record) {
+            return Added::AlreadyKnown;
+        }
+        let position = self
+            .slots
+            .iter()
+            .position(|listed| listed.slot == slot)
+            .unwrap_or_else(|| {
+                self.slots.push(IllusionSlot {
+                    slot,
+                    records: Vec::new(),
+                });
+                self.slots.len() - 1
+            });
+        self.slots[position].records.push(record);
+        Added::Added
     }
 }
 
@@ -524,11 +572,20 @@ impl GstFile {
         })
     }
 
-    /// Block 19, when typed. Read-only: there is no `_mut` accessor,
-    /// as `transmutes.gst` is not a file this app writes.
+    /// Block 19, when typed.
     #[must_use]
     pub fn illusions(&self) -> Option<&Illusions> {
         self.blocks.iter().find_map(|block| match block {
+            GstBlock::Illusions(illusions) => Some(illusions),
+            GstBlock::TransferStash(_) | GstBlock::ReagentStorage(_) | GstBlock::Opaque(_) => None,
+        })
+    }
+
+    /// Block 19 for editing, when typed; see
+    /// [`GstFile::transfer_stash_mut`] for the write rule.
+    #[must_use]
+    pub fn illusions_mut(&mut self) -> Option<&mut Illusions> {
+        self.blocks.iter_mut().find_map(|block| match block {
             GstBlock::Illusions(illusions) => Some(illusions),
             GstBlock::TransferStash(_) | GstBlock::ReagentStorage(_) | GstBlock::Opaque(_) => None,
         })
@@ -734,6 +791,35 @@ mod tests {
         assert_eq!(illusions.slots.len(), 2);
         assert_eq!(illusions.total_count(), 2);
         assert_eq!(parsed.blocks()[0].id(), BlockId::ILLUSIONS);
+    }
+
+    #[test]
+    fn edits_through_illusions_mut_are_encoded() {
+        let mut file = illusion_sample();
+        let illusions = file.illusions_mut().unwrap();
+        assert!(illusions.contains("RECORDS\\ITEMS\\GEARHEAD\\A10_HEAD001.DBR"));
+        assert_eq!(illusions.slot(15).unwrap().records.len(), 0);
+        assert!(illusions.slot(9).is_none());
+        assert_eq!(
+            illusions.add(1, "records/items/gearhead/a10_head001.dbr".into()),
+            Added::AlreadyKnown
+        );
+        assert_eq!(
+            illusions.add(
+                15,
+                "records/items/gearaccessories/medals/a01_medal.dbr".into()
+            ),
+            Added::Added
+        );
+        assert_eq!(
+            illusions.add(9, "records/items/gearweapons/swords/a01_sword.dbr".into()),
+            Added::Added
+        );
+        assert_eq!(illusions.slots.len(), 3);
+        assert_eq!(illusions.slots[2].slot, 9);
+        assert_eq!(illusions.total_count(), 4);
+        let reparsed = GstFile::parse(&file.encode().unwrap()).unwrap();
+        assert_eq!(reparsed, file);
     }
 
     #[test]

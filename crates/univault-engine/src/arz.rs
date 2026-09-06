@@ -301,6 +301,16 @@ impl ArzFile {
         self.order.iter().map(|key| &self.entries[key].id)
     }
 
+    /// Every record's id with its class string, in record-table order,
+    /// straight from the table — a whole-database survey by class
+    /// without inflating a single record.
+    pub fn record_types(&self) -> impl Iterator<Item = (&RecordId, &str)> {
+        self.order.iter().map(|key| {
+            let entry = &self.entries[key];
+            (&entry.id, entry.record_type.as_str())
+        })
+    }
+
     /// Number of records in the table.
     #[must_use]
     pub fn len(&self) -> usize {

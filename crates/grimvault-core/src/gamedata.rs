@@ -18,7 +18,8 @@
 //! level gate, and the icon whose pixel size defines the footprint is
 //! `bitmap` for gear and materials, `relicBitmap` for components
 //! (`ItemRelic`, whose `shardBitmap` is the partial piece older game
-//! versions dropped), `artifactBitmap` for relics, `emptyBitmap` for
+//! versions dropped), `artifactBitmap` for relics,
+//! `artifactFormulaBitmapName` for blueprints, `emptyBitmap` for
 //! transmuters (see [`BITMAP_VARIABLES`]).
 
 use std::fmt;
@@ -113,8 +114,15 @@ impl BitmapPath {
 /// The variables an item record may name its icon by, in lookup
 /// order: gear and crafting materials use `bitmap`, components
 /// (`ItemRelic`) `relicBitmap`, relics (`ItemArtifact`)
-/// `artifactBitmap`, transmuters `emptyBitmap`.
-pub const BITMAP_VARIABLES: [&str; 4] = ["bitmap", "relicBitmap", "artifactBitmap", "emptyBitmap"];
+/// `artifactBitmap`, blueprints (`ItemArtifactFormula`)
+/// `artifactFormulaBitmapName`, transmuters `emptyBitmap`.
+pub const BITMAP_VARIABLES: [&str; 5] = [
+    "bitmap",
+    "relicBitmap",
+    "artifactBitmap",
+    "artifactFormulaBitmapName",
+    "emptyBitmap",
+];
 
 /// Grid footprint of an item in inventory cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -300,6 +308,29 @@ impl GameData {
             .filter(move |id| seen.insert(normalize(id.as_str())))
     }
 
+    /// Every record id with its table class, from the topmost layer
+    /// that defines each id, without inflating any record. The table's
+    /// class is the record's `Class` variable (checked on the user's
+    /// blueprint and illusion entries, 2026-09-06).
+    pub fn record_types(&self) -> impl Iterator<Item = (&RecordId, &str)> {
+        let mut seen = std::collections::HashSet::new();
+        self.databases
+            .iter()
+            .rev()
+            .flat_map(ArzFile::record_types)
+            .filter(move |(id, _)| seen.insert(normalize(id.as_str())))
+    }
+
+    /// The records of one table class, see [`Self::record_types`].
+    pub fn record_ids_of_type<'a>(
+        &'a self,
+        record_type: &'a str,
+    ) -> impl Iterator<Item = &'a RecordId> + 'a {
+        self.record_types()
+            .filter(move |(_, found)| *found == record_type)
+            .map(|(id, _)| id)
+    }
+
     #[must_use]
     pub fn tag_text(&self, tag: &str) -> Option<&str> {
         self.text.get(tag)
@@ -434,9 +465,60 @@ fn strip_caret_codes(label: &str) -> String {
     out
 }
 
+/// A one-layer database for the rule modules' tests: records by path,
+/// table class, and string variables; no text, no bitmaps, so a name
+/// resolves to its tag.
+#[cfg(test)]
+pub(crate) mod fixture {
+    use univault_engine::arz::fixture::{ArzBuilder, Values};
+    use univault_engine::arz::{ArzDialect, ArzFile};
+    use univault_engine::text::TextDb;
+
+    use super::GameData;
+
+    /// A record's path, its table class, and its string variables.
+    pub(crate) type Record<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    pub(crate) fn game_with(records: &[Record<'_>]) -> GameData {
+        let mut builder = ArzBuilder::new(ArzDialect::grim_dawn());
+        for (id, class, strings) in records {
+            let mut variables: Vec<(&str, Values<'_>)> =
+                vec![("Class", Values::Strings(std::slice::from_ref(class)))];
+            variables.extend(
+                strings
+                    .iter()
+                    .map(|(name, value)| (*name, Values::Strings(std::slice::from_ref(value)))),
+            );
+            builder.record(id, class, &variables);
+        }
+        let database = ArzFile::parse(builder.build(), ArzDialect::grim_dawn()).unwrap();
+        GameData::from_parts(vec![database], TextDb::new(), Vec::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_ids_of_type_reads_the_table_and_the_class_agrees() {
+        let game = fixture::game_with(&[
+            ("records/a.dbr", "ItemArtifactFormula", &[]),
+            ("records/b.dbr", "ArmorProtective_Head", &[]),
+            ("records/c.dbr", "ItemArtifactFormula", &[]),
+        ]);
+        let found: Vec<&str> = game
+            .record_ids_of_type("ItemArtifactFormula")
+            .map(RecordId::as_str)
+            .collect();
+        assert_eq!(found, ["records/a.dbr", "records/c.dbr"]);
+        let info = game
+            .item_info(&RecordId::parse("records/c.dbr".into()).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(info.class.unwrap().as_str(), "ItemArtifactFormula");
+        assert_eq!(info.name, "c");
+    }
 
     #[test]
     fn shipped_layers_run_base_then_each_expansion() {

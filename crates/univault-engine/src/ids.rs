@@ -41,6 +41,12 @@ impl RecordId {
     }
 }
 
+impl std::fmt::Display for RecordId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The RNG seed rolled when an item dropped; fixes its stat rolls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ItemSeed(i32);

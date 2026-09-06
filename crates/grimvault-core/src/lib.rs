@@ -9,6 +9,12 @@
 //! the loaded bytes exactly, and [`loaded`] makes that a precondition
 //! of editing.
 //!
+//! [`formulas`] is `formulas.gst`, the one shared file that is plain
+//! key/value text rather than a rolling-XOR save; [`blueprint`] and
+//! [`illusion`] are the rules for what the database admits into it
+//! and into `transmutes.gst`, with the add / export / import ops, and
+//! [`interchange`] the envelope of this app's own JSON documents.
+//!
 //! [`gamedata`] is the layered record database, localization, and
 //! item bitmaps, resolved into names, rarity, and footprints.
 //!
@@ -23,13 +29,17 @@
 
 pub mod block;
 pub mod blocks;
+pub mod blueprint;
 pub mod bucket;
 pub mod campaign;
 pub mod crypto;
+pub mod formulas;
 pub mod gamedata;
 pub mod gdc;
 pub mod gds;
 pub mod gst;
+pub mod illusion;
+pub mod interchange;
 pub mod item;
 pub mod loaded;
 pub mod platform;
