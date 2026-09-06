@@ -402,20 +402,31 @@ so the next reader can find the spot; nothing below is a transcription.
     `ItemClass.getClassInt` enumerates the record `Class` values
     (`ArmorProtective_Head` … `WeaponHunting_Ranged2h`,
     `ItemArtifact`, `ItemRelic`, …).
-- **Level, XP, and respec math is data-driven** — all from
-  `records/creatures/pc/playerlevels.dbr`: `experienceLevelEquation`
-  (an expression in `playerLevel`, evaluated with exp4j; a small
-  evaluator is needed on our side), `characterModifierPoints` /
-  `skillModifierPoints` (attribute and skill points per level;
-  `DBEngineLevel` sums them over a level range), `strengthIncrement`
-  / `dexterityIncrement` / `intelligenceIncrement` / `lifeIncrement`
-  / `manaIncrement` (what one point buys; the attribute buttons
-  also move health and energy by them), `characterStrength` /
-  `characterDexterity` / `characterIntelligence` / `characterLife` /
-  `characterMana` (base values), `maxDevotionPoints`. Mastery reset
+- **Level, XP, and respec math is data-driven** — from **two**
+  records (`ARZRecord.isPlayerEngine`):
+  `records/creatures/pc/playerlevels.dbr` carries
+  `experienceLevelEquation` (an expression in `playerLevel`,
+  evaluated with exp4j; a small evaluator is needed on our side),
+  `characterModifierPoints` / `skillModifierPoints` (attribute and
+  skill points per level; `DBEngineLevel` sums them over a level
+  range), `strengthIncrement` / `dexterityIncrement` /
+  `intelligenceIncrement` / `lifeIncrement` / `manaIncrement` (what
+  one point buys), `maxDevotionPoints`, `maxPlayerLevel`; and
+  `records/creatures/pc/malepc01.dbr` carries the base values
+  `characterStrength` / `characterDexterity` /
+  `characterIntelligence` / `characterLife` / `characterMana` and
+  the mastery list `skillTree1..N` (the first draft of this note put
+  the base values in `playerlevels.dbr`; they are not there — see
+  "Respec" below, verified 2026-09-06). Its attribute buttons move
+  health by `lifeIncrement` on physique and energy by
+  `manaIncrement` on spirit only — an approximation the real saves
+  contradict (below). Mastery reset
   (`GDCharSkillList.refundMastery`): every skill of the mastery's
   `DBSkillTree` is removed from block 8, the levels of the
-  non-granted ones summed and returned to block 2's skill points.
+  non-granted ones summed and returned to block 2's skill points;
+  `masteriesAllowed` and the header's class tag are left alone, and
+  `GDChar.setLevel` recomputes `masteriesAllowed` from the level
+  alone (1 above level 1, 2 above level 9).
 - **Seeds:** `GDRandomUniform` is the Park–Miller minimal-standard
   generator (16807, 2³¹ − 1, Schrage's split) used to mint new item
   seeds; its own docs say the seed → stat-roll mapping is unknown to
@@ -469,6 +480,94 @@ so the next reader can find the spot; nothing below is a transcription.
   `i16`, then `hardcore`, an expansion byte, a mod name, and
   version-gated extras; recorded, not implemented.
 
+## Respec: attributes and masteries — 2026-09-06
+
+Established for `grimvault-core::respec` (the plain full refunds)
+from the user's install — every value below is identical in
+`database.arz`, `GDX1.arz`, `GDX2.arz`, and `GDX3.arz` unless a layer
+is named — and from the vendored fixture (Laurana, level 100, classes
+05 + 06) plus the five real saves (two fresh level-1 characters; Sif,
+level 8, class 10; Zark, level 78, classes 03 + 06; the mod Zark,
+level 93, classes 03 + 06). GD Stash's rules were the starting point
+and were corrected where the saves disagreed.
+
+- **The two records.** `records/creatures/pc/playerlevels.dbr`
+  (template `experiencelevelcontrol.tpl`): `strengthIncrement` =
+  `dexterityIncrement` = `intelligenceIncrement` = 8;
+  `lifeIncrement` 20, `lifeIncrementDexterity` 8,
+  `lifeIncrementIntelligence` 12; `manaIncrement` 16;
+  `characterModifierPoints` = [1]; `skillModifierPoints` an array
+  whose entry *i* is the skill points granted on reaching level
+  *i* + 2 — 3 through level 50, 2 through level 90, 1 after;
+  `maxDevotionPoints` 50 in the base game, 55 from `gdx1` on;
+  `maxPlayerLevel` 85, then 100; `experienceLevelEquation`
+  `(((((playerLevel*playerLevel*playerLevel)^1.16)*32)+((playerLevel*playerLevel)*300))*0.1)+36`.
+  It has **no** base attribute and **no** mastery list.
+  `records/creatures/pc/malepc01.dbr` (template `player.tpl`;
+  `femalepc01.dbr` is identical in every field named here):
+  `characterStrength` = `characterDexterity` =
+  `characterIntelligence` = 50.0, `characterLife` = `characterMana` =
+  250.0, and `skillTree1`–`skillTree6` in the base game, up to
+  `skillTree8` in `gdx1`, `skillTree9` in `gdx2`, `skillTree10` in
+  `gdx3`, each `records/skills/playerclassNN/_classtree_classNN.dbr`
+  (the game's own mastery numbering, which the header class tag
+  spells). `respec::RespecRules` reads exactly these two and refuses
+  when a record or field is missing.
+- **Block 2's health and energy are the base pools the points
+  bought, not current values.** On every non-fresh save, with
+  *p* = (physique − 50) / 8, *c* = (cunning − 50) / 8, *s* =
+  (spirit − 50) / 8: health = 250 + 20*p* + 8*c* + 12*s* and energy =
+  250 + 16*s*, exactly — Laurana 906 / 50 / 50 → 2390 / 250; Zark
+  522 / 50 / 122 → 1538 / 394; the mod Zark 666 / 50 / 146 → 1934 /
+  442; Sif 66 / 50 / 50 → 290 / 250. The spirit term is what GD
+  Stash's buttons miss. `reset_attributes` derives the spent points
+  from the attributes themselves (the total is not a function of
+  level: 108 at level 100, 80 at 78, 95 at 93, 7 at 8 — level − 1
+  plus quest rewards), refuses unless each attribute is the base
+  plus whole 8-point steps and both pools match the formula, then
+  puts all five back to the base and adds the points to
+  `attribute_points_unspent`.
+- **Mastery membership is the tree.** A tree record (type
+  `SkillTree`) lists its skills as `skillName1..N` — with duplicates,
+  it is a grid of buttons — including the mastery bar itself
+  (`_classtraining_classNN.dbr`, template `skill_mastery.tpl`, max
+  level 50). A member's `grantedSkills` are the skills the mastery
+  hands out for free: in the shipped trees only the four
+  `skill_shapeshift.tpl` skills of class 10 (`werewolf1` grants
+  `werewolf1_skill01_claws` and `_skill02_charge`, `wereraven1` its
+  icicles and ice ring), and they are listed as members too. No tree
+  names a record outside its own `records/skills/playerclassNN/`
+  folder, so the folder rule and the tree rule remove the same
+  skills and refund the same points on every sample: the fixture 27
+  skills / 248 points, Sif 6 / 15 (claws and charge at level 6 each
+  leave unrefunded; 15 + 6 unspent = 21 = 7 level-ups × 3), Zark
+  27 / 198, the mod Zark 27 / 232. `skillsecondary_petmodifier.tpl`
+  members (`totem2_petmodifier.dbr`) cost a point like any other.
+  `reset_masteries` removes every member and granted skill of every
+  tree, adds the levels of the non-granted ones to
+  `skill_points_unspent`, and leaves devotions,
+  `records/skills/default/*` (8 per character), the 46
+  `itemskillsgdx3/potionmodifiers/*` entries, item skills,
+  sub-skills, and both reclamation counters as they are.
+- **`masteries_allowed` is the level gate, not the chosen count.**
+  Observed 0 on both fresh level-1 characters, 1 on Sif (level 8, one
+  mastery), 2 on the three two-mastery characters (levels 78, 93,
+  100) — consistent with "1 from level 2, 2 from level 10", which is
+  how GD Stash recomputes it on a level edit while its mastery
+  refund never touches it. The reset therefore keeps it: with the
+  mastery skills gone and the gate still 2, the game has room to
+  offer both choices again; zeroing it on a level-93 character would
+  leave nothing to raise it. Unverified in-game (below).
+- **The header's `class_tag`** is `tagSkillClassName` followed by the
+  two-digit indices of the chosen masteries (`10` for Sif's one,
+  `0306`, `0506` for two) and empty with none; the game derives it
+  from block 8, so the mastery reset clears it. GD Stash writes it
+  back unchanged.
+- **Left alone on purpose:** block 14 hotbar slots that named a
+  removed skill, and block 16's skill map — GD Stash leaves both too,
+  and the game clears hotbar slots itself when a skill is refunded
+  in-game.
+
 ## Rust prior art (2026-09-03)
 
 - crates.io: nothing for Grim Dawn or Titan Quest ARZ/ARC/save.
@@ -485,7 +584,9 @@ and decoder; lib-gddb GPL-3.0 and ARZ/ARC-only scope; marius00/iagd
 MIT and the absence of a C# save decoder; GD Stash closed source
 (its jar and docs carry no license text; decompiles cleanly, read
 eyes-only); block 19's slot ids (GD Stash's constants agree with the
-nine observed); GD
+nine observed); the respec rules — both records' values on every
+layer, the health / energy formula and the tree membership on every
+real save; GD
 ARZ/ARC header and entry layouts, LZ4-block compression, the extra
 decompressed-size field; TQ zlib + 2-byte ARC skip; the full XOR
 scheme and block/checksum semantics; GD item field order including
@@ -500,7 +601,11 @@ zero-count entry or drops it (this app drops it; GD Stash does not
 say); which of block 16's two word pairs is the v12 addition (GD
 Stash and this crate name them the other way round); the shrine
 lists' restored / discovered split (GD Stash's reading, not yet seen
-in-game); whether IAGD ever shipped
+in-game); whether the game accepts a reset character — re-offers the
+mastery choice with `masteries_allowed` kept at 2, tolerates the
+cleared class tag, and drops hotbar slots that name a removed skill
+(no file this app wrote has been loaded by the game yet); whether
+IAGD ever shipped
 `GDCryptoDataBuffer.cs` itself (inferred from GDParser's derived
 file); GD Stash's Nexus/ModDB permission text (HTTP 403); whether the "multiple count
 groups" string-table loop in gdlc/lib-gddb reflects real files or
