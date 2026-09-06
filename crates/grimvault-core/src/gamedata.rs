@@ -20,8 +20,14 @@
 //! (`ItemRelic`, whose `shardBitmap` is the partial piece older game
 //! versions dropped), `artifactBitmap` for relics,
 //! `artifactFormulaBitmapName` for blueprints, `emptyBitmap` for
-//! transmuters (see [`BITMAP_VARIABLES`]).
+//! transmuters (see [`BITMAP_VARIABLES`]). `soulbound` marks gear the
+//! game binds to its owner (faction-vendor items), and
+//! `records/game/gameiteminfo.dbr` names the inventory-tile symbols
+//! ([`GameData::symbol_bitmaps`]) that live in `UI.arc` — an archive
+//! the shell reads by entry rather than whole, so it is not part of
+//! [`GameData`].
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +37,7 @@ use univault_engine::ids::{RecordId, normalize};
 use univault_engine::tex::{self, TexError};
 use univault_engine::text::TextDb;
 
+use crate::facets::Symbol;
 use crate::reagents::ReagentKind;
 
 /// Item quality as the game's `itemClassification` spells it.
@@ -86,6 +93,15 @@ impl fmt::Display for ItemClass {
     }
 }
 
+/// Whether the game binds the record's items to the character that
+/// acquires them (`soulbound`): faction-vendor gear and its augments
+/// are, drops are not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Binding {
+    Soulbound,
+    Free,
+}
+
 /// Path of an item bitmap inside the `Items.arc` archives, as the
 /// `bitmap` variable spells it (`items/gearweapons/.../x.tex`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -100,16 +116,43 @@ impl BitmapPath {
     /// The archive entry name: `bitmap` values carry an `items/`
     /// prefix naming the archive, which the entries inside it omit.
     fn archive_entry(&self) -> &str {
-        let normalized_prefix_len = "items/".len();
-        if self.0.len() > normalized_prefix_len
-            && self.0[..normalized_prefix_len].eq_ignore_ascii_case("items/")
-        {
-            &self.0[normalized_prefix_len..]
-        } else {
-            &self.0
-        }
+        archive_entry_of(&self.0, "items/")
     }
 }
+
+/// Path of a user-interface bitmap inside the `UI.arc` archives, as a
+/// record spells it (`ui/character/item_doublerare.tex`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UiBitmapPath(String);
+
+impl UiBitmapPath {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The archive entry name: the `ui/` prefix names the archive,
+    /// which the entries inside it omit.
+    #[must_use]
+    pub fn archive_entry(&self) -> &str {
+        archive_entry_of(&self.0, "ui/")
+    }
+}
+
+/// Strips the archive-naming prefix a record's bitmap path carries,
+/// case-insensitively; a path without it is already an entry name.
+fn archive_entry_of<'a>(path: &'a str, archive: &str) -> &'a str {
+    match path.get(..archive.len()) {
+        Some(head) if path.len() > archive.len() && head.eq_ignore_ascii_case(archive) => {
+            &path[archive.len()..]
+        }
+        Some(_) | None => path,
+    }
+}
+
+/// The record naming the inventory-tile symbols, loot beams, and
+/// rarity colours.
+const GAME_ITEM_INFO: &str = "records/game/gameiteminfo.dbr";
 
 /// The variables an item record may name its icon by, in lookup
 /// order: gear and crafting materials use `bitmap`, components
@@ -145,6 +188,16 @@ pub struct ItemInfo {
     pub level_requirement: Option<u32>,
     pub bitmap: Option<BitmapPath>,
     pub reagent: Option<ReagentKind>,
+    pub binding: Binding,
+}
+
+/// What the database says about one affix record: its localized name
+/// (`lootRandomizerName` — the ascendant affixes have none) and its
+/// `itemClassification`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AffixInfo {
+    pub name: Option<String>,
+    pub rarity: Option<Rarity>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -165,6 +218,7 @@ pub struct LayerFiles {
     pub database: PathBuf,
     pub text: PathBuf,
     pub items: PathBuf,
+    pub ui: PathBuf,
 }
 
 /// The shipped layers in overlay order: the base game, then each
@@ -175,6 +229,7 @@ pub fn shipped_layers() -> Vec<LayerFiles> {
         database: PathBuf::from("database/database.arz"),
         text: PathBuf::from("resources/Text_EN.arc"),
         items: PathBuf::from("resources/Items.arc"),
+        ui: PathBuf::from("resources/UI.arc"),
     };
     let expansions = ["gdx1", "gdx2", "gdx3"].into_iter().map(|root| LayerFiles {
         database: Path::new(root)
@@ -182,6 +237,7 @@ pub fn shipped_layers() -> Vec<LayerFiles> {
             .join(format!("{}.arz", root.to_uppercase())),
         text: Path::new(root).join("resources/Text_EN.arc"),
         items: Path::new(root).join("resources/Items.arc"),
+        ui: Path::new(root).join("resources/UI.arc"),
     });
     std::iter::once(base).chain(expansions).collect()
 }
@@ -227,6 +283,7 @@ fn mod_layer(listing: &ModListing) -> Option<LayerFiles> {
         database: root.join("database").join(database),
         text: resource("Text_EN.arc"),
         items: resource("Items.arc"),
+        ui: resource("UI.arc"),
     })
 }
 
@@ -354,6 +411,11 @@ impl GameData {
             class.as_ref(),
             record.boolean("craftingMaterial").unwrap_or(false),
         );
+        let binding = if record.boolean("soulbound").unwrap_or(false) {
+            Binding::Soulbound
+        } else {
+            Binding::Free
+        };
         Some(Ok(ItemInfo {
             name,
             class,
@@ -366,15 +428,21 @@ impl GameData {
                 .find_map(|variable| record.string(variable))
                 .map(|bitmap| BitmapPath(bitmap.to_string())),
             reagent,
+            binding,
         }))
     }
 
-    /// The localized name of an affix record (`lootRandomizerName`),
-    /// `None` when the record is missing or has no localized name.
+    /// `None` when no layer has the affix record.
     #[must_use]
-    pub fn affix_name(&self, id: &RecordId) -> Option<String> {
-        let record = self.record(id)?.ok()?;
-        self.localized_name(&record, &["lootRandomizerName"])
+    pub fn affix_info(&self, id: &RecordId) -> Option<Result<AffixInfo, GameDataError>> {
+        Some(
+            self.record(id)?
+                .map_err(GameDataError::from)
+                .map(|record| AffixInfo {
+                    name: self.localized_name(&record, &["lootRandomizerName"]),
+                    rarity: record.string("itemClassification").and_then(Rarity::parse),
+                }),
+        )
     }
 
     /// `prefix base suffix`, each part localized, parts the database
@@ -388,12 +456,33 @@ impl GameData {
         suffix: Option<&RecordId>,
     ) -> Option<String> {
         let base_name = self.item_info(base)?.ok()?.name;
+        let affix_name = |id: &RecordId| self.affix_info(id)?.ok()?.name;
         let parts = [
-            prefix.and_then(|id| self.affix_name(id)),
+            prefix.and_then(affix_name),
             Some(base_name),
-            suffix.and_then(|id| self.affix_name(id)),
+            suffix.and_then(affix_name),
         ];
         Some(parts.into_iter().flatten().collect::<Vec<_>>().join(" "))
+    }
+
+    /// The inventory-tile symbols `records/game/gameiteminfo.dbr`
+    /// names, as `UI.arc` entry paths; a symbol the record leaves
+    /// unnamed — or every symbol, when no layer has the record — is
+    /// absent.
+    #[must_use]
+    pub fn symbol_bitmaps(&self) -> HashMap<Symbol, UiBitmapPath> {
+        let Some(Ok(record)) =
+            RecordId::parse(GAME_ITEM_INFO.to_string()).and_then(|id| self.record(&id))
+        else {
+            return HashMap::new();
+        };
+        Symbol::ALL
+            .into_iter()
+            .filter_map(|symbol| {
+                let path = record.string(symbol.variable())?;
+                Some((symbol, UiBitmapPath(path.to_string())))
+            })
+            .collect()
     }
 
     /// The `.tex` image of a bitmap, from the topmost archive that has
@@ -538,6 +627,7 @@ mod tests {
         );
         assert_eq!(layers[0].text, Path::new("resources/Text_EN.arc"));
         assert_eq!(layers[2].items, Path::new("gdx2/resources/Items.arc"));
+        assert_eq!(layers[3].ui, Path::new("gdx3/resources/UI.arc"));
     }
 
     #[test]
@@ -551,7 +641,7 @@ mod tests {
             listed(
                 "survivalmode",
                 &["SurvivalMode.arz"],
-                &["Items.arc", "text_en.arc"],
+                &["Items.arc", "text_en.arc", "ui.arc"],
             ),
             listed(
                 "LootAscension",
@@ -567,11 +657,13 @@ mod tests {
                     database: PathBuf::from("mods/LootAscension/database/LootAscension.arz"),
                     text: PathBuf::from("mods/LootAscension/resources/Text_EN.arc"),
                     items: PathBuf::from("mods/LootAscension/resources/Items.arc"),
+                    ui: PathBuf::from("mods/LootAscension/resources/UI.arc"),
                 },
                 LayerFiles {
                     database: PathBuf::from("mods/survivalmode/database/SurvivalMode.arz"),
                     text: PathBuf::from("mods/survivalmode/resources/text_en.arc"),
                     items: PathBuf::from("mods/survivalmode/resources/Items.arc"),
+                    ui: PathBuf::from("mods/survivalmode/resources/ui.arc"),
                 },
             ]
         );
@@ -693,6 +785,46 @@ mod tests {
             BitmapPath("gear/x.tex".into()).archive_entry(),
             "gear/x.tex"
         );
+        assert_eq!(
+            UiBitmapPath("ui/character/item_doublerare.tex".into()).archive_entry(),
+            "character/item_doublerare.tex"
+        );
+        assert_eq!(UiBitmapPath("ui/".into()).archive_entry(), "ui/");
+        assert_eq!(UiBitmapPath("u".into()).archive_entry(), "u");
+    }
+
+    #[test]
+    fn symbol_bitmaps_come_from_gameiteminfo_and_are_absent_without_it() {
+        use univault_engine::arz::ArzDialect;
+        use univault_engine::arz::fixture::{ArzBuilder, Values};
+
+        let mut builder = ArzBuilder::new(ArzDialect::grim_dawn());
+        builder.record(
+            GAME_ITEM_INFO,
+            "",
+            &[
+                (
+                    "monsterInfrequentSymbol",
+                    Values::Strings(&["ui/character/item_monsterinfrequent.tex"]),
+                ),
+                (
+                    "doubleRareSymbol",
+                    Values::Strings(&["ui/character/item_doublerare.tex"]),
+                ),
+            ],
+        );
+        let database = ArzFile::parse(builder.build(), ArzDialect::grim_dawn()).unwrap();
+        let game = GameData::from_parts(vec![database], TextDb::new(), Vec::new());
+        let symbols = game.symbol_bitmaps();
+        assert_eq!(symbols.len(), 2);
+        assert_eq!(
+            symbols[&Symbol::DoubleRare].archive_entry(),
+            "character/item_doublerare.tex"
+        );
+        assert!(!symbols.contains_key(&Symbol::Awakened));
+
+        let empty = GameData::from_parts(Vec::new(), TextDb::new(), Vec::new());
+        assert!(empty.symbol_bitmaps().is_empty());
     }
 
     #[test]

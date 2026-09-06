@@ -16,7 +16,10 @@
 //! [`interchange`] the envelope of this app's own JSON documents.
 //!
 //! [`gamedata`] is the layered record database, localization, and
-//! item bitmaps, resolved into names, rarity, and footprints.
+//! item bitmaps, resolved into names, rarity, and footprints;
+//! [`facets`] derives from them what the game marks on an item's tile
+//! (monster infrequent, double rare, ascended or upgradeable), and
+//! [`search`] is the typed query over those facets and names.
 //!
 //! Vault: [`store`] is this app's own item store, [`bucket`] the
 //! computed type view over it, [`reagents`] the rule for what belongs
@@ -33,6 +36,7 @@ pub mod blueprint;
 pub mod bucket;
 pub mod campaign;
 pub mod crypto;
+pub mod facets;
 pub mod formulas;
 pub mod gamedata;
 pub mod gdc;
@@ -45,6 +49,7 @@ pub mod loaded;
 pub mod platform;
 pub mod reagents;
 pub mod respec;
+pub mod search;
 pub mod settings;
 pub mod store;
 pub mod transfer;
