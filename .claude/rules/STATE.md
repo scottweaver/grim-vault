@@ -5,55 +5,32 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-06 (checkpoint before /clear; M5 mod
-characters, mod and gdx3 game-data layers, and the campaign selector
-on `feat/mod-characters`, stacked on the unmerged M4 branch; both
-await the user's acceptance run)
+Last updated: 2026-09-06 (wrap-up: M4 characters editable, M5 mod
+characters, mod + gdx3 game-data layers, and the campaign selector
+landed on `main` at `a224d9c` by local fast-forward; the in-game
+acceptance run is still pending)
 
 ## Session handoff
-**Resume here:** check out `feat/mod-characters` (stacked ahead
-of `feat/character-editing`, which is one ahead of `main` at
-`9abc5fe`). It holds M5: custom-game (mod) characters under
-`save/user/` are listed, editable, and their vaulted items record the
-realm; every `mods/<Mod>/database/*.arz` (with its text and item
-archives) is a fill layer under the shipped ones, `gdx3` is read when
-present, and a **campaign selector** above the stash opens one
-campaign's `transfer.gst` + `reagents.gst` at a time (main, or any
-`save/<Mod>/`), defaulting to the one the game wrote last. No
-remote; the user declined creating the GitHub repo for now — do not
-push unprompted (next-up item 6). The next action is the **user's
-acceptance run** with the game closed (next-up item 1), now covering
-the custom-game Zark too; fast-forward `main` through both branches
-once accepted. Nothing the app writes has been read by the game yet.
+<!-- transient; owned by the checkpoint skill -->
+**Resume here:** `main` at `a224d9c` holds everything; no other branch
+exists and there is no remote (the user declined creating the GitHub
+repo for now — do not push unprompted, next-up item 6). Start every
+new track on its own branch from `main`; the user wants several run
+in parallel, and next-up items 2–5 are independent of each other.
+The **user's acceptance run** (next-up item 1) is still open: nothing
+the app writes has been read by the game yet, though the user ran the
+app this session and saw the external-change reload work.
 
-- **Next session's intent (user, 2026-09-06):** work several tasks
-  in parallel. Independent tracks from Next up: (a) blueprints and
-  illusions panes per campaign, (b) the game-data cache, (c) M4
-  follow-ups such as equipment slots and level or attribute edits,
-  (d) the GitHub repo and first push. Give parallel branches one
-  common base: fast-forward `main` through both branches first if
-  the acceptance run has passed, otherwise branch each track from
-  `feat/mod-characters`. The acceptance run itself stays the user's.
-- **Live use this session:** the user ran the app and watched the
-  external-change reload fire (2 to 4 s after a save, by the two-poll
-  rule). No M5 feature has been confirmed in the window yet; the
-  "unverified" list below stands.
-- **Environment left behind:** no app process is running;
-  `target/release/grimvault-gui` was built after the last code
-  commit and matches `b6b2d9e`; `examples/vault_cli` is current too.
-  Settings are seeded in
-  `~/Library/Application Support/grim-vault/settings.json` with the
-  save dir `/Volumes/scott-games/Grim Dawn Saves/save` (not
-  `remote/save`); no real `vault-store.json` exists yet.
-- **The user was playing during the session** (the live
-  `user/_Zark/player.gdc` changed under the copy): never read live
-  files, `cp` first. Scratch copies are gone with the session.
 - **Save location (user, 2026-09-06):** Steam Cloud is *disabled* for
   Grim Dawn because cloud sync fights local save editing; with it
   disabled the saves live in the local layout, here
   `/Volumes/scott-games/Grim Dawn Saves/save`. The
   `userdata/<id>/219990/remote/save` path in older notes is the
   cloud-enabled location and is stale for this machine.
+- **The game may be running:** the live `user/_Zark/player.gdc`
+  changed under a copy during the session. Never read live files —
+  `cp` to the scratchpad first. Scratch copies are gone with the
+  session.
 - **Mod layout, confirmed on disk 2026-09-06:** `main/_<Name>/` and
   `user/_<Name>/` hold `player.gdc` of the same format (both user/
   characters parse fully typed and round-trip); the file never names
@@ -66,15 +43,15 @@ once accepted. Nothing the app writes has been read by the game yet.
   "Source of truth" / "ARZ/ARC archives"). `formulas.gst` (plaintext
   blueprints) and `transmutes.gst` (illusions, parsed) exist per
   campaign too and are still not shown anywhere.
-- **Resolved the same day:** the "unknown records" on the mod Zark
-  (`quest_areah_woodchip.dbr` etc.) that made its sacks refuse every
-  placement were **Fangs of Asterkarn records** — `gdx3` is installed
-  and the loaders had stopped at `gdx2` — and the same ids also exist
-  in LootAscension's database. With `gdx3` and the mod fill layers
-  read, the `--check` transcript has no unknown record, and vault →
-  place back into the mod Zark's own sack 0 ends byte-identical. The
-  install has two mods: `survivalmode` (the Crucible, with its own
-  `Text_EN.arc` and `Items.arc`) and `LootAscension` (database only).
+- **Why the mod Zark's sacks refused placements, resolved:** the
+  "unknown records" (`quest_areah_woodchip.dbr` etc.) were **Fangs of
+  Asterkarn records** — `gdx3` is installed and the loaders had
+  stopped at `gdx2`; the same ids also exist in LootAscension's
+  database. With `gdx3` and the mod fill layers read, `--check` shows
+  no unknown record and vault → place back into the mod Zark's own
+  sack ends byte-identical. The install has two mods: `survivalmode`
+  (the Crucible, with its own `Text_EN.arc` and `Items.arc`) and
+  `LootAscension` (database only).
 - **Known nits, unfiled:** single-mastery characters show the raw
   class tag; the store pane is a tile flow, not a grid; the illusion
   collection is parsed but not shown; equipped items are display-only;
@@ -84,24 +61,29 @@ once accepted. Nothing the app writes has been read by the game yet.
   realm-labelled picker, and the campaign switch (flush → reopen →
   rewatch; its pure parts — the newest-stash default, the folder
   listing, the `Campaign` type — are unit-tested) are covered by unit
-  tests only (synthetic input is banned); whether the game keeps a zero-count reagent entry
-  and whether it accepts any file this app wrote are unknown. The
-  mod fill rule is proven by a fixture test, not yet by a mod-only
-  item on a real character (every record on the mod Zark resolves
-  from the shipped layers once `gdx3` is read).
+  tests only (synthetic input is banned); whether the game keeps a
+  zero-count reagent entry and whether it accepts any file this app
+  wrote are unknown. The mod fill rule is proven by a fixture test,
+  not yet by a mod-only item on a real character (every record on
+  the mod Zark resolves from the shipped layers once `gdx3` is read).
+- **Environment left behind:** no app process is running;
+  `target/release/grimvault-gui` and `examples/vault_cli` are built
+  from the same code `main` now carries. Settings are seeded in
+  `~/Library/Application Support/grim-vault/settings.json` with the
+  save dir `/Volumes/scott-games/Grim Dawn Saves/save`; no real
+  `vault-store.json` exists yet.
 - **Skill note:** `/checkpoint` and `/wrap-up` assume a remote and a
-  PR; both run local equivalents here (a docs commit on the branch in
-  hand, fast-forward instead of merge).
+  PR; both run local equivalents here (a docs commit on a
+  `docs/state-post-*` branch fast-forwarded into `main`, feature
+  branches fast-forwarded instead of merged).
 
 ## Active workstream
 
 Fast track to a usable Grim Dawn tool (user decision 2026-09-03; the
 separate-repo extraction of the shared engine is deferred,
-ARCHITECTURE.md "Crate layering"). On `main` (landed by local fast-forward on 2026-09-03; no remote
-yet) **M1–M3 are done and the app runs**, **M4 (characters editable)
-is built on `feat/character-editing`**, and **M5 (custom-game / mod
-characters under `user/`) on `feat/mod-characters` stacked on it**: a
-five-crate workspace —
+ARCHITECTURE.md "Crate layering"). On `main` (landed by local
+fast-forwards on 2026-09-03 and 2026-09-06; no remote yet) **M1–M5
+are done and the app runs**: a five-crate workspace —
 `univault-engine` (tq-univault's parsers vendored, GD LZ4 dialect),
 `univault-io` (safe-io with post-write re-read), `univault-ui`
 (art-free egui kit), `grimvault-core` (rolling-XOR codec, **every
@@ -114,17 +96,22 @@ egui shell: setup with dir candidates, background load with progress,
 transfer-stash grids with icons, store by Group/Bucket, characters
 with editable sacks and own-stash tabs when every block is typed
 (read-only badge otherwise), listed `main/` then `user/` with a
-`Realm` carried by every vaulted item's origin, one generic move — lift into a scratch
+`Realm` carried by every vaulted item's origin, a campaign selector
+opening one campaign's stash and component storage at a time (main
+or any `save/<Mod>/`, the newest one by default, the campaign in
+every origin), installed mods' databases as fill layers under the
+shipped ones (`gdx3` included), one generic move — lift into a scratch
 store, place out of it, restore the source on refusal — for every
 pairing of transfer stash / sacks / own stash / store / component
 storage, copy by holding Alt or ⌘/Ctrl on the drop, an iron-bits
 field, autosave 600 ms quiet with backup-first once per load across
 every document, external-change guard with a Reload/Keep-mine modal
-that now watches every `player.gdc`, `--check` headless mode) — 297
+that now watches every `player.gdc`, `--check` headless mode) — 305
 tests, clippy pedantic clean. Verified on scratch copies of the
 user's install and saves. **Not yet verified: the game reading any
 file this app wrote** — the next step is the user's acceptance run
-on the real install with the game closed. grim-vault is the Grim
+on the real install with the game closed; the user chose to land on
+`main` before it so parallel tracks share a base. grim-vault is the Grim
 Dawn sibling of tq-univault; PROJECT.md is bound with `tracker:
 none`.
 
@@ -132,15 +119,12 @@ none`.
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at `9abc5fe` — rules layer, read stack, vault loop, GUI shell, typed `player.gdc`, reagent storage, settings fallback; 288 tests green; no remote and no GitHub repo yet |
-| `feat/character-editing` | M4: characters editable, copy, iron bits | one commit ahead of `main` (plus a checkpoint commit); 293 tests, clippy clean; CLI round trip on a copy of the user's saves re-reads lossless; awaiting the user's acceptance run before fast-forwarding |
-| `feat/mod-characters` | M5: custom-game (mod) characters under `user/`, realm in store origins, mod + gdx3 game-data layers, campaign selector | six commits ahead of `feat/character-editing`; 305 tests, clippy clean; vault + place on copies of the mod Zark and the LootAscension stash end byte-identical; lands with M4 |
+| `main` | trunk | at `a224d9c` — rules layer, read stack, vault loop, GUI shell, typed `player.gdc`, reagent storage, settings fallback, M4 character editing, M5 mod characters, mod + gdx3 game-data layers, campaign selector; 305 tests green; no remote and no GitHub repo yet |
 
 ## Next up
 
 1. **User acceptance on the real install** (game closed): launch
-   `cargo run --release -p grimvault-gui` from `feat/mod-characters`,
-   point Setup at `/Volumes/scott-games/steamapps/common/Grim Dawn`
+   `cargo run --release -p grimvault-gui` from `main`, point Setup at `/Volumes/scott-games/steamapps/common/Grim Dawn`
    and `/Volumes/scott-games/Grim Dawn Saves/save`, vault an item out
    of the transfer stash, one out of a main-campaign sack, and one out
    of the custom-game Zark (picker entry "Zark · custom game"), place
@@ -149,8 +133,8 @@ none`.
    stash is the newest); switch the campaign selector to the main
    campaign and back, vault from the mod stash and its component
    storage too. Load time now includes `gdx3` and the two mods (14 s
-   over SMB in the headless check). Fast-forward `main` through both
-   branches once accepted.
+   over SMB in the headless check). Everything is already on `main`
+   (user decision 2026-09-06); this run is what makes it trusted.
 2. **Mod support, phase 3:** show each campaign's blueprints
    (`formulas.gst`, plaintext key-value) and illusions
    (`transmutes.gst`, already parsed); refine the default campaign
@@ -173,6 +157,17 @@ none`.
    wrap-up routine's PR steps stay inert until then.
 
 ## Most recent meaningful progress
+
+- **2026-09-06 — Landed on `main` (local fast-forward to `a224d9c`).**
+  `feat/character-editing` (M4) and `feat/mod-characters` (M5 mod
+  characters, mod + gdx3 game-data layers, campaign selector) merged
+  linearly and were deleted; no PR, no remote, `tracker: none`. Why:
+  the user chose to land before the in-game acceptance run so the
+  parallel tracks in Next up share one base. Risk: `main` now writes
+  `player.gdc` in both realms and `transfer.gst` / `reagents.gst` in
+  any campaign folder, none of which the game has read yet — the
+  acceptance run (next-up item 1) is the gate before trusting it on
+  real saves beyond the automatic backups.
 
 - **2026-09-06 — Campaign selector (branch `feat/mod-characters`, not
   merged).** Core: `campaign::{Campaign, ModName}` — `Main` or
@@ -336,21 +331,6 @@ none`.
   flow") — a write to `player.gdc` before blocks 5–17 are typed would
   corrupt the file silently in-game; `encode` refuses, and that
   refusal must survive the GUI work.
-
-- **2026-09-03 — Shared-engine split decided (design dialog; docs only,
-  branch `design/shared-engine-split`).** Surveyed tq-univault core
-  and gui module by module and researched the GD formats; wrote
-  `docs/engine-extraction.md` (dispositions, seams, refactors R1–R12,
-  three phases) and `docs/format-references.md` (GD edition).
-  Decisions: repo `univault-engine` with crates engine / io / ui;
-  phase 1 = pure modules; plain copy with a provenance commit; the ui
-  kit ships no art. Why: the first real code (R1–R5 in tq-univault)
-  now has an agreed boundary, and ARCHITECTURE's provenance TBDs are
-  resolved (gdlc MIT end to end; iagd MIT, no save decoder; GD Stash
-  closed). Risk: dispositions come from reading, not compiling — the
-  `RecordId` / `GridPos` move (R1) and the codec seam (R2) may
-  surface couplings the survey missed; verify with tq-univault's
-  tests, not by re-surveying.
 
 ## Blocked / waiting
 
