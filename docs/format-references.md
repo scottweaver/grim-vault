@@ -1020,6 +1020,64 @@ Apache-2.0, same author); every rule was re-checked against the
   headless check and the real-file tests. Left out; a labelled
   `LayerSet` is the follow-up if the filter is wanted.
 
+## Sockets: components and augments — 2026-09-07
+
+The rules `grimvault-core::socket` applies when an item gains or
+gives up its component (`relicName`) or augment (`augmentName`), for
+the inspector, `vault_cli attach` / `detach`, and the tooltip.
+Established on the user's install (base, `gdx1`–`gdx3`, two mods) and
+saves (five characters, both transfer stashes: 655 items, of which
+37 socketed and 25 augmented); gated by `tests/socket_real.rs` under
+`$GRIMVAULT_GAME_DIR` / `$GRIMVAULT_SAVE_DIR`. GD Stash (eyes-only)
+pointed at the variables; every fact below was read from the real
+database and files.
+
+- **Which items a part fits is the part record's own choice.**
+  `itemrelic.tpl` and `itemenchantment.tpl` carry one boolean per
+  equipment slot, named plainly: `head`, `shoulders`, `chest`,
+  `hands`, `legs`, `feet`, `waist`, `amulet`, `ring`, `medal`,
+  `shield`, `offhand`, `axe`, `mace`, `sword`, `dagger`, `scepter`,
+  `ranged1h`, `axe2h`, `mace2h`, `sword2h`, `spear2h`, `staff`, and
+  `spear`. A flag absent from a record reads as false (the 107
+  `ItemRelic` records carry between 35 and 107 of them each; the 386
+  `ItemEnchantment` records carry all). A part goes on an item whose
+  `Class` maps to a flagged slot (`socket::Slot::of_class`: the
+  seven `ArmorProtective_*`, three `ArmorJewelry_*`, `WeaponArmor_*`
+  shield and off-hand, the one- and two-handed `WeaponMelee_*` and
+  `WeaponHunting_*` classes, `WeaponMagical_Staff`). `spear` (a
+  one-handed spear) has no shipped class and no shipped part sets it;
+  `staff` is never set on a shipped part either. **Verified:** every
+  one of the 37 socketed and 25 augmented items in the saves carries
+  a part whose flags admit its host's class.
+- **Components are single-piece and complete at
+  `relicCompletionLevel` 0.** All 107 records have
+  `completedRelicLevel = 1`; every loose component (stacks of 1–3)
+  and every socketed one in the saves reads 0 — so the "var1 ≥
+  pieces" completeness GD Stash still tests belongs to the partial
+  components older game versions dropped, and `attach` writes 0.
+- **No completion bonus.** `relicBonus` is empty on all 37 socketed
+  items, characters up to level 93 included; 83 of the 107 records
+  still name a `bonusTableName` (`records/items/lootaffixes/
+  completion/completionbonus_*.dbr`, a `LootRandomizerTable` of
+  `randomizerName<N>` / `randomizerWeight<N>` entries), which the game
+  no longer rolls — Forgotten Gods folded the bonuses into the
+  components. `attach` therefore writes no bonus; the table reader was
+  not built.
+- **Seeds and the augment level.** `relicSeed` is 0 on 17 of the 37
+  socketed items and arbitrary on the rest; `augmentSeed` is
+  non-zero on all 25; the augment level word (`enchantmentLevel` in
+  GD Stash's naming, `Item::unknown` here) is 0 throughout. `attach`
+  takes the seed from the caller (the shell's clock-mixed value, the
+  CLI's argument) and writes level 0; `detach` zeroes the seed it
+  frees and hands the part back as a stand-alone item of stack 1.
+  **Round trip:** detaching every socketed and augmented item in the
+  saves and re-attaching under the original seed reproduces the item
+  exactly.
+- **Nothing is destroyed.** A filled socket refuses a second part
+  (`SocketError::Occupied`) rather than overwriting; a freed part
+  goes to the vault store under the host's origin. In-game the
+  Inventor charges iron for the same removal; this app does not.
+
 ## Rust prior art (2026-09-03)
 
 - crates.io: nothing for Grim Dawn or Titan Quest ARZ/ARC/save.
@@ -1047,7 +1105,10 @@ ARZ/ARC header and entry layouts, LZ4-block compression, the extra
 decompressed-size field; TQ zlib + 2-byte ARC skip; the full XOR
 scheme and block/checksum semantics; GD item field order including
 the v8/v11 additions; the `.gds` version-3 layout end to end on both
-of the user's exports; no relevant crates.io crates.
+of the user's exports; the socket rules — the slot flags on every
+shipped part, the completion level, the absent bonus, and the
+detach → attach round trip on every socketed item in the saves; no
+relevant crates.io crates.
 
 **Unverified:** whether the game reads a `formulas.gst` or
 `transmutes.gst` this app appended to (the round trips and a
@@ -1080,4 +1141,9 @@ mapping (0 female / 1 male, inferred from character names only);
 whether the game's monster-infrequent symbol excludes soulbound
 (faction) rares the way this app's rule does, and whether item
 ascension is gated on item level (no data names either; "Item facets"
-above).
+above); whether the game accepts a component or augment this app
+socketed — a `relicSeed` it did not roll, or a part on a slot it
+flags but the game's own placement rule (not readable from the data)
+might still refuse — and whether it minds a freed component stacking
+with dropped ones (no file this app wrote has been loaded by the
+game yet).
