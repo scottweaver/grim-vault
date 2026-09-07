@@ -10,7 +10,8 @@ Last updated: 2026-09-07 (six more tracks landed on `main` at
 parallel archive loading, component / augment socketing, and
 auto-move tabs with the reagent sync; FEATURES.md 1–19 are all
 landed and tagged; every landed branch and worktree deleted on the
-user's say-so; the in-game acceptance run is still pending)
+user's say-so; the in-game acceptance run is still pending;
+checkpointed before /clear)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
@@ -137,9 +138,10 @@ runs `target/release/grimvault-gui` and rebuilds with `cargo run
   accepts any file this app wrote is unknown. The mod fill rule is
   proven by a fixture test, not yet by a mod-only item on a real
   character.
-- **Environment left behind:** the user's own `grimvault-gui` (pid
-  46247 at session start, built from yesterday's `main`) was left
-  running; every agent-launched instance was quit.
+- **Environment left behind:** the user's `grimvault-gui` was
+  relaunched during the session (pid 14872 at checkpoint; the
+  original pid 46247 is gone) — whether it is the new build is
+  unknown; every agent-launched instance was quit.
   `target/release/grimvault-gui` and `examples/vault_cli` are built
   from `666f592`. Settings are seeded in `~/Library/Application
   Support/grim-vault/settings.json` with the save dir
@@ -445,7 +447,19 @@ PROJECT.md is bound with `tracker: none`.
 
 ## Blocked / waiting
 
-- *(nothing)* — environment note: the game install and saves live on
+- **Waiting on the user — three rules to confirm or overrule** (built
+  under stated assumptions on 2026-09-07, each a one-line change if
+  reversed): (1) a nominated auto-move tab keeps its seed duplicates
+  rather than destroying or merging them, so it can end non-empty;
+  (2) the component-storage sync is a high-water mark that refills
+  the vault after the user moves reagents out of it, and is on by
+  default; (3) double-click targets the stash tab showing while
+  right-click targets the last-touched game grid.
+- **Waiting on the user — the acceptance run** (next-up item 1) is
+  what makes `main` trustworthy on real saves; until it runs, every
+  write path rests on byte-identical re-encodes and CLI round trips
+  only.
+- Environment note: the game install and saves live on
   a network mount (`/Volumes/scott-games/…`) that may not be present;
   check before assuming. The saves carry Steam-cloud (`remote/save/`)
   and KDE (`.directory`) markers, so the game most likely runs on the
