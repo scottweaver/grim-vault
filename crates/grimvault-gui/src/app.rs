@@ -13,7 +13,7 @@ use egui::{
     Align2, Color32, CornerRadius, FontId, Id, LayerId, Order, Rect, RichText, Stroke, StrokeKind,
     Ui, pos2, vec2,
 };
-use grimvault_core::bulk;
+use grimvault_core::bulk::{self, Identities};
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::{PlayerFile, Realm};
 use grimvault_core::gds;
@@ -464,6 +464,8 @@ pub struct World {
     conflicts: Vec<Doc>,
     write_order: WriteOrder,
     settings_dialog: Option<SettingsDialog>,
+    /// The store revision the stacks were last consolidated at.
+    settled_revision: Option<u64>,
 }
 
 impl World {
@@ -523,6 +525,7 @@ impl World {
             conflicts: Vec::new(),
             write_order,
             settings_dialog: None,
+            settled_revision: None,
         };
         world.rewatch();
         world.carry_out_orders(Scope::Everything, toasts);
@@ -1101,8 +1104,32 @@ impl World {
         if let Some(next) = switch {
             self.switch_campaign(next, config, toasts);
         }
+        self.settle_store(toasts);
         self.persist_ui_state(ui.ctx());
         reload
+    }
+
+    /// Keeps every stackable record to one stack: whenever the store
+    /// changed since the last look — a load, a drop, an import, a
+    /// standing order, a reload — later stacks of a record are folded
+    /// into its first, and the fold is written by autosave like any
+    /// edit. Not while a drag is in flight, since the lifted entry
+    /// must still be there when it lands.
+    fn settle_store(&mut self, toasts: &mut Toasts) {
+        if self.drag.is_some() || self.settled_revision == Some(self.store.revision()) {
+            return;
+        }
+        let folded = self
+            .store
+            .store_mut()
+            .consolidate_stacks(|item| self.game.is_stack(item));
+        if folded.entries > 0 {
+            self.store.tracking_mut().mark_edited();
+            self.write_order.prioritize(Doc::Store);
+            self.revalidate_selection();
+            toasts.info(format!("consolidated the vault's stacks: {folded}"));
+        }
+        self.settled_revision = Some(self.store.revision());
     }
 
     /// The gear's modal, while open: export and import act at once;
@@ -1288,8 +1315,11 @@ impl World {
                 return;
             }
         };
-        let merged = self.store.store_mut().merge(&other);
-        if merged.added == 0 {
+        let merged = self
+            .store
+            .store_mut()
+            .merge(&other, |item| self.game.is_stack(item));
+        if merged.added == 0 && merged.raised == 0 {
             toasts.info(format!("nothing new in {}: {merged}", path.display()));
             return;
         }

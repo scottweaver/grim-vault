@@ -195,6 +195,13 @@ impl Item {
         self.base_name.is_empty()
     }
 
+    /// How many the item counts for: its stack, and one for an item
+    /// written without a stack.
+    #[must_use]
+    pub fn units(&self) -> u32 {
+        self.stack_count.max(1)
+    }
+
     /// Reads an item laid out for `version`.
     ///
     /// # Errors

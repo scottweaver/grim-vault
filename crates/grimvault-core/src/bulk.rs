@@ -77,6 +77,7 @@ impl Identity {
             | Bucket::Medal
             | Bucket::Relic => Self::Seed,
             Bucket::Component
+            | Bucket::Material
             | Bucket::Augment
             | Bucket::Blueprint
             | Bucket::Transmuter
@@ -89,16 +90,23 @@ impl Identity {
 }
 
 /// Supplies an item's identity rule; `None` when no database layer
-/// has the record, which no bulk move treats as a duplicate.
+/// has the record, which no bulk move treats as a duplicate and no
+/// stack rule folds.
 pub trait Identities {
     fn identity(&self, item: &Item) -> Option<Identity>;
+
+    /// Whether the record is known to stack — the items
+    /// [`VaultStore::consolidate_stacks`] keeps as one entry.
+    fn is_stack(&self, item: &Item) -> bool {
+        self.identity(item) == Some(Identity::Stack)
+    }
 }
 
 impl Identities for GameData {
     fn identity(&self, item: &Item) -> Option<Identity> {
         let id = RecordId::parse(item.base_name.clone())?;
         let info = self.item_info(&id)?.ok()?;
-        let bucket = info.class.as_ref().map_or(Bucket::Misc, Bucket::of);
+        let bucket = Bucket::of(info.class.as_ref(), info.reagent);
         Some(Identity::of(bucket, info.max_stack_size))
     }
 }

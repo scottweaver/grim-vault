@@ -223,7 +223,7 @@ fn resolve_base(game: &GameData, base_name: &str) -> BaseFacts {
         .as_ref()
         .and_then(|bitmap| game.footprint(bitmap))
         .and_then(Result::ok);
-    let bucket = info.class.as_ref().map_or(Bucket::Misc, Bucket::of);
+    let bucket = Bucket::of(info.class.as_ref(), info.reagent);
     let evidence = BaseEvidence::of(Some(&info));
     BaseFacts {
         name: info.name,

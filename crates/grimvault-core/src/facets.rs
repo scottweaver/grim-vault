@@ -117,6 +117,7 @@ impl AscensionCategory {
             | Bucket::Feet => Some(Self::Armor),
             Bucket::Waist | Bucket::Amulet | Bucket::Ring | Bucket::Medal => Some(Self::Accessory),
             Bucket::Component
+            | Bucket::Material
             | Bucket::Relic
             | Bucket::Augment
             | Bucket::Blueprint
@@ -239,7 +240,7 @@ impl BaseEvidence {
     pub fn of(info: Option<&ItemInfo>) -> Self {
         info.map_or(Self::Unresolved, |info| Self::Known {
             rarity: info.rarity,
-            bucket: info.class.as_ref().map_or(Bucket::Misc, Bucket::of),
+            bucket: Bucket::of(info.class.as_ref(), info.reagent),
             binding: info.binding,
         })
     }

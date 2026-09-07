@@ -700,10 +700,9 @@ pub fn place_in_reagents(
     Ok(())
 }
 
-/// The count an item contributes to the storage: its stack, and one
-/// for an item written without a stack.
+/// The count an item contributes to the storage, [`Item::units`].
 pub(crate) fn stack_of(item: &Item) -> u32 {
-    item.stack_count.max(1)
+    item.units()
 }
 
 /// Whether the entry `item` would merge into can take its stack.

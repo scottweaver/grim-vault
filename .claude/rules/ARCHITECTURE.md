@@ -100,9 +100,20 @@ Q&A). Items marked TBD are open questions, not decisions.
   same polling guard as the game files (below), so another machine's
   write between two saves is noticed, not clobbered. Type
   buckets are **computed views** derived from each item's own base
-  record, never stored membership — so an item cannot be misfiled,
-  and moving or copying its bytes cannot change what it is. Buckets
-  are unbounded; no capacity and no grid positions are persisted.
+  record — its `Class`, and the game's `craftingMaterial` flag for
+  the crafting materials, which are `QuestItem`s by class (user
+  correction 2026-09-07) — never stored membership — so an item
+  cannot be misfiled, and moving or copying its bytes cannot change
+  what it is. Buckets are unbounded; no capacity and no grid
+  positions are persisted. **A stackable record is one stack** (user
+  rule 2026-09-07): whenever the store changes, the shell folds every
+  later entry of a record the game stacks (`bulk::Identity::Stack`)
+  into its first — units summed, ids retired, the first entry's
+  origin and moment kept — and autosave writes the fold like any
+  edit (`VaultStore::consolidate_stacks`; `--check` prints what the
+  window would fold, `vault_cli consolidate-stacks` does it
+  headless). Seed-identified items are never folded; a record no
+  database layer knows is left alone.
   The store is separate from tq-univault's (different game,
   different item identity) even though the envelope machinery is
   shared. Carried over from tq-univault's 2026-08-29 virtual-tabs
@@ -324,12 +335,14 @@ Q&A). Items marked TBD are open questions, not decisions.
   removes. (2026-09-06) **A vault export is the store format itself**
   (2026-09-07): "Export a copy…" writes the open store as it is to a
   file of the user's choosing, and "Import from a copy…" is
-  `VaultStore::merge` — every entry of another store file whose
-  vaulting event (origin, moment, item) this store lacks is added
-  under a fresh id of this store's own; nothing is removed, changed,
-  or re-identified, so importing a store into itself or the same copy
-  twice adds nothing. No new format, no new boundary: both files are
-  `grimvault-store` documents.
+  `VaultStore::merge` — every seed-identified entry of another store
+  file whose vaulting event (origin, moment, item) this store lacks
+  is added under a fresh id of this store's own, and every stackable
+  record is a high-water mark: this store's count is raised to the
+  other's when that is higher and left alone otherwise (2026-09-07,
+  so a consolidated stack can never be doubled by importing the same
+  copy twice); nothing is removed or re-identified. No new format,
+  no new boundary: both files are `grimvault-store` documents.
 - No network services, no telemetry, no online features. stdio IPC
   for the planned MCP surface is not a network service.
   (2026-09-03)

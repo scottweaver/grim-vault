@@ -1,8 +1,11 @@
 //! Type buckets: the computed view that groups store entries by what
-//! they are. A bucket is derived from the item's base record `Class`
-//! every time it is displayed and is never persisted (ARCHITECTURE.md
-//! "Source of truth"), so nothing can be misfiled and copying an
-//! entry's bytes cannot change where it shows up.
+//! they are. A bucket is derived from the item's base record — its
+//! `Class`, and for the crafting materials the `craftingMaterial` flag
+//! the game files them under (they are `QuestItem`s by class,
+//! [`crate::reagents`]) — every time it is displayed and is never
+//! persisted (ARCHITECTURE.md "Source of truth"), so nothing can be
+//! misfiled and copying an entry's bytes cannot change where it shows
+//! up.
 //!
 //! The `Class` strings are the game's, observed in the shipped record
 //! database; every observed value maps explicitly and anything else
@@ -11,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::gamedata::ItemClass;
+use crate::reagents::ReagentKind;
 
 /// The top level of the view, in display order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -66,6 +70,7 @@ pub enum Bucket {
     Ring,
     Medal,
     Component,
+    Material,
     Relic,
     Augment,
     Blueprint,
@@ -79,7 +84,7 @@ pub enum Bucket {
 impl Bucket {
     /// Every bucket in display order (grouped, groups in [`Group::ALL`]
     /// order).
-    pub const ALL: [Bucket; 25] = [
+    pub const ALL: [Bucket; 26] = [
         Bucket::OneHanded,
         Bucket::TwoHanded,
         Bucket::RangedOneHanded,
@@ -97,6 +102,7 @@ impl Bucket {
         Bucket::Ring,
         Bucket::Medal,
         Bucket::Component,
+        Bucket::Material,
         Bucket::Relic,
         Bucket::Augment,
         Bucket::Blueprint,
@@ -107,14 +113,23 @@ impl Bucket {
         Bucket::Misc,
     ];
 
-    /// The bucket for a record's `Class`; [`Bucket::Misc`] for any class
-    /// this app has not mapped.
+    /// The bucket for a record: a crafting material by the game's own
+    /// flag first (its class is `QuestItem`, which is not what it is),
+    /// else by `Class`; [`Bucket::Misc`] for no class or one this app
+    /// has not mapped.
     #[must_use]
+    pub fn of(class: Option<&ItemClass>, reagent: Option<ReagentKind>) -> Bucket {
+        match reagent {
+            Some(ReagentKind::CraftingMaterial) => Bucket::Material,
+            Some(ReagentKind::Component) | None => class.map_or(Bucket::Misc, Self::of_class),
+        }
+    }
+
     #[expect(
         clippy::match_same_arms,
         reason = "every observed class is named; the wildcard is the unknown-class fallback"
     )]
-    pub fn of(class: &ItemClass) -> Bucket {
+    fn of_class(class: &ItemClass) -> Bucket {
         let class = class.as_str();
         if class.starts_with("OneShot_") {
             return Bucket::Consumable;
@@ -178,6 +193,7 @@ impl Bucket {
             | Bucket::Waist => Group::Armor,
             Bucket::Amulet | Bucket::Ring | Bucket::Medal => Group::Accessories,
             Bucket::Component
+            | Bucket::Material
             | Bucket::Relic
             | Bucket::Augment
             | Bucket::Blueprint
@@ -206,6 +222,7 @@ impl Bucket {
             Bucket::Ring => "Rings",
             Bucket::Medal => "Medals",
             Bucket::Component => "Components",
+            Bucket::Material => "Crafting Materials",
             Bucket::Relic => "Relics",
             Bucket::Augment => "Augments",
             Bucket::Blueprint => "Blueprints",
@@ -276,16 +293,44 @@ mod tests {
     #[test]
     fn every_observed_class_maps_to_its_bucket() {
         for (name, expected) in MAPPING {
-            assert_eq!(Bucket::of(&class(name)), *expected, "{name}");
+            assert_eq!(Bucket::of(Some(&class(name)), None), *expected, "{name}");
         }
     }
 
     #[test]
+    fn the_crafting_material_flag_outranks_the_quest_item_class() {
+        assert_eq!(
+            Bucket::of(
+                Some(&class("QuestItem")),
+                Some(ReagentKind::CraftingMaterial)
+            ),
+            Bucket::Material
+        );
+        assert_eq!(
+            Bucket::of(Some(&class("ItemRelic")), Some(ReagentKind::Component)),
+            Bucket::Component
+        );
+        assert_eq!(
+            Bucket::of(None, Some(ReagentKind::CraftingMaterial)),
+            Bucket::Material
+        );
+        assert_eq!(Bucket::of(None, None), Bucket::Misc);
+        assert_eq!(Bucket::Material.group(), Group::Crafting);
+        assert_eq!(Bucket::Material.label(), "Crafting Materials");
+    }
+
+    #[test]
     fn unmapped_classes_fall_back_to_misc() {
-        assert_eq!(Bucket::of(&class("ItemFromTheFuture")), Bucket::Misc);
-        assert_eq!(Bucket::of(&class("")), Bucket::Misc);
-        assert_eq!(Bucket::of(&class("weaponmelee_axe")), Bucket::Misc);
-        assert_eq!(Bucket::of(&class("OneShot")), Bucket::Misc);
+        assert_eq!(
+            Bucket::of(Some(&class("ItemFromTheFuture")), None),
+            Bucket::Misc
+        );
+        assert_eq!(Bucket::of(Some(&class("")), None), Bucket::Misc);
+        assert_eq!(
+            Bucket::of(Some(&class("weaponmelee_axe")), None),
+            Bucket::Misc
+        );
+        assert_eq!(Bucket::of(Some(&class("OneShot")), None), Bucket::Misc);
     }
 
     #[test]
@@ -293,6 +338,7 @@ mod tests {
         let unique: HashSet<Bucket> = Bucket::ALL.iter().copied().collect();
         assert_eq!(unique.len(), Bucket::ALL.len());
         assert!(MAPPING.iter().all(|(_, bucket)| unique.contains(bucket)));
+        assert!(unique.contains(&Bucket::Material));
         let group_order: Vec<usize> = Bucket::ALL
             .iter()
             .map(|bucket| {

@@ -20,6 +20,7 @@
 //! vault_cli <game dir> <save dir> <store.json> import-gds <file.gds>
 //! vault_cli <game dir> <save dir> <store.json> export-store <copy.json>
 //! vault_cli <game dir> <save dir> <store.json> import-store <other.json>
+//! vault_cli <game dir> <save dir> <store.json> consolidate-stacks
 //! vault_cli <game dir> <save dir> <store.json> respec-attributes <character>
 //! vault_cli <game dir> <save dir> <store.json> respec-masteries <character>
 //! vault_cli <game dir> <save dir> <store.json> detach <location> (component | augment)
@@ -44,9 +45,12 @@
 //! under the rules read from the game's own records. `import-gds`
 //! adds a GD Stash export's items to the store, skipping entries
 //! already imported, and opens no game file; neither do
-//! `export-store`, a copy of the store to a new file, and
-//! `import-store`, which adds what another store file holds and this
-//! one lacks (`VaultStore::merge`).
+//! `export-store`, a copy of the store to a new file, `import-store`,
+//! which adds what another store file holds and this one lacks
+//! (`VaultStore::merge`: seed-identified items by vaulting event,
+//! stacks as a high-water mark per record), and `consolidate-stacks`,
+//! which folds a record's several stacks into one as the window does
+//! on its own.
 //!
 //! `vault-tab`, `vault-stash-tab`, and `sync-reagents` are the
 //! standing orders of `grimvault_core::bulk` run once: a whole tab
@@ -75,7 +79,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use grimvault_core::bucket::{Bucket, Group};
-use grimvault_core::bulk;
+use grimvault_core::bulk::{self, Identities};
 use grimvault_core::campaign::Campaign;
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::{PlayerFile, Realm};
@@ -102,7 +106,7 @@ const USAGE: &str = "usage: vault_cli [--game DIR] [--save DIR] [--store FILE] [
                      | vault-stash-tab <character> <tab> \
                      | place-sack <id> <character> <sack> [x y] | money <character> [<iron bits>] \
                      | import-gds <file.gds> | export-store <copy.json> \
-                     | import-store <other.json> \
+                     | import-store <other.json> | consolidate-stacks \
                      | respec-attributes <character> | respec-masteries <character> \
                      | detach <location> (component | augment) | attach <location> <id> [seed]) \
                      — <character> is Name, main/Name or user/Name; <location> is \
@@ -143,6 +147,7 @@ enum StoreCommand {
     ImportGds { file: PathBuf },
     Export { file: PathBuf },
     Import { file: PathBuf },
+    ConsolidateStacks,
 }
 
 /// The commands that fill or free an item's sockets.
@@ -319,7 +324,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         return match store_command {
             StoreCommand::ImportGds { file } => run_import_gds(file, &store_path, &game_data),
             StoreCommand::Export { file } => run_export_store(file, &store_path),
-            StoreCommand::Import { file } => run_import_store(file, &store_path),
+            StoreCommand::Import { file } => run_import_store(file, &store_path, &game_data),
+            StoreCommand::ConsolidateStacks => run_consolidate_stacks(&store_path, &game_data),
         };
     }
     let shared_dir = campaign.shared_dir(&save_dir);
@@ -750,14 +756,36 @@ fn run_export_store(file: &Path, store_path: &Path) -> Result<(), Box<dyn Error>
     Ok(())
 }
 
-fn run_import_store(file: &Path, store_path: &Path) -> Result<(), Box<dyn Error>> {
+fn run_import_store(
+    file: &Path,
+    store_path: &Path,
+    game_data: &GameData,
+) -> Result<(), Box<dyn Error>> {
     let mut store = load_store(store_path)?;
     let other = VaultStore::from_json(&read_verified(file)?)?;
     println!("parsed {} ({} items)", file.display(), other.len());
-    let merged = store.merge(&other);
+    let merged = store.merge(&other, |item| game_data.is_stack(item));
     println!("import: {merged}");
-    if merged.added == 0 {
+    if merged.added == 0 && merged.raised == 0 {
         println!("nothing new; {} left untouched", store_path.display());
+    } else {
+        let folded = store.consolidate_stacks(|item| game_data.is_stack(item));
+        println!("stacks: {folded}");
+        write_store(store_path, &store)?;
+    }
+    Ok(())
+}
+
+/// One stack per stackable record, as the window keeps the store.
+fn run_consolidate_stacks(store_path: &Path, game_data: &GameData) -> Result<(), Box<dyn Error>> {
+    let mut store = load_store(store_path)?;
+    let folded = store.consolidate_stacks(|item| game_data.is_stack(item));
+    println!("stacks: {folded}");
+    if folded.entries == 0 {
+        println!(
+            "already one stack per record; {} left untouched",
+            store_path.display()
+        );
     } else {
         write_store(store_path, &store)?;
     }
@@ -1155,6 +1183,7 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
         ("import-store", [file]) => Command::Store(StoreCommand::Import {
             file: PathBuf::from(file),
         }),
+        ("consolidate-stacks", []) => Command::Store(StoreCommand::ConsolidateStacks),
         ("respec-attributes", [character]) => Command::Character(CharacterCommand::Respec {
             character: CharacterArg::parse(character),
             reset: Reset::Attributes,
@@ -1364,6 +1393,7 @@ fn bucket_of(game_data: &GameData, item: &Item) -> Bucket {
     RecordId::parse(item.base_name.clone())
         .and_then(|base| game_data.item_info(&base))
         .and_then(Result::ok)
-        .and_then(|info| info.class)
-        .map_or(Bucket::Misc, |class| Bucket::of(&class))
+        .map_or(Bucket::Misc, |info| {
+            Bucket::of(info.class.as_ref(), info.reagent)
+        })
 }

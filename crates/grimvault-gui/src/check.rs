@@ -15,7 +15,7 @@ use std::process::ExitCode;
 
 use grimvault_core::block::StashTab;
 use grimvault_core::blueprint::check_blueprint;
-use grimvault_core::bulk;
+use grimvault_core::bulk::{self, Identities};
 use grimvault_core::formulas::FormulaRead;
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::InventoryState;
@@ -267,6 +267,10 @@ fn print_store(doc: &StoreDoc, facts: &mut FactsCache, game: &GameData) {
         doc.path().display(),
         store.len()
     );
+    let folded = store.clone().consolidate_stacks(|item| game.is_stack(item));
+    if folded.entries > 0 {
+        println!("  the window would consolidate its stacks: {folded}");
+    }
     for stored in store.items() {
         let bucket = facts.base(game, stored.item()).bucket;
         println!(

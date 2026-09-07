@@ -243,21 +243,61 @@ struct Fact<'a> {
     item: &'a Item,
 }
 
+/// What makes two stacks one stack: the item less its roll seed —
+/// which rolls nothing on a stack — and its count.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct StackKey(Item);
+
+impl StackKey {
+    fn of(item: &Item) -> Self {
+        Self(Item {
+            seed: 0,
+            stack_count: 0,
+            ..item.clone()
+        })
+    }
+}
+
 /// What [`VaultStore::merge`] did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Merged {
-    /// Entries added under fresh ids.
+    /// Entries added under fresh ids: every seed-identified entry the
+    /// store lacked, and one stack per stackable record it held none
+    /// of.
     pub added: usize,
     /// Entries the store already held, left as they were.
     pub already_held: usize,
+    /// Stacks the store held fewer of than the other store, raised
+    /// to the other's count.
+    pub raised: usize,
 }
 
 impl fmt::Display for Merged {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} added, {} already held",
-            self.added, self.already_held
+            "{} added, {} already held, {} stacks raised",
+            self.added, self.already_held, self.raised
+        )
+    }
+}
+
+/// What [`VaultStore::consolidate_stacks`] did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Folded {
+    /// Entries folded away, their counts added to the stack that
+    /// stays.
+    pub entries: usize,
+    /// Stacks that took them.
+    pub stacks: usize,
+}
+
+impl fmt::Display for Folded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} entries folded into {} stacks",
+            self.entries, self.stacks
         )
     }
 }
@@ -409,30 +449,109 @@ impl VaultStore {
         id
     }
 
-    /// Adds every entry of `other` this store does not already hold,
-    /// each under a fresh id of this store's own; `other`'s ids are
-    /// not carried over, since two stores' allocators know nothing of
-    /// each other. An entry is already held when this store has one
-    /// recording the same vaulting event — the same origin, moment,
-    /// and item, stack count included — so merging a copy of this
-    /// store, or the same export twice, adds nothing. Nothing is ever
-    /// removed or changed.
-    pub fn merge(&mut self, other: &VaultStore) -> Merged {
-        let mut held: HashSet<Fact<'_>> = self.items.iter().map(StoredItem::fact).collect();
-        let fresh: Vec<StoredItem> = other
+    /// Adds what `other` holds and this store lacks, under fresh ids
+    /// of this store's own; `other`'s ids are not carried over, since
+    /// two stores' allocators know nothing of each other, and nothing
+    /// here is ever removed. A seed-identified entry is already held
+    /// when this store has one recording the same vaulting event — the
+    /// same origin, moment, and item — so merging a copy of this
+    /// store, or the same export twice, adds nothing. A stack
+    /// (`is_stack`) is a count per record, not an event: the store's
+    /// count is raised to `other`'s when that is higher, in the stack
+    /// that already holds the record or a new one, and left alone
+    /// otherwise — a high-water mark, so a repeated merge never doubles
+    /// a stack.
+    pub fn merge(&mut self, other: &VaultStore, is_stack: impl Fn(&Item) -> bool) -> Merged {
+        let mut merged = Merged::default();
+        let mut held: HashSet<Fact<'_>> = self
             .items
             .iter()
-            .filter(|stored| held.insert(stored.fact()))
-            .cloned()
+            .filter(|stored| !is_stack(&stored.item))
+            .map(StoredItem::fact)
             .collect();
-        let already_held = other.items.len() - fresh.len();
-        let added = fresh.len();
+        let mut fresh: Vec<StoredItem> = Vec::new();
+        let mut stacks: Vec<(StackKey, &StoredItem, u32)> = Vec::new();
+        for stored in &other.items {
+            if is_stack(&stored.item) {
+                let key = StackKey::of(&stored.item);
+                match stacks.iter_mut().find(|(known, _, _)| *known == key) {
+                    Some((_, _, count)) => *count = count.saturating_add(stored.item.units()),
+                    None => stacks.push((key, stored, stored.item.units())),
+                }
+            } else if held.insert(stored.fact()) {
+                fresh.push(stored.clone());
+            } else {
+                merged.already_held += 1;
+            }
+        }
+        merged.added = fresh.len();
         for stored in fresh {
             self.add(stored.item, stored.origin, stored.stored_at);
         }
-        Merged {
-            added,
-            already_held,
+        for (key, first, theirs) in stacks {
+            let mine: u32 = self
+                .items
+                .iter()
+                .filter(|stored| is_stack(&stored.item) && StackKey::of(&stored.item) == key)
+                .map(|stored| stored.item.units())
+                .fold(0, u32::saturating_add);
+            let holder = self
+                .items
+                .iter()
+                .position(|stored| is_stack(&stored.item) && StackKey::of(&stored.item) == key);
+            match holder {
+                Some(_) if theirs <= mine => merged.already_held += 1,
+                Some(slot) => {
+                    self.items[slot].item.stack_count =
+                        self.items[slot].item.units().saturating_add(theirs - mine);
+                    merged.raised += 1;
+                }
+                None => {
+                    self.add(
+                        Item {
+                            stack_count: theirs,
+                            ..first.item.clone()
+                        },
+                        first.origin.clone(),
+                        first.stored_at,
+                    );
+                    merged.added += 1;
+                }
+            }
+        }
+        merged
+    }
+
+    /// Keeps one entry per stackable record (`is_stack`): every later
+    /// entry of the same [`StackKey`] is folded into the first —
+    /// its units added, its id retired — so a record the store holds
+    /// in several stacks ends in one. The first entry keeps its id,
+    /// origin, and moment; a record `is_stack` does not know is left
+    /// alone.
+    pub fn consolidate_stacks(&mut self, is_stack: impl Fn(&Item) -> bool) -> Folded {
+        let mut first_of: Vec<(StackKey, usize)> = Vec::new();
+        let mut folds: Vec<(usize, StoredItemId, u32)> = Vec::new();
+        for (slot, stored) in self.items.iter().enumerate() {
+            if !is_stack(&stored.item) {
+                continue;
+            }
+            let key = StackKey::of(&stored.item);
+            match first_of.iter().find(|(known, _)| *known == key) {
+                Some((_, into)) => folds.push((*into, stored.id, stored.item.units())),
+                None => first_of.push((key, slot)),
+            }
+        }
+        let mut stacks: HashSet<usize> = HashSet::new();
+        for (into, _, units) in &folds {
+            let item = &mut self.items[*into].item;
+            item.stack_count = item.units().saturating_add(*units);
+            stacks.insert(*into);
+        }
+        let folded: HashSet<StoredItemId> = folds.iter().map(|(_, id, _)| *id).collect();
+        self.items.retain(|stored| !folded.contains(&stored.id));
+        Folded {
+            entries: folds.len(),
+            stacks: stacks.len(),
         }
     }
 
@@ -638,15 +757,19 @@ mod tests {
         );
         theirs.add(cluster(), tab(0), at(12));
 
-        let merged = mine.merge(&theirs);
+        let merged = mine.merge(&theirs, |_| false);
         assert_eq!(
             merged,
             Merged {
                 added: 2,
-                already_held: 2
+                already_held: 2,
+                raised: 0
             }
         );
-        assert_eq!(merged.to_string(), "2 added, 2 already held");
+        assert_eq!(
+            merged.to_string(),
+            "2 added, 2 already held, 0 stacks raised"
+        );
         let ids: Vec<StoredItemId> = mine.items().iter().map(StoredItem::id).collect();
         assert_eq!(
             ids,
@@ -663,24 +786,168 @@ mod tests {
         );
 
         assert_eq!(
-            mine.merge(&theirs),
+            mine.merge(&theirs, |_| false),
             Merged {
                 added: 0,
-                already_held: 4
+                already_held: 4,
+                raised: 0
             }
         );
         let copy = VaultStore::from_json(&mine.to_json()).unwrap();
         assert_eq!(
-            mine.merge(&copy),
+            mine.merge(&copy, |_| false),
             Merged {
                 added: 0,
-                already_held: 3
+                already_held: 3,
+                raised: 0
             }
         );
         assert_eq!(mine.len(), 3);
         assert_eq!(
-            VaultStore::new().merge(&VaultStore::new()),
+            VaultStore::new().merge(&VaultStore::new(), |_| false),
             Merged::default()
+        );
+    }
+
+    const SHARD: &str = "records/items/materia/compa_soulshard.dbr";
+
+    fn stack(base_name: &str, count: u32) -> Item {
+        Item {
+            base_name: base_name.into(),
+            stack_count: count,
+            ..Item::default()
+        }
+    }
+
+    fn is_stack(item: &Item) -> bool {
+        item.base_name != "records/items/gearweapons/swords/a.dbr"
+    }
+
+    #[test]
+    fn stacks_merge_as_a_high_water_mark_per_record_and_never_double() {
+        let mut mine = VaultStore::new();
+        let shards = mine.add(stack(SHARD, 5), ItemOrigin::Unknown, at(1));
+        let mut theirs = VaultStore::new();
+        theirs.add(stack(SHARD, 4), ItemOrigin::Unknown, at(7));
+        theirs.add(
+            Item {
+                seed: 99,
+                ..stack(SHARD, 3)
+            },
+            ItemOrigin::Unknown,
+            at(8),
+        );
+        theirs.add(cluster(), ItemOrigin::Unknown, at(9));
+
+        let merged = mine.merge(&theirs, is_stack);
+        assert_eq!(
+            merged,
+            Merged {
+                added: 1,
+                already_held: 0,
+                raised: 1
+            }
+        );
+        assert_eq!(mine.get(shards).unwrap().item().stack_count, 7);
+        assert_eq!(mine.len(), 2);
+        assert_eq!(mine.items()[1].item(), &cluster());
+
+        assert_eq!(
+            mine.merge(&theirs, is_stack),
+            Merged {
+                added: 0,
+                already_held: 2,
+                raised: 0
+            }
+        );
+        assert_eq!(mine.get(shards).unwrap().item().stack_count, 7);
+
+        let mut sword = VaultStore::new();
+        sword.add(
+            Item {
+                base_name: "records/items/gearweapons/swords/a.dbr".into(),
+                seed: 5,
+                ..Item::default()
+            },
+            ItemOrigin::Unknown,
+            at(2),
+        );
+        assert_eq!(
+            mine.merge(&sword, is_stack),
+            Merged {
+                added: 1,
+                already_held: 0,
+                raised: 0
+            }
+        );
+        assert_eq!(
+            mine.merge(&sword, is_stack),
+            Merged {
+                added: 0,
+                already_held: 1,
+                raised: 0
+            }
+        );
+    }
+
+    #[test]
+    fn consolidating_folds_later_stacks_into_the_first_and_keeps_the_rest() {
+        let mut store = VaultStore::new();
+        let first = store.add(stack(SHARD, 5), ItemOrigin::Unknown, at(1));
+        let sword = store.add(
+            Item {
+                base_name: "records/items/gearweapons/swords/a.dbr".into(),
+                seed: 5,
+                ..Item::default()
+            },
+            ItemOrigin::Unknown,
+            at(2),
+        );
+        store.add(
+            Item {
+                seed: 42,
+                ..stack(SHARD, 0)
+            },
+            ItemOrigin::TransferStash {
+                campaign: Campaign::Main,
+                tab: TabIndex::new(0),
+            },
+            at(3),
+        );
+        let clusters = store.add(cluster(), ItemOrigin::Unknown, at(4));
+        store.add(stack(SHARD, 1000), ItemOrigin::Unknown, at(5));
+        store.add(cluster(), ItemOrigin::Unknown, at(6));
+        store.add(
+            Item {
+                relic_completion_level: 1,
+                ..stack(SHARD, 2)
+            },
+            ItemOrigin::Unknown,
+            at(7),
+        );
+
+        let folded = store.consolidate_stacks(is_stack);
+        assert_eq!(
+            folded,
+            Folded {
+                entries: 3,
+                stacks: 2
+            }
+        );
+        assert_eq!(folded.to_string(), "3 entries folded into 2 stacks");
+        let ids: Vec<StoredItemId> = store.items().iter().map(StoredItem::id).collect();
+        assert_eq!(ids, vec![first, sword, clusters, StoredItemId::new(7)]);
+        assert_eq!(store.get(first).unwrap().item().stack_count, 1006);
+        assert_eq!(store.get(first).unwrap().stored_at(), at(1));
+        assert_eq!(store.get(clusters).unwrap().item().stack_count, 30);
+        assert_eq!(
+            store.get(StoredItemId::new(7)).unwrap().item().stack_count,
+            2
+        );
+        assert_eq!(store.consolidate_stacks(is_stack), Folded::default());
+        assert_eq!(
+            store.add(stack(SHARD, 1), ItemOrigin::Unknown, at(8)),
+            StoredItemId::new(8)
         );
     }
 
