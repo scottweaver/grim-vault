@@ -9,9 +9,8 @@ Last updated: 2026-09-07 (FEATURES.md 20–24 landed on `main` at
 `f6bd3d0` by three parallel tracks — the scrolling tab strip with
 storage tabs first, the purge-duplicates standing order, and the
 bulk move / copy / delete buttons under a `bulkDuplicates` rule;
-496 tests; the three agent worktrees and branches still exist,
-awaiting the user's say-so; the in-game acceptance run is still
-pending)
+496 tests; the three landed branches and worktrees deleted on the
+user's say-so; the in-game acceptance run is still pending)
 
 ## Session handoff
 **Resume here:** `main` at the `docs/state-post-features-20-24`
@@ -20,13 +19,11 @@ FEATURES.md item through 24 (there is no item 17) — 496 tests, clippy
 pedantic clean, fmt clean, headless `--check` clean from the release
 build on a scratch copy of the saves; there is no remote (the user
 declined creating the GitHub repo for now — do not push unprompted,
-next-up item 7). No track is in flight. **Three landed branches and
-their worktrees still exist** — `feat/scrolling-tab-strip`
-(`7e3067f`), `feat/purge-duplicates` (`a6b06bc`), `feat/bulk-tab-ops`
-(`f6bd3d0`), each fast-forwarded into `main`, plus the
-`worktree-agent-*` refs and the `.claude/worktrees/agent-*` checkouts
-with their build caches; deleting them is destructive and waits for
-the user (the 2026-09-07 cleanup did the same on their say-so).
+next-up item 7). No track is in flight, and `main` is the only
+branch: the three
+landed branches, their `worktree-agent-*` refs, and the
+`.claude/worktrees/agent-*` checkouts were deleted on the user's
+say-so once everything was fast-forwarded.
 Parallel tracks are integrated by rebasing each onto the moving
 `main` — ask the agent to do it, it knows its own conflicts — and
 fast-forwarding; today's conflicts sat in `bulk.rs`, `settings.rs`,
@@ -182,9 +179,7 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
 | Branch | Purpose | Status |
 |---|---|---|
 | `main` | trunk | at the `docs/state-post-features-20-24` fast-forward — every FEATURES.md item through 24; 496 tests green; no remote and no GitHub repo yet |
-| `feat/scrolling-tab-strip` | items 21–22 | landed (`7e3067f` fast-forwarded into `main`); branch, `worktree-agent-a7404fe4053e14018` ref and `.claude/worktrees/agent-a7404fe4053e14018` await deletion on the user's say-so |
-| `feat/purge-duplicates` | item 23 | landed (`a6b06bc`); branch, `worktree-agent-a0e85a7b24ed6632e` ref and `.claude/worktrees/agent-a0e85a7b24ed6632e` await deletion |
-| `feat/bulk-tab-ops` | items 20 + 24 | landed (`f6bd3d0`); branch, `worktree-agent-aedbcc9191fd5d281` ref and `.claude/worktrees/agent-aedbcc9191fd5d281` await deletion |
+| *(none)* | — | the three track branches of 2026-09-07 evening (`feat/scrolling-tab-strip`, `feat/purge-duplicates`, `feat/bulk-tab-ops`), their `worktree-agent-*` refs, and their worktrees were deleted on the user's say-so; no worktrees remain |
 
 ## Next up
 
@@ -209,10 +204,9 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
    `main`, decisions fixed in the brief, the eyes-only GD Stash rule,
    no bare `git stash`, no STATE.md edits by agents; the integrator
    asks each agent to rebase onto the moving `main` before landing.
-3. **Cleanup awaiting the user:** delete the three landed branches,
-   the `worktree-agent-*` refs, and the worktrees (`git worktree
-   remove`, then `git branch -d`); then the `AutoMoveTab` /
-   `AutoMoveTarget` rename to an order-neutral name.
+3. **Rename `AutoMoveTab` / `AutoMoveTarget`** to an order-neutral
+   name now that both standing orders share them (deferred on
+   2026-09-07 to keep three parallel tracks from colliding).
 4. **Stash file family:** decide how the `.dst` / `.gsh` twins are
    shown (further campaigns? a mode selector?) — design dialog first.
 5. **Follow-ups:** equipment slots as drag ends; level / XP edits need
@@ -449,8 +443,6 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
   what makes `main` trustworthy on real saves; until it runs, every
   write path rests on byte-identical re-encodes and CLI / headless
   round trips only.
-- **Waiting on the user — cleanup** of the three landed branches,
-  their `worktree-agent-*` refs, and worktrees (next-up item 3).
 - Environment note: the game install and saves live on
   a network mount (`/Volumes/scott-games/…`) that may not be present;
   check before assuming. The saves carry Steam-cloud (`remote/save/`)
