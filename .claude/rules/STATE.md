@@ -5,22 +5,33 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-07 (FEATURES.md 20–24 landed on `main` at
-`f6bd3d0` by three parallel tracks — the scrolling tab strip with
-storage tabs first, the purge-duplicates standing order, and the
-bulk move / copy / delete buttons under a `bulkDuplicates` rule;
-496 tests; the three landed branches and worktrees deleted on the
-user's say-so; the GitHub repo `scottweaver/grim-vault` created and
-`main` pushed at `0e3f39d`; checkpointed before /clear while the
-user's acceptance run is under way in the relaunched build)
+Last updated: 2026-09-07 (FEATURES.md 25–27 landed on `main` at
+`a22ac10` — the vault store's location as a `storeFile` setting so
+one vault on the NAS can serve the Mac and the coming Bazzite Linux
+build, vault export / import as a store merge, and a settings modal
+behind a ⚙ in the status bar; 500 tests; fast-forwarded and pushed)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
-**Resume here:** `main` at `0e3f39d` (feature tip `f6bd3d0`) holds
-everything landed — every FEATURES.md item through 24 (there is no
-item 17) — 496 tests, clippy pedantic clean, fmt clean, headless
-`--check` clean from the release build on a scratch copy of the
-saves. **The remote exists now:** the user created
+**Resume here:** `main` at the `docs/state-post-features-25-27`
+fast-forward (feature tip `a22ac10`) holds everything landed — every
+FEATURES.md item through 27 (there is no item 17) — 500 tests, clippy
+pedantic clean, fmt clean, headless `--check` clean from the release
+build on a scratch copy of the saves. **Why 25–27:** the user asked
+in chat whether the vault is portable so a Linux binary on Bazzite
+can use the Mac's vault; it is (no path or platform fact in it), and
+they asked for the shared-location route to be first-class, plus
+export / import and a settings modal — recorded as FEATURES.md 25–27
+by the agent, not the user, so the queue stays the one record. **The
+user's next step is the Linux build:** `target/release/grimvault-gui`
+is built from `a22ac10`; on Bazzite, `~/.config/grim-vault/
+settings.json` with `storeFile` naming the NAS vault under the
+Linux mount point is the whole setup, and the ⚙ modal writes it. The
+settings modal has only been exercised by unit tests and the CLI
+twins — nobody has clicked the gear yet — so the first thing to
+confirm in the window is that the modal opens, Apply on a store
+change swaps the pane, and Export / Import toast sensibly.
+**The remote exists now:** the user created
 `github.com/scottweaver/grim-vault` (public, Issues enabled) on
 2026-09-07 at 14:54 local and pushed; `origin/main` is in sync at
 `0e3f39d`, so next-up item 7 is done — push after every landing from
@@ -71,15 +82,17 @@ default `bulkDuplicates: skip`.
   far is in `docs/format-references.md` "GD Stash (eyes-only)
   findings".
 - **The user's feature queue is `FEATURES.md`** in the repo root
-  (untracked, user-authored, growing): items 1–24 are landed on
+  (untracked, user-authored, growing): items 1–27 are landed on
   `main` (there is no item 17) and each line carries a
   `[landed <date>: <rule>]` tag (20–24 tagged 2026-09-07 following
-  the pass the user agreed to for 1–19). They announce additions
-  with "new items in FEATURES.md" / "new features are ready for
-  review", and nothing is read until then. Items are executed on
-  the fly, in parallel where independent — one fork agent per track
-  in its own worktree, briefed with the design decisions up front;
-  three tracks at once worked today, six on 2026-09-07's first pass.
+  the pass the user agreed to for 1–19; 25–27 were *written* by the
+  agent from a chat request the same day, marked "asked in chat").
+  They announce additions with "new items in FEATURES.md" / "new
+  features are ready for review", and nothing is read until then.
+  Items are executed on the fly, in parallel where independent — one
+  fork agent per track in its own worktree, briefed with the design
+  decisions up front; three tracks at once worked today, six on
+  2026-09-07's first pass; 25–27 were one track in the main checkout.
 - **Verifying the GUI without touching the user's setup:** point
   `GRIMVAULT_CONFIG_DIR` at a scratch directory holding a
   `settings.json` (`gameDir` = the real install, `saveDir` = a scratch
@@ -187,20 +200,23 @@ Reload/Keep-mine modal, `--check` headless mode, standing orders —
 auto-move, purge, the additive component sync — and, landed
 2026-09-07 evening, a scrolling tab strip with the storage tabs
 first, Move all / Copy all on every tab and sack, Delete all… behind
-a confirmation, and one `bulkDuplicates` rule in `settings.json`) —
-496 tests, clippy pedantic clean. Verified on scratch copies of the
-user's install and saves. **Not yet verified: the game reading any
-file this app wrote** — the next step is the user's acceptance run on
-the real install with the game closed. The user's `FEATURES.md` is
-landed through item 24. grim-vault is the Grim Dawn sibling of
-tq-univault; PROJECT.md is bound with `tracker: none`.
+a confirmation, and one `bulkDuplicates` rule in `settings.json`, and
+— landed 2026-09-07 night — the vault store at any path via
+`storeFile`, vault export / import as a store merge, and a settings
+modal behind ⚙) — 500 tests, clippy pedantic clean. Verified on
+scratch copies of the user's install and saves. **Not yet verified:
+the game reading any file this app wrote** — the next step is the
+user's acceptance run on the real install with the game closed, and
+now the Linux build on Bazzite sharing the NAS vault. The user's
+`FEATURES.md` is landed through item 27. grim-vault is the Grim Dawn
+sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
 
 ## Branches in flight
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at the `docs/state-post-features-20-24` fast-forward — every FEATURES.md item through 24; 496 tests green; pushed, `origin/main` in sync |
-| *(none)* | — | the three track branches of 2026-09-07 evening (`feat/scrolling-tab-strip`, `feat/purge-duplicates`, `feat/bulk-tab-ops`), their `worktree-agent-*` refs, and their worktrees were deleted on the user's say-so; no worktrees remain |
+| `main` | trunk | at the `docs/state-post-features-25-27` fast-forward — every FEATURES.md item through 27; 500 tests green; pushed, `origin/main` in sync |
+| `feat/store-location-and-settings` | FEATURES.md 25–27 | landed by fast-forward at `a22ac10`; delete once the user confirms the modal in the window (no worktree) |
 
 ## Next up
 
@@ -217,10 +233,19 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
    purge, Move all / Copy all a spare tab, Delete all… a spare tab,
    flip the store's "Skip duplicates in bulk moves" box, hover a strip
    chevron while dragging, watch the component sync fill the store,
-   relaunch to see the remembered campaign; then confirm every one of
+   relaunch to see the remembered campaign; **new:** click ⚙, point
+   the store file at a copy on the NAS and Apply, export a copy,
+   import it back (expect "nothing new"); then confirm every one of
    those in-game. Nothing this app writes has been read by the game
    yet — this run is what makes `main` trusted.
-2. **FEATURES.md 25 onward** as the user announces them — one fork
+1b. **The Linux build for Bazzite** (user intent, 2026-09-07): build
+   `grimvault-gui` on or for Linux (pure-Rust deps, no native ones
+   recorded; `rfd` uses GTK/XDG portals on Linux — check it links on
+   Bazzite's immutable base), then on that machine write
+   `~/.config/grim-vault/settings.json` — or run setup and use ⚙ —
+   with `storeFile` naming the NAS vault under the Linux mount point.
+   One app on the vault at a time.
+2. **FEATURES.md 28 onward** as the user announces them — one fork
    agent per independent item in its own worktree, branch from
    `main`, decisions fixed in the brief, the eyes-only GD Stash rule,
    no bare `git stash`, no STATE.md edits by agents; the integrator
@@ -251,6 +276,34 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
    Stash does not read it either).
 
 ## Most recent meaningful progress
+
+- **2026-09-07 (night) — FEATURES.md 25–27 landed on `main`
+  (fast-forward to `a22ac10`, one track in the main checkout).** The
+  user asked whether the vault is portable enough for a Bazzite Linux
+  build to share it; it is, and they asked for the shared-location
+  route to be first-class. Core: `settings.json` `storeFile`
+  (absolute, or relative to the config dir; absent = beside the
+  settings) resolved by `Settings::store_file`, and
+  `VaultStore::merge` — every entry of another store whose vaulting
+  event (origin, moment, item) this one lacks is added under a fresh
+  id, nothing removed, so a store merged into itself adds nothing
+  (`ItemOrigin` now derives `Hash`). GUI: `settings_dialog` — a ⚙ at
+  the left of the status bar opens a modal with the directories, the
+  store file (Browse… / New… / Default and a verdict that refuses a
+  directory or an unmounted parent), the sync and bulk-duplicates
+  rules, "Export a copy…" and "Import from a copy…"; the draft is
+  applied as one and `Change::between` decides its cost — rules in
+  place, a store swap (edits flushed first, guard re-pointed, standing
+  orders run), or a full reload via the loader. `--check` and the CLI
+  examples honour `storeFile`; `vault_cli export-store` (never
+  overwrites) / `import-store`. 500 tests. Why: one vault for two
+  machines with machine-local settings is exactly the split the
+  self-describing store was built for. Risk: the modal has never been
+  clicked (unit tests and the CLI twins only); two apps on one NAS
+  store at once rely on the polling guard, which catches a write
+  between saves but not two edits in flight; a store switch runs the
+  standing orders into the newly opened store, so switching to an
+  empty file auto-moves nominated tabs into it at once.
 
 - **2026-09-07 (evening) — FEATURES.md 20–24 landed on `main` (three
   fast-forwards to `f6bd3d0`).** The user announced the five items;
@@ -436,16 +489,6 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
   limit was the last thing making characters second-class. Risk: no
   `player.gdc` this app wrote has been loaded by the game; the copy
   keeps the seed; GD's own duplicate detection (if any) is unknown.
-
-- **2026-09-03 — Landed on `main` (local fast-forward to `54d6042`).**
-  `feat/gd-read-stack` and `design/shared-engine-split` merged linearly
-  and were deleted; no PR, no remote, `tracker: none`. Six feature
-  commits since the rules layer: engine split decided, read stack,
-  vault loop, GUI shell + typed `player.gdc`, reagent storage, CLI
-  settings fallback. Why: the work is usable and the branches were
-  pure history at this point; landing it makes `main` the thing to
-  build on. Risk: nothing is off this machine yet — a GitHub push is
-  next-up item 8.
 
 ## Blocked / waiting
 
