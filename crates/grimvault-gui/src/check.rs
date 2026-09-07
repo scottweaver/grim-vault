@@ -3,15 +3,17 @@
 //! prints what the Ready phase would hold — layers and archives, every
 //! stash tab with its items named, the component / crafting-material
 //! storage by tab, the store, every character, and — when run from
-//! the saved settings — what the standing orders (auto-move tabs, the
-//! component sync) would do on this load, as a dry run — exiting
-//! non-zero on any error, a character that failed to open included.
-//! Nothing is written.
+//! the saved settings — what the standing orders (auto-move tabs,
+//! purge tabs, the component sync) would do on this load, as a dry
+//! run — exiting non-zero on any error, a character that failed to
+//! open included. Nothing is written.
 
 use std::error::Error;
+use std::fmt;
 use std::path::Path;
 use std::process::ExitCode;
 
+use grimvault_core::block::StashTab;
 use grimvault_core::blueprint::check_blueprint;
 use grimvault_core::bulk;
 use grimvault_core::formulas::FormulaRead;
@@ -20,8 +22,8 @@ use grimvault_core::gdc::InventoryState;
 use grimvault_core::illusion::{IllusionCategory, audit};
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
-use grimvault_core::settings::{ReagentSync, Settings};
-use grimvault_core::transfer::SackIndex;
+use grimvault_core::settings::{AutoMoveTab, ReagentSync, Settings, StandingOrder};
+use grimvault_core::transfer::{SackIndex, TabIndex};
 use univault_engine::ids::RecordId;
 
 use crate::automove::{self, AutoMoveTarget};
@@ -138,40 +140,36 @@ fn print_orders(settings: &Settings, world: &LoadedWorld) {
         ReagentSync::Off => "off",
     };
     println!(
-        "\nstanding orders: {} tab(s) nominated for auto-move; component sync {sync}",
-        settings.auto_move.len()
+        "\nstanding orders: {} tab(s) nominated for auto-move, {} for purge; component sync {sync}",
+        settings.auto_move.len(),
+        settings.purge_duplicates.len()
     );
     let names = automove::open_names(&world.characters);
     let store = world.store.store();
-    for nomination in &settings.auto_move {
-        let plan = match automove::resolve(nomination, &world.campaign, &names) {
-            None => {
-                println!("  {nomination}: not open on this load");
-                continue;
-            }
-            Some(AutoMoveTarget::TransferStash(tab)) => {
-                bulk::plan_for(&world.stash.stash().tabs, tab, store, &world.game)
-            }
-            Some(AutoMoveTarget::CharacterStash { character, tab }) => {
-                let Some(stash) = world
-                    .characters
-                    .get(character.value())
-                    .and_then(CharacterEntry::doc)
-                    .and_then(|doc| doc.file().stash())
-                else {
-                    println!("  {nomination}: the character's stash is not typed");
-                    continue;
-                };
-                bulk::plan_for(&stash.tabs, tab, store, &world.game)
-            }
-        };
-        match plan {
-            Ok(plan) => println!(
-                "  {nomination}: would move {} item(s), leaving {} duplicate(s)",
-                plan.moving.len(),
-                plan.duplicates
-            ),
-            Err(error) => println!("  {nomination}: {error}"),
+    for order in StandingOrder::ALL {
+        for nomination in settings.nominations(order) {
+            let plan = match nominated_tabs(world, nomination, &names) {
+                Err(skipped) => skipped.to_string(),
+                Ok((tabs, tab)) => match order {
+                    StandingOrder::AutoMove => {
+                        match bulk::plan_for(tabs, tab, store, &world.game) {
+                            Ok(plan) => format!(
+                                "would move {} item(s), leaving {} duplicate(s)",
+                                plan.moving.len(),
+                                plan.duplicates
+                            ),
+                            Err(error) => error.to_string(),
+                        }
+                    }
+                    StandingOrder::PurgeDuplicates => {
+                        match bulk::purge_plan(tabs, tab, store, &world.game) {
+                            Ok(doomed) => format!("would delete {} duplicate(s)", doomed.len()),
+                            Err(error) => error.to_string(),
+                        }
+                    }
+                },
+            };
+            println!("  {order} {nomination}: {plan}");
         }
     }
     if settings.sync_reagents == ReagentSync::On
@@ -183,6 +181,42 @@ fn print_orders(settings: &Settings, world: &LoadedWorld) {
             "  component sync would raise {} record(s) by {units} unit(s)",
             shortfall.len()
         );
+    }
+}
+
+/// Why a nomination has no tab to plan over on this load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Skipped {
+    NotOpen,
+    StashNotTyped,
+}
+
+impl fmt::Display for Skipped {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NotOpen => "not open on this load",
+            Self::StashNotTyped => "the character's stash is not typed",
+        })
+    }
+}
+
+/// The tabs a nomination names among the loaded documents, with the
+/// nominated tab's index.
+fn nominated_tabs<'a>(
+    world: &'a LoadedWorld,
+    nomination: &AutoMoveTab,
+    names: &[automove::OpenName<'_>],
+) -> Result<(&'a [StashTab], TabIndex), Skipped> {
+    match automove::resolve(nomination, &world.campaign, names) {
+        None => Err(Skipped::NotOpen),
+        Some(AutoMoveTarget::TransferStash(tab)) => Ok((&world.stash.stash().tabs, tab)),
+        Some(AutoMoveTarget::CharacterStash { character, tab }) => world
+            .characters
+            .get(character.value())
+            .and_then(CharacterEntry::doc)
+            .and_then(|doc| doc.file().stash())
+            .map(|stash| (stash.tabs.as_slice(), tab))
+            .ok_or(Skipped::StashNotTyped),
     }
 }
 

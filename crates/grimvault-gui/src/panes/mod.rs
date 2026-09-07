@@ -23,14 +23,14 @@ use grimvault_core::gamedata::{GameData, Rarity};
 use grimvault_core::gdc::Sack;
 use grimvault_core::item::Item;
 use grimvault_core::respec::Reset;
-use grimvault_core::settings::{AutoMoveTab, ReagentSync, Settings};
+use grimvault_core::settings::{AutoMoveTab, ReagentSync, Settings, StandingOrder};
 use grimvault_core::socket::Socket;
 use grimvault_core::transfer::{Footprints, ItemIndex};
 use univault_engine::grid::CellRect;
 use univault_engine::ids::GridPos;
 use univault_ui::theme::Palette;
 
-use crate::automove::AutoMoveRequest;
+use crate::automove::OrderRequest;
 use crate::badges::{Badge, paint_badge};
 use crate::documents::CharacterSlot;
 use crate::drag::{self, Container, DragSource, DragState, DropTarget, Fit, Mode};
@@ -88,8 +88,8 @@ pub struct DragFrame {
     pub respec: Option<(CharacterSlot, Reset)>,
     /// An add, export, or import on a crafting list.
     pub crafting: Option<crate::crafting::Request>,
-    /// A tab nominated for auto-move, or withdrawn.
-    pub auto_move: Option<AutoMoveRequest>,
+    /// A tab nominated for a standing order, or withdrawn from it.
+    pub standing_order: Option<OrderRequest>,
     /// The component-storage sync switched on or off.
     pub reagent_sync: Option<ReagentSync>,
 }
@@ -98,21 +98,36 @@ const AUTO_MOVE_WHY: &str = "Every item in this tab is moved into the vault stor
      reloads the file — after the game writes it, too — leaving the tab empty. An item the store \
      already holds under the same record and roll seed is left in place; stacks are never \
      treated as duplicates.";
+const PURGE_WHY: &str = "Whenever the app loads or reloads this tab — after the game writes it, too — every \
+     item whose record and roll seed the vault store already holds is deleted from the tab. \
+     Stacks are never duplicates. The file is backed up once per load before the first write.";
 
-/// The auto-move toggle on a tab's header, reporting a change through
-/// the frame.
-pub fn auto_move_toggle(ui: &mut Ui, tab: AutoMoveTab, cx: &PaneCtx<'_>, frame: &mut DragFrame) {
-    let mut nominated = cx.settings.is_nominated(&tab);
-    if ui
-        .checkbox(&mut nominated, "Auto-move to vault")
-        .on_hover_text(AUTO_MOVE_WHY)
-        .changed()
-    {
-        frame.auto_move = Some(if nominated {
-            AutoMoveRequest::Nominate(tab)
-        } else {
-            AutoMoveRequest::Withdraw(tab)
-        });
+/// The checkbox label and explanation of an order's toggle.
+fn order_toggle_text(order: StandingOrder) -> (&'static str, &'static str) {
+    match order {
+        StandingOrder::AutoMove => ("Auto-move to vault", AUTO_MOVE_WHY),
+        StandingOrder::PurgeDuplicates => ("Purge duplicates", PURGE_WHY),
+    }
+}
+
+/// The standing-order toggles on a tab's header — auto-move, then
+/// purge — reporting a change through the frame.
+pub fn order_toggles(ui: &mut Ui, tab: &AutoMoveTab, cx: &PaneCtx<'_>, frame: &mut DragFrame) {
+    for order in StandingOrder::ALL {
+        let (label, why) = order_toggle_text(order);
+        let mut nominated = cx.settings.is_nominated(order, tab);
+        if ui
+            .checkbox(&mut nominated, label)
+            .on_hover_text(why)
+            .changed()
+        {
+            let tab = tab.clone();
+            frame.standing_order = Some(if nominated {
+                OrderRequest::Nominate { order, tab }
+            } else {
+                OrderRequest::Withdraw { order, tab }
+            });
+        }
     }
 }
 

@@ -6,7 +6,10 @@
 //! way ([`Identity::Seed`]); a stack's seed is not an identity and a
 //! reagent vaulted out of the storage has none, so a stackable is
 //! never skipped. Every move goes through [`crate::transfer`], so the
-//! origin recorded is exactly what a drag would record.
+//! origin recorded is exactly what a drag would record. The purge is
+//! the same rule's other half: it deletes from a tab exactly what a
+//! bulk move would leave — the items the store already holds — and
+//! never touches the store.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -148,6 +151,13 @@ impl HeldSeeds {
             None => Admission::New,
         }
     }
+
+    /// Whether `item` is a duplicate of something already held,
+    /// without admitting it.
+    #[must_use]
+    pub fn holds(&self, item: &Item, identities: &impl Identities) -> bool {
+        SeedKey::of(item, identities).is_some_and(|key| self.0.contains(&key))
+    }
 }
 
 enum Admission {
@@ -260,13 +270,8 @@ pub fn plan_for(
     store: &VaultStore,
     identities: &impl Identities,
 ) -> Result<TabPlan, TransferError> {
-    let items = usize::try_from(tab.value())
-        .ok()
-        .and_then(|slot| tabs.get(slot))
-        .map(|found| found.items.as_slice())
-        .ok_or(TransferError::NoSuchTab(tab))?;
     Ok(TabPlan::of(
-        items,
+        tab_items(tabs, tab)?,
         &mut HeldSeeds::of(store, identities),
         identities,
     ))
@@ -285,6 +290,106 @@ fn execute(
         moved,
         duplicates: plan.duplicates,
     })
+}
+
+/// What a purge did: how many of the tab's items it deleted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PurgeSummary {
+    pub removed: usize,
+}
+
+impl PurgeSummary {
+    #[must_use]
+    pub fn is_noop(self) -> bool {
+        self.removed == 0
+    }
+}
+
+impl fmt::Display for PurgeSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} duplicate(s) deleted", self.removed)
+    }
+}
+
+/// The items of `tab` the store already holds by record and roll
+/// seed, last index first so each removal leaves the rest where they
+/// are — the pure half of [`purge_duplicates`]. Membership is the
+/// store's alone: two in-tab copies of a seed the store lacks both
+/// stay.
+///
+/// # Errors
+/// [`TransferError::NoSuchTab`].
+pub fn purge_plan(
+    tabs: &[StashTab],
+    tab: TabIndex,
+    store: &VaultStore,
+    identities: &impl Identities,
+) -> Result<Vec<ItemIndex>, TransferError> {
+    let held = HeldSeeds::of(store, identities);
+    let mut doomed: Vec<ItemIndex> = tab_items(tabs, tab)?
+        .iter()
+        .enumerate()
+        .filter(|(_, placed)| held.holds(&placed.item, identities))
+        .map(|(slot, _)| ItemIndex::new(slot))
+        .collect();
+    doomed.reverse();
+    Ok(doomed)
+}
+
+/// Deletes from tab `tab` of `tabs` every item the store already
+/// holds by record and roll seed; the store is never changed.
+///
+/// # Errors
+/// [`TransferError::NoSuchTab`], before anything is deleted.
+pub fn purge_duplicates(
+    tabs: &mut [StashTab],
+    tab: TabIndex,
+    store: &VaultStore,
+    identities: &impl Identities,
+) -> Result<PurgeSummary, TransferError> {
+    let doomed = purge_plan(tabs, tab, store, identities)?;
+    let items = tab_items_mut(tabs, tab)?;
+    for index in &doomed {
+        items.remove(index.value());
+    }
+    Ok(PurgeSummary {
+        removed: doomed.len(),
+    })
+}
+
+/// Deletes from tab `tab` of `player`'s own stash every item the
+/// store already holds by record and roll seed; the store is never
+/// changed.
+///
+/// # Errors
+/// [`TransferError::NoPlayerStash`] or [`TransferError::NoSuchTab`],
+/// before anything is deleted.
+pub fn purge_player_duplicates(
+    player: &mut PlayerFile,
+    tab: TabIndex,
+    store: &VaultStore,
+    identities: &impl Identities,
+) -> Result<PurgeSummary, TransferError> {
+    purge_duplicates(transfer::player_tabs_mut(player)?, tab, store, identities)
+}
+
+fn tab_items(tabs: &[StashTab], tab: TabIndex) -> Result<&[StashItem], TransferError> {
+    usize::try_from(tab.value())
+        .ok()
+        .and_then(|slot| tabs.get(slot))
+        .map(|found| found.items.as_slice())
+        .ok_or(TransferError::NoSuchTab(tab))
+}
+
+fn tab_items_mut(
+    tabs: &mut [StashTab],
+    tab: TabIndex,
+) -> Result<&mut Vec<StashItem>, TransferError> {
+    usize::try_from(tab.value())
+        .ok()
+        .and_then(|slot| tabs.get_mut(slot))
+        .map(|found| &mut found.items)
+        .ok_or(TransferError::NoSuchTab(tab))
 }
 
 /// What the additive sync did: one new stack per record whose in-game
@@ -604,6 +709,64 @@ mod tests {
                 moving: vec![ItemIndex::new(0)],
                 duplicates: 0
             }
+        );
+    }
+
+    #[test]
+    fn the_purge_deletes_only_what_the_store_holds_and_never_touches_the_store() {
+        let rules = rules();
+        let mut store = VaultStore::new();
+        store.add(item(SWORD, 7), origin(), NOW);
+        store.add(item(COMPONENT, 7), origin(), NOW);
+        let mut stash = stash(vec![
+            placed(SWORD, 7, 0.0),
+            placed(SWORD, 8, 2.0),
+            placed(COMPONENT, 7, 4.0),
+            placed(SWORD, 0, 6.0),
+            placed(SWORD, 9, 8.0),
+            placed(SWORD, 9, 10.0),
+            placed(SWORD, 7, 12.0),
+        ]);
+        assert_eq!(
+            purge_plan(&stash.tabs, TAB0, &store, &rules).unwrap(),
+            vec![ItemIndex::new(6), ItemIndex::new(0)]
+        );
+        let summary = purge_duplicates(&mut stash.tabs, TAB0, &store, &rules).unwrap();
+        assert_eq!(summary, PurgeSummary { removed: 2 });
+        assert_eq!(summary.to_string(), "2 duplicate(s) deleted");
+        assert_eq!(
+            stash.tabs[0].items,
+            vec![
+                placed(SWORD, 8, 2.0),
+                placed(COMPONENT, 7, 4.0),
+                placed(SWORD, 0, 6.0),
+                placed(SWORD, 9, 8.0),
+                placed(SWORD, 9, 10.0),
+            ]
+        );
+        assert_eq!(store.len(), 2);
+        assert!(
+            purge_duplicates(&mut stash.tabs, TAB0, &store, &rules)
+                .unwrap()
+                .is_noop()
+        );
+    }
+
+    #[test]
+    fn a_missing_tab_is_refused_before_anything_is_purged() {
+        let rules = rules();
+        let mut store = VaultStore::new();
+        store.add(item(SWORD, 9), origin(), NOW);
+        let mut stash = stash(vec![placed(SWORD, 9, 0.0)]);
+        let before = stash.clone();
+        assert_eq!(
+            purge_duplicates(&mut stash.tabs, TabIndex::new(3), &store, &rules),
+            Err(TransferError::NoSuchTab(TabIndex::new(3)))
+        );
+        assert_eq!(stash, before);
+        assert_eq!(
+            purge_plan(&stash.tabs, TabIndex::new(3), &store, &rules),
+            Err(TransferError::NoSuchTab(TabIndex::new(3)))
         );
     }
 

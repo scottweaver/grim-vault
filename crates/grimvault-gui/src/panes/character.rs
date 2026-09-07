@@ -17,8 +17,8 @@ use univault_ui::components::scroll_strip::{self, ScrollStrip, StripInk};
 use univault_ui::theme::Theme;
 
 use super::{
-    DragFrame, GridEntry, GridSpec, Interaction, PaneCtx, auto_move_toggle, container_tab, extent,
-    grid_surface, item_tooltip, sack_entries, stash_entries,
+    DragFrame, GridEntry, GridSpec, Interaction, PaneCtx, container_tab, extent, grid_surface,
+    item_tooltip, order_toggles, sack_entries, stash_entries,
 };
 use crate::documents::{Backup, CharacterDoc, CharacterEntry, CharacterSlot, Edits, Writable};
 use crate::drag::Container;
@@ -323,9 +323,9 @@ fn show_container(
             CharacterTab::Stash(index) => match (stash_tabs.get(index), tab_index(index)) {
                 (Some(stash_tab), Some(tab_index)) => {
                     if editable {
-                        auto_move_toggle(
+                        order_toggles(
                             ui,
-                            AutoMoveTab::CharacterStash {
+                            &AutoMoveTab::CharacterStash {
                                 realm: doc.realm(),
                                 name: doc.name().to_owned(),
                                 tab: tab_index,

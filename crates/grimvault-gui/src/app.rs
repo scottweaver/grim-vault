@@ -19,13 +19,13 @@ use grimvault_core::gds;
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
 use grimvault_core::respec::{Reset, RespecRules};
-use grimvault_core::settings::ReagentSync;
+use grimvault_core::settings::{ReagentSync, StandingOrder};
 use grimvault_core::store::Timestamp;
 use univault_engine::ids::RecordId;
 use univault_io::read_verified;
 use univault_ui::theme::{Palette, Theme};
 
-use crate::automove::{self, AutoMoveRequest, AutoMoveTarget};
+use crate::automove::{self, AutoMoveTarget, OrderRequest};
 use crate::autosave::{Activity, Autosave, AutosaveState, Gate, Pending, Verdict};
 use crate::crafting::{self, Blueprints, CraftingFiles, FormulasOpenError, IllusionCollection};
 use crate::documents::{
@@ -613,24 +613,42 @@ impl World {
         automove::open_names(&self.characters)
     }
 
-    /// Carries out the standing orders `scope` covers: every
-    /// nominated tab among the open documents is emptied into the
-    /// store, and the component storage synced. Nothing runs while
-    /// an external change awaits the user's decision.
+    /// Carries out the standing orders `scope` covers: every tab
+    /// nominated for auto-move among the open documents is emptied
+    /// into the store, then every tab nominated for the purge loses
+    /// what the store holds, then the component storage is synced.
+    /// Nothing runs while an external change awaits the user's
+    /// decision.
     fn carry_out_orders(&mut self, scope: Scope, toasts: &mut Toasts) {
         if self.gate() == Gate::Suspended {
             return;
         }
-        let targets: Vec<AutoMoveTarget> =
-            automove::targets(&self.settings.auto_move, &self.campaign, &self.open_names())
-                .into_iter()
-                .filter(|target| scope.covers(target.doc()))
-                .collect();
-        for target in targets {
-            self.auto_move(target, toasts);
+        for order in StandingOrder::ALL {
+            for target in self.order_targets(order, scope) {
+                self.carry_out(order, target, toasts);
+            }
         }
         if scope.covers(Doc::Reagents) {
             self.sync_reagents(toasts);
+        }
+    }
+
+    /// The open tabs nominated for `order` that `scope` covers.
+    fn order_targets(&self, order: StandingOrder, scope: Scope) -> Vec<AutoMoveTarget> {
+        automove::targets(
+            self.settings.nominations(order),
+            &self.campaign,
+            &self.open_names(),
+        )
+        .into_iter()
+        .filter(|target| scope.covers(target.doc()))
+        .collect()
+    }
+
+    fn carry_out(&mut self, order: StandingOrder, target: AutoMoveTarget, toasts: &mut Toasts) {
+        match order {
+            StandingOrder::AutoMove => self.auto_move(target, toasts),
+            StandingOrder::PurgeDuplicates => self.purge(target, toasts),
         }
     }
 
@@ -711,6 +729,50 @@ impl World {
         }
     }
 
+    /// Deletes from one nominated tab every item the store already
+    /// holds by record and roll seed; only the tab's document
+    /// changes, and it joins autosave.
+    fn purge(&mut self, target: AutoMoveTarget, toasts: &mut Toasts) {
+        let doc = target.doc();
+        self.warm_doc(doc);
+        self.warm_doc(Doc::Store);
+        let label = self.target_label(target);
+        let outcome = match target {
+            AutoMoveTarget::TransferStash(tab) => bulk::purge_duplicates(
+                &mut self.stash.stash_mut().tabs,
+                tab,
+                self.store.store(),
+                &self.facts,
+            ),
+            AutoMoveTarget::CharacterStash { character, tab } => {
+                let Some(character_doc) = self
+                    .characters
+                    .get_mut(character.value())
+                    .and_then(CharacterEntry::doc_mut)
+                else {
+                    return;
+                };
+                match character_doc.file_mut() {
+                    Ok(file) => {
+                        bulk::purge_player_duplicates(file, tab, self.store.store(), &self.facts)
+                    }
+                    Err(error) => {
+                        toasts.error(format!("purge of the {label} skipped: {error}"));
+                        return;
+                    }
+                }
+            }
+        };
+        match outcome {
+            Ok(summary) if summary.is_noop() => {}
+            Ok(summary) => {
+                self.mark_edited(doc);
+                toasts.info(format!("purged the {label}: {summary}"));
+            }
+            Err(error) => toasts.error(format!("purge of the {label} failed: {error}")),
+        }
+    }
+
     /// Raises the store's reagent counts to the open storage's;
     /// only the store changes.
     fn sync_reagents(&mut self, toasts: &mut Toasts) {
@@ -732,25 +794,25 @@ impl World {
         ));
     }
 
-    /// A tab nominated or withdrawn from the auto-move list; a
+    /// A tab nominated for a standing order or withdrawn from it; a
     /// nomination is carried out at once when its tab is open.
-    fn set_auto_move(&mut self, request: AutoMoveRequest, config: &ConfigDir, toasts: &mut Toasts) {
-        let target = match request {
-            AutoMoveRequest::Nominate(tab) => {
+    fn set_order(&mut self, request: OrderRequest, config: &ConfigDir, toasts: &mut Toasts) {
+        let (order, target) = match request {
+            OrderRequest::Nominate { order, tab } => {
                 let target = automove::resolve(&tab, &self.campaign, &self.open_names());
-                self.settings.nominate(tab);
-                target
+                self.settings.nominate(order, tab);
+                (order, target)
             }
-            AutoMoveRequest::Withdraw(tab) => {
-                self.settings.withdraw(&tab);
-                None
+            OrderRequest::Withdraw { order, tab } => {
+                self.settings.withdraw(order, &tab);
+                (order, None)
             }
         };
         self.save_settings(config, toasts);
         if let Some(target) = target
             && self.gate() == Gate::Open
         {
-            self.auto_move(target, toasts);
+            self.carry_out(order, target, toasts);
         }
     }
 
@@ -1064,8 +1126,8 @@ impl World {
         toasts: &mut Toasts,
     ) {
         let mode = mode_of(modifiers);
-        if let Some(request) = frame.auto_move {
-            self.set_auto_move(request, config, toasts);
+        if let Some(request) = frame.standing_order {
+            self.set_order(request, config, toasts);
         }
         if let Some(sync) = frame.reagent_sync {
             self.set_reagent_sync(sync, config, toasts);

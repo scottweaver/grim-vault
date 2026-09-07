@@ -456,7 +456,7 @@ pub fn place_in_player_stash_at(
     place_in_tabs_at(store, id, player_tabs_mut(player)?, tab, pos, footprints)
 }
 
-fn player_tabs_mut(player: &mut PlayerFile) -> Result<&mut [StashTab], TransferError> {
+pub(crate) fn player_tabs_mut(player: &mut PlayerFile) -> Result<&mut [StashTab], TransferError> {
     player
         .stash_mut()
         .map(|stash| stash.tabs.as_mut_slice())

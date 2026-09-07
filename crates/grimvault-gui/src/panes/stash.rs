@@ -18,8 +18,8 @@ use univault_ui::theme::Theme;
 
 use super::crafting::{self, CraftingView};
 use super::{
-    DragFrame, DropCandidate, GridSpec, Interaction, PaneCtx, auto_move_toggle, container_tab,
-    grid_surface, outline, reagents, stash_entries,
+    DragFrame, DropCandidate, GridSpec, Interaction, PaneCtx, container_tab, grid_surface,
+    order_toggles, outline, reagents, stash_entries,
 };
 use crate::crafting::{Blueprints, Crafting, IllusionCollection};
 use crate::documents::{Reagents, StashDoc};
@@ -188,9 +188,9 @@ fn show_tab(
             tab.items.len()
         ));
         ui.separator();
-        auto_move_toggle(
+        order_toggles(
             ui,
-            AutoMoveTab::TransferStash {
+            &AutoMoveTab::TransferStash {
                 campaign: campaign.clone(),
                 tab: view.tab,
             },

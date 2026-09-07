@@ -1,22 +1,30 @@
-//! Standing orders on the store: the tabs nominated to empty
-//! themselves into the vault, resolved from the settings to the
-//! containers open right now, and the requests a pane reports when
-//! the user toggles a nomination. The moves themselves are
+//! Standing orders on the tabs: the tabs nominated to empty
+//! themselves into the vault or to purge what the vault already
+//! holds, resolved from the settings to the containers open right
+//! now, and the requests a pane reports when the user toggles a
+//! nomination. The moves and deletions themselves are
 //! `grimvault_core::bulk`; the shell only decides which nominations
 //! apply and when.
 
 use grimvault_core::campaign::Campaign;
 use grimvault_core::gdc::Realm;
-use grimvault_core::settings::AutoMoveTab;
+use grimvault_core::settings::{AutoMoveTab, StandingOrder};
 use grimvault_core::transfer::TabIndex;
 
 use crate::documents::{CharacterEntry, CharacterSlot, Doc};
 
-/// What a toggle on a tab's header asked for.
+/// What a toggle on a tab's header asked for: the tab nominated for
+/// an order, or withdrawn from it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AutoMoveRequest {
-    Nominate(AutoMoveTab),
-    Withdraw(AutoMoveTab),
+pub enum OrderRequest {
+    Nominate {
+        order: StandingOrder,
+        tab: AutoMoveTab,
+    },
+    Withdraw {
+        order: StandingOrder,
+        tab: AutoMoveTab,
+    },
 }
 
 /// A nominated tab among the documents open now.

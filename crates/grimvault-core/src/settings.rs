@@ -116,6 +116,31 @@ impl fmt::Display for AutoMoveTab {
     }
 }
 
+/// A standing order a tab can be nominated for. Both run at the same
+/// moments, auto-move first, so a tab under both ends empty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StandingOrder {
+    /// Empty the tab into the vault store, leaving what the store
+    /// already holds.
+    AutoMove,
+    /// Delete every item the vault store already holds under the same
+    /// record and roll seed.
+    PurgeDuplicates,
+}
+
+impl StandingOrder {
+    pub const ALL: [Self; 2] = [Self::AutoMove, Self::PurgeDuplicates];
+}
+
+impl fmt::Display for StandingOrder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::AutoMove => "auto-move",
+            Self::PurgeDuplicates => "purge",
+        })
+    }
+}
+
 /// Whether the open campaign's component / crafting-material storage
 /// raises the vault's counts to its own on every load and reload.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,8 +157,8 @@ pub enum ReagentSync {
 /// used, because a mount can vanish between sessions. The campaign is
 /// a preference, not a fact about the saves: a shell re-checks that it
 /// still exists before opening it. A file written before a field
-/// existed simply has none: no campaign, no tab nominated, the sync
-/// on.
+/// existed simply has none: no campaign, no tab nominated for either
+/// order, the sync on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -143,6 +168,8 @@ pub struct Settings {
     pub campaign: Option<Campaign>,
     #[serde(default)]
     pub auto_move: Vec<AutoMoveTab>,
+    #[serde(default)]
+    pub purge_duplicates: Vec<AutoMoveTab>,
     #[serde(default)]
     pub sync_reagents: ReagentSync,
 }
@@ -177,6 +204,7 @@ impl Settings {
             save_dir,
             campaign: None,
             auto_move: Vec::new(),
+            purge_duplicates: Vec::new(),
             sync_reagents: ReagentSync::default(),
         }
     }
@@ -190,24 +218,42 @@ impl Settings {
             save_dir,
             campaign: self.campaign.clone(),
             auto_move: self.auto_move.clone(),
+            purge_duplicates: self.purge_duplicates.clone(),
             sync_reagents: self.sync_reagents,
         }
     }
 
+    /// The tabs nominated for `order`, in nomination order.
     #[must_use]
-    pub fn is_nominated(&self, tab: &AutoMoveTab) -> bool {
-        self.auto_move.contains(tab)
-    }
-
-    /// Adds `tab` to the nominations; adding it twice is once.
-    pub fn nominate(&mut self, tab: AutoMoveTab) {
-        if !self.is_nominated(&tab) {
-            self.auto_move.push(tab);
+    pub fn nominations(&self, order: StandingOrder) -> &[AutoMoveTab] {
+        match order {
+            StandingOrder::AutoMove => &self.auto_move,
+            StandingOrder::PurgeDuplicates => &self.purge_duplicates,
         }
     }
 
-    pub fn withdraw(&mut self, tab: &AutoMoveTab) {
-        self.auto_move.retain(|nominated| nominated != tab);
+    fn nominations_mut(&mut self, order: StandingOrder) -> &mut Vec<AutoMoveTab> {
+        match order {
+            StandingOrder::AutoMove => &mut self.auto_move,
+            StandingOrder::PurgeDuplicates => &mut self.purge_duplicates,
+        }
+    }
+
+    #[must_use]
+    pub fn is_nominated(&self, order: StandingOrder, tab: &AutoMoveTab) -> bool {
+        self.nominations(order).contains(tab)
+    }
+
+    /// Adds `tab` to `order`'s nominations; adding it twice is once.
+    pub fn nominate(&mut self, order: StandingOrder, tab: AutoMoveTab) {
+        if !self.is_nominated(order, &tab) {
+            self.nominations_mut(order).push(tab);
+        }
+    }
+
+    pub fn withdraw(&mut self, order: StandingOrder, tab: &AutoMoveTab) {
+        self.nominations_mut(order)
+            .retain(|nominated| nominated != tab);
     }
 
     /// Parses a settings document.
@@ -332,11 +378,21 @@ mod tests {
     #[test]
     fn nominations_carry_their_whole_identity_and_survive_the_round_trip() {
         let mut settings = sample();
-        settings.nominate(mod_tab());
-        settings.nominate(own_tab());
-        settings.nominate(mod_tab());
+        settings.nominate(StandingOrder::AutoMove, mod_tab());
+        settings.nominate(StandingOrder::AutoMove, own_tab());
+        settings.nominate(StandingOrder::AutoMove, mod_tab());
+        settings.nominate(StandingOrder::PurgeDuplicates, own_tab());
         settings.sync_reagents = ReagentSync::Off;
         assert_eq!(settings.auto_move, vec![mod_tab(), own_tab()]);
+        assert_eq!(settings.purge_duplicates, vec![own_tab()]);
+        assert_eq!(
+            settings.nominations(StandingOrder::AutoMove),
+            &[mod_tab(), own_tab()]
+        );
+        assert_eq!(
+            settings.nominations(StandingOrder::PurgeDuplicates),
+            &[own_tab()]
+        );
         let bytes = settings.to_json();
         let text = std::str::from_utf8(&bytes).unwrap();
         assert!(
@@ -348,14 +404,22 @@ mod tests {
             text.contains("\"kind\": \"characterStash\"") && text.contains("\"realm\": \"custom\""),
             "{text}"
         );
+        assert!(text.contains("\"purgeDuplicates\": ["), "{text}");
         assert!(text.contains("\"syncReagents\": \"off\""), "{text}");
         assert_eq!(Settings::parse(&bytes).unwrap(), settings);
-        settings.withdraw(&mod_tab());
+        settings.withdraw(StandingOrder::AutoMove, &mod_tab());
         assert_eq!(settings.auto_move, vec![own_tab()]);
-        assert!(!settings.is_nominated(&mod_tab()));
+        assert!(!settings.is_nominated(StandingOrder::AutoMove, &mod_tab()));
+        assert!(settings.is_nominated(StandingOrder::PurgeDuplicates, &own_tab()));
+        assert!(!settings.is_nominated(StandingOrder::PurgeDuplicates, &mod_tab()));
+        settings.withdraw(StandingOrder::PurgeDuplicates, &own_tab());
+        assert!(settings.purge_duplicates.is_empty());
+        assert_eq!(settings.auto_move, vec![own_tab()]);
         settings.campaign = Some(loot_ascension());
+        settings.nominate(StandingOrder::PurgeDuplicates, mod_tab());
         let moved = settings.with_dirs("/g".into(), "/s".into());
         assert_eq!(moved.auto_move, vec![own_tab()]);
+        assert_eq!(moved.purge_duplicates, vec![mod_tab()]);
         assert_eq!(moved.campaign, Some(loot_ascension()));
         assert_eq!(moved.sync_reagents, ReagentSync::Off);
     }
@@ -367,7 +431,22 @@ mod tests {
         )
         .unwrap();
         assert!(settings.auto_move.is_empty());
+        assert!(settings.purge_duplicates.is_empty());
         assert_eq!(settings.sync_reagents, ReagentSync::On);
+        let named = Settings::parse(
+            br#"{"format":"grimvault-settings","version":1,"gameDir":"/g","saveDir":"/s","purgeDuplicates":[{"kind":"transferStash","campaign":"main","tab":2}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            named.purge_duplicates,
+            vec![AutoMoveTab::TransferStash {
+                campaign: Campaign::Main,
+                tab: TabIndex::new(2)
+            }]
+        );
+        assert!(named.auto_move.is_empty());
+        assert_eq!(StandingOrder::AutoMove.to_string(), "auto-move");
+        assert_eq!(StandingOrder::PurgeDuplicates.to_string(), "purge");
     }
 
     #[test]
