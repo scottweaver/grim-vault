@@ -7,16 +7,28 @@
 //! and the headless `--check` run the same code; [`start`] moves it
 //! onto a thread and reports progress over a channel.
 //!
+//! The archives — over a gigabyte, mostly off a network mount — are
+//! read and parsed [`READERS`] at a time and assembled in layer order,
+//! so the composition ([`GameData::layered`]) sees exactly what a
+//! one-at-a-time read would have: the same layers in the same order,
+//! and the first failure in that order as the load's failure. The
+//! steps are reported in that order too, each as the loader turns to
+//! its archive, so the progress panel and the `--check` transcript
+//! read the same as before.
+//!
 //! The tile symbols are the one thing read by entry rather than whole:
 //! each layer's `UI.arc` runs to a quarter gigabyte, and the eleven
 //! 4 KB textures the app wants are found through the archive's
 //! directory ([`ArcIndex`]) and read as byte ranges
 //! ([`univault_io::read_ranges`]).
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use grimvault_core::campaign::Campaign;
@@ -48,7 +60,9 @@ pub struct WorldPaths {
     pub ui_state: PathBuf,
 }
 
-/// One step of the load, reported as it starts.
+/// One step of the load, reported as the loader turns to it: for the
+/// archives, which are read ahead in parallel, that is when their
+/// bytes are awaited, in layer order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LoadStep {
     Database(PathBuf),
@@ -306,8 +320,8 @@ pub fn load_world(
     let game_dir = paths.game.path();
     let shipped_files = shipped_layers();
     let mod_files = mod_layers(list_mods(game_dir));
-    let shipped = load_layers(game_dir, &shipped_files, progress)?;
-    let mods = load_layers(game_dir, &mod_files, progress)?;
+    let plan = plan_reads(game_dir, &shipped_files, &mod_files);
+    let (shipped, mods) = read_planned(game_dir, &plan, READERS, progress)?;
     progress(LoadStep::Localization);
     let counts = (
         shipped.databases.len(),
@@ -477,69 +491,213 @@ fn read_ranges(
     })
 }
 
-/// Reads whichever of each layer's files exist, in layer order.
-fn load_layers(
-    game_dir: &Path,
-    layers: &[LayerFiles],
-    progress: &mut dyn FnMut(LoadStep),
-) -> Result<LayerSet, LoadFailure> {
-    let mut set = LayerSet::default();
-    for layer in layers {
-        if let Some(bytes) =
-            read_if_present(game_dir, &layer.database, progress, LoadStep::Database)?
-        {
-            let database = ArzFile::parse(bytes, ArzDialect::grim_dawn()).map_err(|source| {
-                LoadFailure::Database {
-                    path: game_dir.join(&layer.database),
-                    source,
-                }
-            })?;
-            set.databases.push(database);
-        }
-        if let Some(archive) = read_archive(game_dir, &layer.text, progress, LoadStep::TextArchive)?
-        {
-            set.text_archives.push(archive);
-        }
-        if let Some(archive) =
-            read_archive(game_dir, &layer.items, progress, LoadStep::ItemArchive)?
-        {
-            set.item_archives.push(archive);
+/// How many archives are read at once: enough to keep parsing off
+/// the critical path, and no more — the bytes themselves are the
+/// bound (a network mount's link, or a local disk), and past four
+/// readers neither measured any faster (the commit that set this
+/// records the numbers).
+const READERS: usize = 4;
+
+/// Which whole-file archive of a layer a read is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LayerFile {
+    Database,
+    Text,
+    Items,
+}
+
+impl LayerFile {
+    const ALL: [Self; 3] = [Self::Database, Self::Text, Self::Items];
+
+    fn relative(self, layer: &LayerFiles) -> &Path {
+        match self {
+            Self::Database => &layer.database,
+            Self::Text => &layer.text,
+            Self::Items => &layer.items,
         }
     }
-    Ok(set)
+
+    fn step(self, relative: PathBuf) -> LoadStep {
+        match self {
+            Self::Database => LoadStep::Database(relative),
+            Self::Text => LoadStep::TextArchive(relative),
+            Self::Items => LoadStep::ItemArchive(relative),
+        }
+    }
 }
 
-fn read_archive(
-    game_dir: &Path,
-    relative: &Path,
-    progress: &mut dyn FnMut(LoadStep),
-    step: fn(PathBuf) -> LoadStep,
-) -> Result<Option<ArcFile>, LoadFailure> {
-    read_if_present(game_dir, relative, progress, step)?
-        .map(|bytes| {
-            ArcFile::parse(bytes, Codec::Lz4Block).map_err(|source| LoadFailure::Archive {
-                path: game_dir.join(relative),
-                source,
-            })
-        })
-        .transpose()
+/// Whose [`LayerSet`] an archive fills.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Origin {
+    Shipped,
+    Mod,
 }
 
-/// The bytes of `relative` under the game directory, reported as a
-/// step; `None` when the file is not there (an expansion or mod
+/// An archive that is on disk and will be read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PlannedRead {
+    origin: Origin,
+    file: LayerFile,
+    relative: PathBuf,
+}
+
+impl PlannedRead {
+    fn step(&self) -> LoadStep {
+        self.file.step(self.relative.clone())
+    }
+}
+
+/// Every archive of the shipped layers and then of the mod layers, in
+/// layer order, skipping what is not on disk (an expansion or mod
 /// resource that does not exist is not an error).
-fn read_if_present(
-    game_dir: &Path,
-    relative: &Path,
-    progress: &mut dyn FnMut(LoadStep),
-    step: fn(PathBuf) -> LoadStep,
-) -> Result<Option<Vec<u8>>, LoadFailure> {
-    let path = game_dir.join(relative);
-    if !path.is_file() {
-        return Ok(None);
+fn plan_reads(game_dir: &Path, shipped: &[LayerFiles], mods: &[LayerFiles]) -> Vec<PlannedRead> {
+    let present = |origin: Origin, layers: &[LayerFiles]| -> Vec<PlannedRead> {
+        layers
+            .iter()
+            .flat_map(|layer| {
+                LayerFile::ALL.map(|file| PlannedRead {
+                    origin,
+                    file,
+                    relative: file.relative(layer).to_path_buf(),
+                })
+            })
+            .filter(|read| game_dir.join(&read.relative).is_file())
+            .collect()
+    };
+    let mut plan = present(Origin::Shipped, shipped);
+    plan.extend(present(Origin::Mod, mods));
+    plan
+}
+
+/// An archive read and parsed on the thread that read it.
+enum Parsed {
+    Database(ArzFile),
+    Text(ArcFile),
+    Items(ArcFile),
+}
+
+/// Why an archive could not be read, without the path — the reader
+/// works from the plan's index, and the assembler, which knows the
+/// plan, names the file ([`ReadProblem::at`]).
+#[derive(Debug)]
+enum ReadProblem {
+    Read(io::Error),
+    Database(ArzError),
+    Archive(ArcError),
+    /// Every reader stopped without delivering this archive's result.
+    NoResult,
+}
+
+impl ReadProblem {
+    fn at(self, path: PathBuf) -> LoadFailure {
+        match self {
+            Self::Read(source) => LoadFailure::Read { path, source },
+            Self::Database(source) => LoadFailure::Database { path, source },
+            Self::Archive(source) => LoadFailure::Archive { path, source },
+            Self::NoResult => LoadFailure::Read {
+                path,
+                source: io::Error::other("no reader delivered it"),
+            },
+        }
     }
-    progress(step(relative.to_path_buf()));
-    read(&path).map(Some)
+}
+
+/// One archive's bytes and parse. Archives are read-only reference
+/// data on a possibly stale mount: the verified read turns a short
+/// read into an error instead of a corrupt parse.
+fn fetch(game_dir: &Path, read: &PlannedRead) -> Result<Parsed, ReadProblem> {
+    let bytes =
+        univault_io::read_verified(&game_dir.join(&read.relative)).map_err(ReadProblem::Read)?;
+    let archive = |bytes| ArcFile::parse(bytes, Codec::Lz4Block).map_err(ReadProblem::Archive);
+    match read.file {
+        LayerFile::Database => ArzFile::parse(bytes, ArzDialect::grim_dawn())
+            .map(Parsed::Database)
+            .map_err(ReadProblem::Database),
+        LayerFile::Text => archive(bytes).map(Parsed::Text),
+        LayerFile::Items => archive(bytes).map(Parsed::Items),
+    }
+}
+
+/// A reader's result for the archive at that index of the plan.
+type Arrival = (usize, Result<Parsed, ReadProblem>);
+
+/// Reads and parses the planned archives, `readers` at a time in plan
+/// order, and assembles the shipped and the mod sets from them.
+fn read_planned(
+    game_dir: &Path,
+    plan: &[PlannedRead],
+    readers: usize,
+    progress: &mut dyn FnMut(LoadStep),
+) -> Result<(LayerSet, LayerSet), LoadFailure> {
+    let next = AtomicUsize::new(0);
+    let (sender, arrivals) = channel::<Arrival>();
+    thread::scope(|scope| {
+        for _ in 0..readers.min(plan.len()) {
+            let sender = sender.clone();
+            let next = &next;
+            scope.spawn(move || {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(read) = plan.get(index) else { break };
+                    if sender.send((index, fetch(game_dir, read))).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+        assemble(game_dir, plan, arrivals, progress)
+    })
+}
+
+/// Files the arrivals into their sets in plan order, whatever order
+/// they came in: each step is reported as its archive is taken up, so
+/// progress reads as a one-at-a-time load's would, and the first
+/// failure in plan order is the load's — later archives' outcomes are
+/// never looked at.
+fn assemble(
+    game_dir: &Path,
+    plan: &[PlannedRead],
+    arrivals: impl IntoIterator<Item = Arrival>,
+    progress: &mut dyn FnMut(LoadStep),
+) -> Result<(LayerSet, LayerSet), LoadFailure> {
+    let mut arrivals = arrivals.into_iter();
+    let mut early = BTreeMap::new();
+    let mut shipped = LayerSet::default();
+    let mut mods = LayerSet::default();
+    for (index, read) in plan.iter().enumerate() {
+        progress(read.step());
+        let parsed = take(index, &mut early, &mut arrivals)
+            .unwrap_or(Err(ReadProblem::NoResult))
+            .map_err(|problem| problem.at(game_dir.join(&read.relative)))?;
+        let set = match read.origin {
+            Origin::Shipped => &mut shipped,
+            Origin::Mod => &mut mods,
+        };
+        match parsed {
+            Parsed::Database(database) => set.databases.push(database),
+            Parsed::Text(archive) => set.text_archives.push(archive),
+            Parsed::Items(archive) => set.item_archives.push(archive),
+        }
+    }
+    Ok((shipped, mods))
+}
+
+/// The result for `wanted`, holding any other archive's result that
+/// arrives first for its own turn; `None` once the arrivals end
+/// without it.
+fn take(
+    wanted: usize,
+    early: &mut BTreeMap<usize, Result<Parsed, ReadProblem>>,
+    arrivals: &mut impl Iterator<Item = Arrival>,
+) -> Option<Result<Parsed, ReadProblem>> {
+    loop {
+        if let Some(result) = early.remove(&wanted) {
+            return Some(result);
+        }
+        let (index, result) = arrivals.next()?;
+        early.insert(index, result);
+    }
 }
 
 /// Every folder under `mods/` with the names its `database/` and
@@ -568,16 +726,6 @@ fn file_names(dir: &Path) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Archives are read-only reference data on a possibly stale mount:
-/// the verified read turns a short read into an error instead of a
-/// corrupt parse.
-fn read(path: &Path) -> Result<Vec<u8>, LoadFailure> {
-    univault_io::read_verified(path).map_err(|source| LoadFailure::Read {
-        path: path.to_path_buf(),
-        source,
-    })
 }
 
 /// What the loader thread sends.
@@ -671,8 +819,224 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use grimvault_core::campaign::ModName;
+    use univault_engine::arz::fixture::ArzBuilder;
 
     use super::*;
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("grimvault-loader-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn write(&self, relative: &Path, bytes: &[u8]) {
+            let path = self.0.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn database_with(record: &str) -> Vec<u8> {
+        let mut builder = ArzBuilder::new(ArzDialect::grim_dawn());
+        builder.record(record, "ItemRelic", &[]);
+        builder.build()
+    }
+
+    fn parsed_database(record: &str) -> Parsed {
+        Parsed::Database(ArzFile::parse(database_with(record), ArzDialect::grim_dawn()).unwrap())
+    }
+
+    fn records(set: &LayerSet) -> Vec<String> {
+        set.databases
+            .iter()
+            .flat_map(|database| database.record_ids().map(ToString::to_string))
+            .collect()
+    }
+
+    fn database_read(origin: Origin, relative: &str) -> PlannedRead {
+        PlannedRead {
+            origin,
+            file: LayerFile::Database,
+            relative: PathBuf::from(relative),
+        }
+    }
+
+    fn steps_of(plan: &[PlannedRead]) -> Vec<LoadStep> {
+        plan.iter().map(PlannedRead::step).collect()
+    }
+
+    #[test]
+    fn plan_reads_lists_what_is_on_disk_shipped_first_in_layer_order() {
+        let scratch = Scratch::new("plan");
+        let shipped = shipped_layers();
+        let mods = mod_layers([ModListing {
+            folder: "m".into(),
+            database_files: vec!["m.arz".into()],
+            resource_files: vec!["Items.arc".into()],
+        }]);
+        for relative in [
+            &shipped[0].database,
+            &shipped[0].text,
+            &shipped[1].database,
+            &mods[0].database,
+            &mods[0].items,
+        ] {
+            scratch.write(relative, b"");
+        }
+
+        let plan = plan_reads(&scratch.0, &shipped, &mods);
+
+        let listed: Vec<(Origin, LayerFile, &Path)> = plan
+            .iter()
+            .map(|read| (read.origin, read.file, read.relative.as_path()))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                (
+                    Origin::Shipped,
+                    LayerFile::Database,
+                    shipped[0].database.as_path()
+                ),
+                (Origin::Shipped, LayerFile::Text, shipped[0].text.as_path()),
+                (
+                    Origin::Shipped,
+                    LayerFile::Database,
+                    shipped[1].database.as_path()
+                ),
+                (Origin::Mod, LayerFile::Database, mods[0].database.as_path()),
+                (Origin::Mod, LayerFile::Items, mods[0].items.as_path()),
+            ]
+        );
+    }
+
+    #[test]
+    fn assemble_files_arrivals_in_plan_order_whatever_order_they_came() {
+        let plan = [
+            database_read(Origin::Shipped, "a.arz"),
+            database_read(Origin::Shipped, "b.arz"),
+            database_read(Origin::Mod, "c.arz"),
+        ];
+        let arrivals = [
+            (2, Ok(parsed_database("records/c.dbr"))),
+            (0, Ok(parsed_database("records/a.dbr"))),
+            (1, Ok(parsed_database("records/b.dbr"))),
+        ];
+        let mut reported = Vec::new();
+
+        let (shipped, mods) = assemble(Path::new("/game"), &plan, arrivals, &mut |step| {
+            reported.push(step);
+        })
+        .unwrap();
+
+        assert_eq!(reported, steps_of(&plan));
+        assert_eq!(records(&shipped), ["records/a.dbr", "records/b.dbr"]);
+        assert_eq!(records(&mods), ["records/c.dbr"]);
+    }
+
+    #[test]
+    fn the_first_failure_in_plan_order_is_the_loads_whichever_arrived_first() {
+        let plan = [
+            database_read(Origin::Shipped, "a.arz"),
+            database_read(Origin::Shipped, "b.arz"),
+            database_read(Origin::Shipped, "c.arz"),
+        ];
+        let arrivals = [
+            (2, Err(ReadProblem::Archive(ArcError::NotArc))),
+            (0, Ok(parsed_database("records/a.dbr"))),
+            (
+                1,
+                Err(ReadProblem::Database(ArzError::DialectMismatch {
+                    found: 1,
+                    expected: 2,
+                })),
+            ),
+        ];
+        let mut reported = Vec::new();
+
+        let failure = assemble(Path::new("/game"), &plan, arrivals, &mut |step| {
+            reported.push(step);
+        })
+        .err()
+        .unwrap();
+
+        assert!(
+            matches!(&failure, LoadFailure::Database { path, .. } if path == Path::new("/game/b.arz")),
+            "{failure}"
+        );
+        assert_eq!(reported, steps_of(&plan[..2]));
+    }
+
+    #[test]
+    fn an_archive_no_reader_delivered_is_a_failure_not_a_wait() {
+        let plan = [
+            database_read(Origin::Shipped, "a.arz"),
+            database_read(Origin::Shipped, "b.arz"),
+        ];
+        let arrivals = [(0, Ok(parsed_database("records/a.dbr")))];
+
+        let failure = assemble(Path::new("/game"), &plan, arrivals, &mut |_| {})
+            .err()
+            .unwrap();
+
+        assert!(
+            matches!(&failure, LoadFailure::Read { path, .. } if path == Path::new("/game/b.arz")),
+            "{failure}"
+        );
+    }
+
+    #[test]
+    fn read_planned_reads_on_threads_and_keeps_layer_order() {
+        let scratch = Scratch::new("threads");
+        let shipped = shipped_layers();
+        scratch.write(&shipped[0].database, &database_with("records/base.dbr"));
+        scratch.write(&shipped[1].database, &database_with("records/x1.dbr"));
+        scratch.write(&shipped[2].database, &database_with("records/x2.dbr"));
+        let plan = plan_reads(&scratch.0, &shipped, &[]);
+        let mut reported = Vec::new();
+
+        let (loaded, mods) =
+            read_planned(&scratch.0, &plan, 2, &mut |step| reported.push(step)).unwrap();
+
+        assert_eq!(reported, steps_of(&plan));
+        assert_eq!(
+            records(&loaded),
+            ["records/base.dbr", "records/x1.dbr", "records/x2.dbr"]
+        );
+        assert!(mods.databases.is_empty());
+    }
+
+    #[test]
+    fn read_planned_fails_on_the_first_bad_archive_in_layer_order() {
+        let scratch = Scratch::new("bad");
+        let shipped = shipped_layers();
+        scratch.write(&shipped[0].database, &database_with("records/base.dbr"));
+        scratch.write(&shipped[1].database, b"not a database");
+        scratch.write(&shipped[2].database, b"");
+        let plan = plan_reads(&scratch.0, &shipped, &[]);
+        let mut reported = Vec::new();
+
+        let failure = read_planned(&scratch.0, &plan, 3, &mut |step| reported.push(step))
+            .err()
+            .unwrap();
+
+        assert!(
+            matches!(&failure, LoadFailure::Database { path, .. } if *path == scratch.0.join(&shipped[1].database)),
+            "{failure}"
+        );
+        assert_eq!(reported, steps_of(&plan[..2]));
+    }
 
     fn at(seconds: u64) -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(seconds)
