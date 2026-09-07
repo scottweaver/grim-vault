@@ -5,32 +5,39 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-07 (FEATURES.md 25–27 landed on `main` at
-`a22ac10` — the vault store's location as a `storeFile` setting so
-one vault on the NAS can serve the Mac and the coming Bazzite Linux
-build, vault export / import as a store merge, and a settings modal
-behind a ⚙ in the status bar; 500 tests; fast-forwarded and pushed)
+Last updated: 2026-09-07 (FEATURES.md 28–29 landed on `main` at
+`f400222` — a "Crafting Materials" bucket for the records the game
+flags `craftingMaterial`, and one consolidated stack per stackable
+record, folded by the window whenever the store changes; 503 tests;
+fast-forwarded and pushed; 25–27 landed earlier the same evening at
+`a22ac10`)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
-**Resume here:** `main` at the `docs/state-post-features-25-27`
-fast-forward (feature tip `a22ac10`) holds everything landed — every
-FEATURES.md item through 27 (there is no item 17) — 500 tests, clippy
+**Resume here:** `main` at the `docs/state-post-features-28-29`
+fast-forward (feature tip `f400222`) holds everything landed — every
+FEATURES.md item through 29 (there is no item 17) — 503 tests, clippy
 pedantic clean, fmt clean, headless `--check` clean from the release
-build on a scratch copy of the saves. **Why 25–27:** the user asked
+build on a scratch copy of the saves. **Why 25–29:** the user asked
 in chat whether the vault is portable so a Linux binary on Bazzite
 can use the Mac's vault; it is (no path or platform fact in it), and
 they asked for the shared-location route to be first-class, plus
-export / import and a settings modal — recorded as FEATURES.md 25–27
-by the agent, not the user, so the queue stays the one record. **The
-user's next step is the Linux build:** `target/release/grimvault-gui`
-is built from `a22ac10`; on Bazzite, `~/.config/grim-vault/
-settings.json` with `storeFile` naming the NAS vault under the
-Linux mount point is the whole setup, and the ⚙ modal writes it. The
-settings modal has only been exercised by unit tests and the CLI
-twins — nobody has clicked the gear yet — so the first thing to
-confirm in the window is that the modal opens, Apply on a store
-change swaps the pane, and Export / Import toast sensibly.
+export / import and a settings modal (25–27), then corrected two
+things they saw in the window — crafting materials filed under Quest
+Items, and stackables held as several stacks (28–29) — all recorded
+in FEATURES.md by the agent, not the user, so the queue stays the one
+record. **The first launch of `f400222` on the real store folds it:**
+the user's real store (3,450 entries at 16:05) holds 85 split stacks
+that the window will fold into 70 on load and autosave, backup-first
+— expected, not a fault; the CLI dry run preserved every record's
+unit total. **The user's next step is the Linux build:**
+`target/release/grimvault-gui` is built from `f400222`; on Bazzite,
+`~/.config/grim-vault/settings.json` with `storeFile` naming the NAS
+vault under the Linux mount point is the whole setup, and the ⚙ modal
+writes it. The settings modal has only been exercised by unit tests
+and the CLI twins — nobody has clicked the gear yet — so the first
+thing to confirm in the window is that the modal opens, Apply on a
+store change swaps the pane, and Export / Import toast sensibly.
 **The remote exists now:** the user created
 `github.com/scottweaver/grim-vault` (public, Issues enabled) on
 2026-09-07 at 14:54 local and pushed; `origin/main` is in sync at
@@ -82,17 +89,18 @@ default `bulkDuplicates: skip`.
   far is in `docs/format-references.md` "GD Stash (eyes-only)
   findings".
 - **The user's feature queue is `FEATURES.md`** in the repo root
-  (untracked, user-authored, growing): items 1–27 are landed on
+  (untracked, user-authored, growing): items 1–29 are landed on
   `main` (there is no item 17) and each line carries a
   `[landed <date>: <rule>]` tag (20–24 tagged 2026-09-07 following
-  the pass the user agreed to for 1–19; 25–27 were *written* by the
-  agent from a chat request the same day, marked "asked in chat").
+  the pass the user agreed to for 1–19; 25–29 were *written* by the
+  agent from chat requests the same day, marked "asked in chat").
   They announce additions with "new items in FEATURES.md" / "new
   features are ready for review", and nothing is read until then.
   Items are executed on the fly, in parallel where independent — one
   fork agent per track in its own worktree, briefed with the design
   decisions up front; three tracks at once worked today, six on
-  2026-09-07's first pass; 25–27 were one track in the main checkout.
+  2026-09-07's first pass; 25–27 and 28–29 were single tracks in the
+  main checkout.
 - **Verifying the GUI without touching the user's setup:** point
   `GRIMVAULT_CONFIG_DIR` at a scratch directory holding a
   `settings.json` (`gameDir` = the real install, `saveDir` = a scratch
@@ -202,21 +210,24 @@ auto-move, purge, the additive component sync — and, landed
 first, Move all / Copy all on every tab and sack, Delete all… behind
 a confirmation, and one `bulkDuplicates` rule in `settings.json`, and
 — landed 2026-09-07 night — the vault store at any path via
-`storeFile`, vault export / import as a store merge, and a settings
-modal behind ⚙) — 500 tests, clippy pedantic clean. Verified on
-scratch copies of the user's install and saves. **Not yet verified:
-the game reading any file this app wrote** — the next step is the
-user's acceptance run on the real install with the game closed, and
-now the Linux build on Bazzite sharing the NAS vault. The user's
-`FEATURES.md` is landed through item 27. grim-vault is the Grim Dawn
-sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
+`storeFile`, vault export / import as a store merge, a settings
+modal behind ⚙, a Crafting Materials bucket, and one consolidated
+stack per stackable record kept by the window) — 503 tests, clippy
+pedantic clean. Verified on scratch copies of the user's install and
+saves. **Not yet verified: the game reading any file this app
+wrote** — the next step is the user's acceptance run on the real
+install with the game closed, and now the Linux build on Bazzite
+sharing the NAS vault. The user's `FEATURES.md` is landed through
+item 29. grim-vault is the Grim Dawn sibling of tq-univault;
+PROJECT.md is bound with `tracker: none`.
 
 ## Branches in flight
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at the `docs/state-post-features-25-27` fast-forward — every FEATURES.md item through 27; 500 tests green; pushed, `origin/main` in sync |
-| `feat/store-location-and-settings` | FEATURES.md 25–27 | landed by fast-forward at `a22ac10`; delete once the user confirms the modal in the window (no worktree) |
+| `main` | trunk | at the `docs/state-post-features-28-29` fast-forward — every FEATURES.md item through 29; 503 tests green; pushed, `origin/main` in sync |
+| `feat/store-location-and-settings`, `docs/state-post-features-25-27` | FEATURES.md 25–27 | landed by fast-forward at `a22ac10`; fully merged, awaiting the user's say-so to delete (no worktrees) |
+| `feat/material-bucket-and-stacks`, `docs/state-post-features-28-29` | FEATURES.md 28–29 | landed by fast-forward at `f400222`; fully merged, awaiting the user's say-so to delete (no worktrees) |
 
 ## Next up
 
@@ -235,8 +246,14 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    chevron while dragging, watch the component sync fill the store,
    relaunch to see the remembered campaign; **new:** click ⚙, point
    the store file at a copy on the NAS and Apply, export a copy,
-   import it back (expect "nothing new"); then confirm every one of
-   those in-game. Nothing this app writes has been read by the game
+   import it back (expect "nothing new"); see the first load fold the
+   real store's split stacks (a toast, "store taken" in backup-first),
+   Crafting > Crafting Materials populated and Other > Quest Items
+   down to the true quest items; then confirm every one of those
+   in-game — **in particular whether the game accepts a stack placed
+   from the vault that exceeds its own max stack size** (a
+   consolidated stack of components can be thousands; the app never
+   splits on placement, next-up 5). Nothing this app writes has been read by the game
    yet — this run is what makes `main` trusted.
 1b. **The Linux build for Bazzite** (user intent, 2026-09-07): build
    `grimvault-gui` on or for Linux (pure-Rust deps, no native ones
@@ -260,7 +277,10 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    `docs/format-references.md`); a fresh seed on copy; drop-to-socket
    through `drag::Move`; unify the double-click and right-click
    targets; `vault_cli` reading `bulkDuplicates`; a duplicate /
-   extract gesture on search rows like tq-univault's.
+   extract gesture on search rows like tq-univault's; **splitting a
+   consolidated stack on placement** to the record's `maxStackSize`
+   (engine defaults in `docs/format-references.md`) or a "take N"
+   gesture, now that a vault stack can exceed what one cell holds.
 6. **Launch time** is bytes, not sequencing: ~1.06 GB of the 1.26 GB
    read per launch is `Items.arc` textures read whole only to be
    indexed. Read them by entry as `UI.arc` already is, or build the
@@ -276,6 +296,28 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    Stash does not read it either).
 
 ## Most recent meaningful progress
+
+- **2026-09-07 (late) — FEATURES.md 28–29 landed on `main`
+  (fast-forward to `f400222`, one track in the main checkout).** The
+  user saw crafting materials under Other > Quest Items and the same
+  component held as several stacks. Core: `Bucket::of(class,
+  reagent)` — a record the game flags `craftingMaterial` (they are
+  `QuestItem`s by class; `ItemInfo.reagent` already knew) is the new
+  `Bucket::Material` under Crafting, a stack for `Identity::of`;
+  `VaultStore::consolidate_stacks` folds a stackable record's later
+  entries into its first (key: the item less seed and count; units
+  summed, ids retired, first origin and moment kept) and
+  `VaultStore::merge` treats stacks as a high-water mark per record
+  so a repeated import cannot double a folded stack; `Item::units`
+  names the count-at-least-one rule. GUI: `World::settle_store` runs
+  the fold at the end of any frame whose store revision changed
+  (never mid-drag), marks the store edited, toasts; `--check` prints
+  what the window would fold; `vault_cli consolidate-stacks`. 503
+  tests. Why: the user's rule — one stack per item — and the game's
+  own filing of materials. Risk: a folded stack can exceed the
+  game's max stack size and the app never splits on placement
+  (next-up 5); the fold drops the folded entries' provenance; the
+  real store folds 85 entries on the next launch, backup-first.
 
 - **2026-09-07 (night) — FEATURES.md 25–27 landed on `main`
   (fast-forward to `a22ac10`, one track in the main checkout).** The
@@ -463,32 +505,6 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   refuses every placement (unknown footprint) until the mod database
   is layered in — recorded as TBD in ARCHITECTURE; and, as with M4,
   the game has read nothing this app wrote.
-
-- **2026-09-03 — M4 characters editable (branch
-  `feat/character-editing`, not merged).** Core: `ItemOrigin` now
-  records the sack (`Character { name, sack }`) or own-stash tab
-  (`CharacterStash { name, tab }`); `transfer` gained
-  `vault_from_player_stash` / `place_in_player_stash(_at)` over the
-  same tab helpers as the transfer stash and lost the three direct
-  storage↔stash ops; `PlayerFile::character_info_mut` exposes the
-  iron bits; `vault_cli` gained `characters`, `vault-sack`,
-  `place-sack`, `money`; the fixture gate now also edits the iron
-  bits and duplicates an own-stash item, on the fixture and on the
-  three real saves. GUI: one `Tracking` (stamp / edits / backup)
-  shared by every document; `CharacterDoc` is writable behind
-  `Writable::{Yes, OpaqueBlock}`; `drag` is one shape — `Move {
-  source, target, mode }` applied as lift-into-scratch-store then
-  place, source restored on refusal, `Mode::Copy` seeding the
-  scratch with a clone instead of lifting — so every container
-  pairing works without pairwise code; `Doc::Character(slot)` joins
-  autosave, the write order (now a `Vec`), the watcher, and the
-  conflict modal; the character pane's tabs are drop targets and its
-  header carries a `DragValue` for the iron bits reported through
-  `DragFrame`. 293 tests. Why: the user asked for moving and copying
-  items to and from characters and for gold edits; the read-only
-  limit was the last thing making characters second-class. Risk: no
-  `player.gdc` this app wrote has been loaded by the game; the copy
-  keeps the seed; GD's own duplicate detection (if any) is unknown.
 
 ## Blocked / waiting
 
