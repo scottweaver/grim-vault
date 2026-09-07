@@ -13,6 +13,7 @@ use grimvault_core::gdc::{EquippedItem, InventoryState, PlayerFile};
 use grimvault_core::respec::Reset;
 use grimvault_core::settings::AutoMoveTab;
 use grimvault_core::transfer::{SackIndex, TabIndex};
+use univault_ui::components::scroll_strip::{self, ScrollStrip, StripInk};
 use univault_ui::theme::Theme;
 
 use super::{
@@ -25,7 +26,7 @@ use crate::theme::{FITS, UNKNOWN_RARITY, rarity_color};
 use grimvault_core::gdc::Realm;
 
 /// Which of the character's containers is showing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CharacterTab {
     Sack(usize),
     Equipped,
@@ -57,6 +58,13 @@ impl CharacterView {
             tab: CharacterTab::Sack(0),
             confirm: None,
         }
+    }
+
+    /// What the strip's selected tab is, for revealing it when it
+    /// changes: the tab, under the character showing it — picking
+    /// another character is a new selection even on the same tab.
+    fn selection(self) -> (usize, CharacterTab) {
+        (self.selected, self.tab)
     }
 }
 
@@ -212,7 +220,7 @@ fn body(
         .inventory()
         .map_or(&[][..], |inventory| inventory.sacks());
     let stash_tabs = file.stash().map_or(&[][..], |stash| &stash.tabs[..]);
-    ui.horizontal_wrapped(|ui| {
+    ScrollStrip::new("character-tabs", StripInk::from_palette(cx.palette)).show(ui, |ui| {
         for (index, sack) in sacks.iter().enumerate() {
             let label = format!("Sack {} ({})", index + 1, sack.items.len());
             let container =
@@ -236,11 +244,14 @@ fn body(
         let worn = file
             .inventory()
             .map_or(0, |inventory| inventory.equipped().count());
-        ui.selectable_value(
-            &mut view.tab,
-            CharacterTab::Equipped,
-            format!("Equipped ({worn})"),
-        );
+        let equipped = view.tab == CharacterTab::Equipped;
+        let response = ui.selectable_label(equipped, format!("Equipped ({worn})"));
+        if equipped {
+            scroll_strip::reveal_selected(ui, view.selection(), &response);
+        }
+        if response.clicked() {
+            view.tab = CharacterTab::Equipped;
+        }
         for (index, stash_tab) in stash_tabs.iter().enumerate() {
             let label = format!("Stash {} ({})", index + 1, stash_tab.items.len());
             let container =
@@ -360,11 +371,14 @@ fn container_or_plain_tab(
     frame: &mut DragFrame,
 ) {
     let selected = view.tab == tab;
-    let clicked = match container {
-        Some(container) => container_tab(ui, selected, label, container, cx, frame).clicked(),
-        None => ui.selectable_label(selected, label).clicked(),
+    let response = match container {
+        Some(container) => container_tab(ui, selected, label, container, cx, frame),
+        None => ui.selectable_label(selected, label),
     };
-    if clicked {
+    if selected {
+        scroll_strip::reveal_selected(ui, view.selection(), &response);
+    }
+    if response.clicked() {
         view.tab = tab;
     }
 }

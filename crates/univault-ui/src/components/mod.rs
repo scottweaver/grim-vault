@@ -8,7 +8,9 @@
 
 use egui::ColorImage;
 
+mod chevron;
 pub mod gilded_border;
+pub mod scroll_strip;
 pub mod tabbed_panel;
 
 /// The bytes were not a decodable PNG.

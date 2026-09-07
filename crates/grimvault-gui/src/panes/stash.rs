@@ -1,9 +1,11 @@
-//! The left pane: one tab strip over the transfer stash's tabs and,
-//! beside them, the component / crafting-material storage's two tabs
-//! and the campaign's Blueprints and Illusions tabs. A stash tab shows
-//! as an editable grid, the others as rows. Stash and storage tab
-//! buttons double as drop targets — first fit in a stash tab, merge by
-//! record in a storage tab — while a drag is in flight.
+//! The left pane: one tab strip — the component / crafting-material
+//! storage's two tabs first, then the transfer stash's tabs, then the
+//! campaign's Blueprints and Illusions tabs — that scrolls behind
+//! chevrons rather than wrapping when the campaign has more tabs than
+//! fit. A stash tab shows as an editable grid, the others as rows.
+//! Stash and storage tab buttons double as drop targets — first fit in
+//! a stash tab, merge by record in a storage tab — while a drag is in
+//! flight.
 
 use egui::{Ui, Vec2};
 use grimvault_core::block::StashTab;
@@ -11,6 +13,7 @@ use grimvault_core::campaign::Campaign;
 use grimvault_core::reagents::ReagentKind;
 use grimvault_core::settings::AutoMoveTab;
 use grimvault_core::transfer::TabIndex;
+use univault_ui::components::scroll_strip::{self, ScrollStrip, StripInk};
 use univault_ui::theme::Theme;
 
 use super::crafting::{self, CraftingView};
@@ -24,7 +27,7 @@ use crate::drag::{self, Container, DropTarget, Fit};
 use crate::grid::FootprintSource;
 
 /// Which surface the pane shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Showing {
     Stash,
     Reagents(ReagentKind),
@@ -49,6 +52,18 @@ impl Default for StashView {
             showing: Showing::Stash,
             reagent_amount: 0,
             crafting: CraftingView::default(),
+        }
+    }
+}
+
+impl StashView {
+    /// What the strip's selected tab is, for revealing it when it
+    /// changes: the surface, and the stash tab when that is the
+    /// surface.
+    fn selection(&self) -> (Showing, Option<TabIndex>) {
+        match self.showing {
+            Showing::Stash => (self.showing, Some(self.tab)),
+            Showing::Reagents(_) | Showing::Crafting(_) => (self.showing, None),
         }
     }
 }
@@ -121,49 +136,10 @@ pub fn show(
     });
     ui.label(theme.path_text(path.display().to_string()));
     let stash = doc.stash();
-    ui.horizontal_wrapped(|ui| {
-        for (slot, tab) in stash.tabs.iter().enumerate() {
-            let Ok(index) = u32::try_from(slot).map(TabIndex::new) else {
-                continue;
-            };
-            let selected = view.showing == Showing::Stash && view.tab == index;
-            let response = container_tab(
-                ui,
-                selected,
-                tab_label(slot, tab),
-                Container::TransferStash(index),
-                cx,
-                frame,
-            );
-            if response.clicked() {
-                view.tab = index;
-                view.showing = Showing::Stash;
-            }
-        }
+    ScrollStrip::new("stash-tabs", StripInk::from_palette(cx.palette)).show(ui, |ui| {
+        reagent_tabs(ui, storage, view, cx, frame);
         ui.separator();
-        for kind in ReagentKind::ALL {
-            let selected = view.showing == Showing::Reagents(kind);
-            let response = ui.selectable_label(selected, reagent_tab_label(storage, kind, cx));
-            if response.clicked() {
-                view.showing = Showing::Reagents(kind);
-            }
-            if let Some(drag) = cx.drag
-                && response.contains_pointer()
-            {
-                let fit = match storage {
-                    Reagents::Open(_) => drag::fit_in_reagents(
-                        drag.source,
-                        cx.facts.base(cx.game, &drag.item).reagent,
-                    ),
-                    Reagents::Absent { .. } | Reagents::Failed { .. } => Fit::Blocked,
-                };
-                outline(ui, response.rect, fit);
-                frame.candidate = Some(DropCandidate {
-                    target: DropTarget::Reagents(kind),
-                    fit,
-                });
-            }
-        }
+        stash_tabs(ui, stash.tabs.as_slice(), view, cx, frame);
         ui.separator();
         crafting_tabs(ui, blueprints, illusions, view);
     });
@@ -254,6 +230,72 @@ fn show_tab(
         });
 }
 
+/// The storage's two tab buttons, drop targets that merge by record.
+fn reagent_tabs(
+    ui: &mut Ui,
+    storage: &Reagents,
+    view: &mut StashView,
+    cx: &mut PaneCtx<'_>,
+    frame: &mut DragFrame,
+) {
+    for kind in ReagentKind::ALL {
+        let selected = view.showing == Showing::Reagents(kind);
+        let response = ui.selectable_label(selected, reagent_tab_label(storage, kind, cx));
+        if selected {
+            scroll_strip::reveal_selected(ui, view.selection(), &response);
+        }
+        if response.clicked() {
+            view.showing = Showing::Reagents(kind);
+        }
+        if let Some(drag) = cx.drag
+            && response.contains_pointer()
+        {
+            let fit = match storage {
+                Reagents::Open(_) => {
+                    drag::fit_in_reagents(drag.source, cx.facts.base(cx.game, &drag.item).reagent)
+                }
+                Reagents::Absent { .. } | Reagents::Failed { .. } => Fit::Blocked,
+            };
+            outline(ui, response.rect, fit);
+            frame.candidate = Some(DropCandidate {
+                target: DropTarget::Reagents(kind),
+                fit,
+            });
+        }
+    }
+}
+
+/// One tab button per stash tab, each a first-fit drop target.
+fn stash_tabs(
+    ui: &mut Ui,
+    tabs: &[StashTab],
+    view: &mut StashView,
+    cx: &PaneCtx<'_>,
+    frame: &mut DragFrame,
+) {
+    for (slot, tab) in tabs.iter().enumerate() {
+        let Ok(index) = u32::try_from(slot).map(TabIndex::new) else {
+            continue;
+        };
+        let selected = view.showing == Showing::Stash && view.tab == index;
+        let response = container_tab(
+            ui,
+            selected,
+            tab_label(slot, tab),
+            Container::TransferStash(index),
+            cx,
+            frame,
+        );
+        if selected {
+            scroll_strip::reveal_selected(ui, view.selection(), &response);
+        }
+        if response.clicked() {
+            view.tab = index;
+            view.showing = Showing::Stash;
+        }
+    }
+}
+
 /// The Blueprints and Illusions tab buttons, each with its count.
 fn crafting_tabs(
     ui: &mut Ui,
@@ -272,7 +314,11 @@ fn crafting_tabs(
         (Crafting::Illusions, illusion_label),
     ] {
         let selected = view.showing == Showing::Crafting(list);
-        if ui.selectable_label(selected, label).clicked() {
+        let response = ui.selectable_label(selected, label);
+        if selected {
+            scroll_strip::reveal_selected(ui, view.selection(), &response);
+        }
+        if response.clicked() {
             view.showing = Showing::Crafting(list);
         }
     }

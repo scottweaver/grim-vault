@@ -15,15 +15,8 @@
 
 use egui::{Color32, CursorIcon, Margin, Rect, Sense, TextureHandle, pos2, vec2};
 
+use super::chevron::{self, Side};
 use crate::slice::{NinePatch, ThreeSlice};
-
-/// Hover zone reserved at each end of a scrolling strip, the
-/// triangle drawn inside it, and how fast a hovered chevron slides
-/// the plates.
-const CHEVRON_ZONE: f32 = 22.0;
-const CHEVRON_W: f32 = 9.0;
-const CHEVRON_H: f32 = 14.0;
-const SCROLL_SPEED: f32 = 280.0;
 
 const TAB_GAP: f32 = 12.0;
 const TAB_PAD: f32 = 18.0;
@@ -89,11 +82,12 @@ pub struct LabelInk {
     pub disabled: Color32,
 }
 
-/// Which end of the strip a chevron scrolls toward.
-#[derive(Clone, Copy)]
-enum Side {
-    Left,
-    Right,
+impl LabelInk {
+    /// A chevron's colour: the active ink while the pointer rests on
+    /// its zone, the inactive ink otherwise.
+    fn chevron(self, lit: bool) -> Color32 {
+        if lit { self.active } else { self.inactive }
+    }
 }
 
 /// One plate on the strip. A disabled plate renders dim, reports
@@ -216,15 +210,19 @@ impl TabbedPanel {
         if geo.scrolling {
             let over = |zone: Rect| pointer.is_some_and(|pos| zone.contains(pos));
             if offset > 0.5 {
-                chevron(ui, geo.left_zone, Side::Left, over(geo.left_zone), art.ink);
+                chevron::paint(
+                    ui.painter(),
+                    geo.left_zone,
+                    Side::Left,
+                    art.ink.chevron(over(geo.left_zone)),
+                );
             }
             if offset < geo.max_offset - 0.5 {
-                chevron(
-                    ui,
+                chevron::paint(
+                    ui.painter(),
                     geo.right_zone,
                     Side::Right,
-                    over(geo.right_zone),
-                    art.ink,
+                    art.ink.chevron(over(geo.right_zone)),
                 );
             }
         }
@@ -365,13 +363,13 @@ fn strip_geometry(ui: &egui::Ui, art: &TabbedPanelArt, tabs: &[Tab], outer: Rect
     let plates = plate_layout(ui, tabs, art.plate_height());
     let full_span = outer.width() - art.left_corner() - art.right_corner();
     let scrolling = plates.total_width > full_span;
-    let reserve = if scrolling { CHEVRON_ZONE } else { 0.0 };
+    let reserve = if scrolling { chevron::ZONE } else { 0.0 };
     let span = (full_span - 2.0 * reserve).max(TAB_MIN_W);
     let max_offset = (plates.total_width - span).max(0.0);
     let band = |min_x: f32| {
         Rect::from_min_size(
             pos2(min_x, outer.min.y),
-            vec2(CHEVRON_ZONE, art.plate_height()),
+            vec2(chevron::ZONE, art.plate_height()),
         )
     };
     let strip_left = outer.min.x + art.left_corner() + reserve;
@@ -385,7 +383,7 @@ fn strip_geometry(ui: &egui::Ui, art: &TabbedPanelArt, tabs: &[Tab], outer: Rect
             pos2(strip_left + span, outer.max.y),
         ),
         left_zone: band(outer.min.x + art.left_corner()),
-        right_zone: band(outer.max.x - art.right_corner() - CHEVRON_ZONE),
+        right_zone: band(outer.max.x - art.right_corner() - chevron::ZONE),
         plates,
     }
 }
@@ -417,7 +415,7 @@ fn strip_offset(
     }
     if let Some((left_zone, right_zone)) = zones {
         let pointer = ui.ctx().pointer_latest_pos();
-        let step = SCROLL_SPEED * ui.input(|input| input.stable_dt).min(0.1);
+        let step = chevron::step(ui);
         let over = |zone: Rect| pointer.is_some_and(|pos| zone.contains(pos));
         if over(left_zone) && offset > 0.0 {
             offset -= step;
@@ -432,27 +430,6 @@ fn strip_offset(
     ui.ctx()
         .data_mut(|data| data.insert_temp(state_id, (offset, selected)));
     offset
-}
-
-/// One scroll chevron: a triangle pointing off-strip, lit while the
-/// pointer rests on its zone. Scrolling keys on pointer position
-/// rather than widget hover so a drag in progress scrolls too.
-fn chevron(ui: &egui::Ui, zone: Rect, side: Side, lit: bool, ink: LabelInk) {
-    let center = zone.center();
-    let (near, far) = match side {
-        Side::Left => (center.x + CHEVRON_W / 2.0, center.x - CHEVRON_W / 2.0),
-        Side::Right => (center.x - CHEVRON_W / 2.0, center.x + CHEVRON_W / 2.0),
-    };
-    let color = if lit { ink.active } else { ink.inactive };
-    ui.painter().add(egui::Shape::convex_polygon(
-        vec![
-            pos2(near, center.y - CHEVRON_H / 2.0),
-            pos2(far, center.y),
-            pos2(near, center.y + CHEVRON_H / 2.0),
-        ],
-        color,
-        egui::Stroke::NONE,
-    ));
 }
 
 /// The smallest scroll adjustment that brings a newly selected
