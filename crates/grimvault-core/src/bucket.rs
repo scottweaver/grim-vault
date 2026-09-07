@@ -16,24 +16,32 @@ use serde::{Deserialize, Serialize};
 use crate::gamedata::ItemClass;
 use crate::reagents::ReagentKind;
 
-/// The top level of the view, in display order.
+/// The top level of the view, in display order: what is worn (relics
+/// are equipped, so they are accessories), what goes into worn items
+/// (components and augments), what the Inventor takes (materials,
+/// blueprints, transmuters), what is used up (potions, oils, writs,
+/// merits), and the rest (user grouping 2026-09-07).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Group {
     Weapons,
     Armor,
     Accessories,
+    Upgrades,
     Crafting,
+    Consumables,
     Other,
 }
 
 impl Group {
     /// Every group in display order.
-    pub const ALL: [Group; 5] = [
+    pub const ALL: [Group; 7] = [
         Group::Weapons,
         Group::Armor,
         Group::Accessories,
+        Group::Upgrades,
         Group::Crafting,
+        Group::Consumables,
         Group::Other,
     ];
 
@@ -43,7 +51,9 @@ impl Group {
             Group::Weapons => "Weapons",
             Group::Armor => "Armor",
             Group::Accessories => "Accessories",
+            Group::Upgrades => "Item Upgrades",
             Group::Crafting => "Crafting",
+            Group::Consumables => "Consumables",
             Group::Other => "Other",
         }
     }
@@ -69,13 +79,14 @@ pub enum Bucket {
     Amulet,
     Ring,
     Medal,
-    Component,
-    Material,
     Relic,
+    Component,
     Augment,
+    Material,
     Blueprint,
     Transmuter,
     Consumable,
+    Writ,
     Quest,
     Note,
     Misc,
@@ -84,7 +95,7 @@ pub enum Bucket {
 impl Bucket {
     /// Every bucket in display order (grouped, groups in [`Group::ALL`]
     /// order).
-    pub const ALL: [Bucket; 26] = [
+    pub const ALL: [Bucket; 27] = [
         Bucket::OneHanded,
         Bucket::TwoHanded,
         Bucket::RangedOneHanded,
@@ -101,13 +112,14 @@ impl Bucket {
         Bucket::Amulet,
         Bucket::Ring,
         Bucket::Medal,
-        Bucket::Component,
-        Bucket::Material,
         Bucket::Relic,
+        Bucket::Component,
         Bucket::Augment,
+        Bucket::Material,
         Bucket::Blueprint,
         Bucket::Transmuter,
         Bucket::Consumable,
+        Bucket::Writ,
         Bucket::Quest,
         Bucket::Note,
         Bucket::Misc,
@@ -125,10 +137,6 @@ impl Bucket {
         }
     }
 
-    #[expect(
-        clippy::match_same_arms,
-        reason = "every observed class is named; the wildcard is the unknown-class fallback"
-    )]
     fn of_class(class: &ItemClass) -> Bucket {
         let class = class.as_str();
         if class.starts_with("OneShot_") {
@@ -163,14 +171,10 @@ impl Bucket {
             "ItemEnchantment" => Bucket::Augment,
             "ItemArtifactFormula" | "ItemSetFormula" | "ItemRandomSetFormula" => Bucket::Blueprint,
             "ItemTransmuter" | "ItemTransmuterSet" => Bucket::Transmuter,
-            "ItemUsableSkill" => Bucket::Consumable,
+            "ItemUsableSkill" | "ItemAttributeReset" | "ItemDevotionReset" => Bucket::Consumable,
+            "ItemFactionBooster" | "ItemFactionWarrant" | "ItemDifficultyUnlock" => Bucket::Writ,
             "QuestItem" => Bucket::Quest,
             "ItemNote" => Bucket::Note,
-            "ItemFactionBooster"
-            | "ItemFactionWarrant"
-            | "ItemDifficultyUnlock"
-            | "ItemAttributeReset"
-            | "ItemDevotionReset" => Bucket::Misc,
             _ => Bucket::Misc,
         }
     }
@@ -191,14 +195,11 @@ impl Bucket {
             | Bucket::Legs
             | Bucket::Feet
             | Bucket::Waist => Group::Armor,
-            Bucket::Amulet | Bucket::Ring | Bucket::Medal => Group::Accessories,
-            Bucket::Component
-            | Bucket::Material
-            | Bucket::Relic
-            | Bucket::Augment
-            | Bucket::Blueprint
-            | Bucket::Transmuter => Group::Crafting,
-            Bucket::Consumable | Bucket::Quest | Bucket::Note | Bucket::Misc => Group::Other,
+            Bucket::Amulet | Bucket::Ring | Bucket::Medal | Bucket::Relic => Group::Accessories,
+            Bucket::Component | Bucket::Augment => Group::Upgrades,
+            Bucket::Material | Bucket::Blueprint | Bucket::Transmuter => Group::Crafting,
+            Bucket::Consumable | Bucket::Writ => Group::Consumables,
+            Bucket::Quest | Bucket::Note | Bucket::Misc => Group::Other,
         }
     }
 
@@ -221,13 +222,14 @@ impl Bucket {
             Bucket::Amulet => "Amulets",
             Bucket::Ring => "Rings",
             Bucket::Medal => "Medals",
-            Bucket::Component => "Components",
-            Bucket::Material => "Crafting Materials",
             Bucket::Relic => "Relics",
+            Bucket::Component => "Components",
             Bucket::Augment => "Augments",
+            Bucket::Material => "Crafting Materials",
             Bucket::Blueprint => "Blueprints",
             Bucket::Transmuter => "Transmuters",
-            Bucket::Consumable => "Consumables",
+            Bucket::Consumable => "Potions & Oils",
+            Bucket::Writ => "Writs & Merits",
             Bucket::Quest => "Quest Items",
             Bucket::Note => "Notes",
             Bucket::Misc => "Miscellaneous",
@@ -281,13 +283,13 @@ mod tests {
         ("OneShot_Scroll", Bucket::Consumable),
         ("OneShot_", Bucket::Consumable),
         ("ItemUsableSkill", Bucket::Consumable),
+        ("ItemAttributeReset", Bucket::Consumable),
+        ("ItemDevotionReset", Bucket::Consumable),
+        ("ItemFactionBooster", Bucket::Writ),
+        ("ItemFactionWarrant", Bucket::Writ),
+        ("ItemDifficultyUnlock", Bucket::Writ),
         ("QuestItem", Bucket::Quest),
         ("ItemNote", Bucket::Note),
-        ("ItemFactionBooster", Bucket::Misc),
-        ("ItemFactionWarrant", Bucket::Misc),
-        ("ItemDifficultyUnlock", Bucket::Misc),
-        ("ItemAttributeReset", Bucket::Misc),
-        ("ItemDevotionReset", Bucket::Misc),
     ];
 
     #[test]
@@ -317,6 +319,27 @@ mod tests {
         assert_eq!(Bucket::of(None, None), Bucket::Misc);
         assert_eq!(Bucket::Material.group(), Group::Crafting);
         assert_eq!(Bucket::Material.label(), "Crafting Materials");
+    }
+
+    #[test]
+    fn groups_say_what_their_buckets_are_for() {
+        assert_eq!(Bucket::Relic.group(), Group::Accessories);
+        assert_eq!(Bucket::Component.group(), Group::Upgrades);
+        assert_eq!(Bucket::Augment.group(), Group::Upgrades);
+        assert_eq!(Bucket::Blueprint.group(), Group::Crafting);
+        assert_eq!(Bucket::Consumable.group(), Group::Consumables);
+        assert_eq!(Bucket::Writ.group(), Group::Consumables);
+        assert_eq!(Bucket::Quest.group(), Group::Other);
+        assert_eq!(Bucket::Misc.group(), Group::Other);
+        assert_eq!(Group::Upgrades.label(), "Item Upgrades");
+        assert_eq!(Bucket::Writ.label(), "Writs & Merits");
+        assert_eq!(Bucket::Consumable.label(), "Potions & Oils");
+        let older_view: Group = serde_json::from_str("\"other\"").unwrap();
+        assert_eq!(older_view, Group::Other);
+        assert_eq!(
+            serde_json::to_string(&Group::Upgrades).unwrap(),
+            "\"upgrades\""
+        );
     }
 
     #[test]

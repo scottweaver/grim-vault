@@ -82,6 +82,7 @@ impl Identity {
             | Bucket::Blueprint
             | Bucket::Transmuter
             | Bucket::Consumable
+            | Bucket::Writ
             | Bucket::Quest
             | Bucket::Note
             | Bucket::Misc => Self::Stack,

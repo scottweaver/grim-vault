@@ -123,6 +123,7 @@ impl AscensionCategory {
             | Bucket::Blueprint
             | Bucket::Transmuter
             | Bucket::Consumable
+            | Bucket::Writ
             | Bucket::Quest
             | Bucket::Note
             | Bucket::Misc => None,
@@ -825,14 +826,15 @@ mod tests {
     }
 
     #[test]
-    fn every_equipment_bucket_has_a_category_and_nothing_else_does() {
+    fn every_affixed_equipment_bucket_has_a_category_and_nothing_else_does() {
         for bucket in Bucket::ALL {
-            let is_equipment = matches!(
-                bucket.group(),
-                crate::bucket::Group::Weapons
-                    | crate::bucket::Group::Armor
-                    | crate::bucket::Group::Accessories
-            );
+            let is_equipment = bucket != Bucket::Relic
+                && matches!(
+                    bucket.group(),
+                    crate::bucket::Group::Weapons
+                        | crate::bucket::Group::Armor
+                        | crate::bucket::Group::Accessories
+                );
             assert_eq!(
                 AscensionCategory::of_bucket(bucket).is_some(),
                 is_equipment,
