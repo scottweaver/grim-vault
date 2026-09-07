@@ -208,7 +208,9 @@ pub struct Footprint {
 /// `FileDescription` (the developers' working name), else the file
 /// stem — never empty. `reagent` is the record's place in the
 /// component / crafting-material storage, from its `Class` and
-/// `craftingMaterial` flag ([`ReagentKind::of`]).
+/// `craftingMaterial` flag ([`ReagentKind::of`]). `max_stack_size` is
+/// the record's own `maxStackSize` when set above zero — the
+/// template's override of the engine's per-class stacking default.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemInfo {
     pub name: String,
@@ -218,6 +220,7 @@ pub struct ItemInfo {
     pub bitmap: Option<BitmapPath>,
     pub reagent: Option<ReagentKind>,
     pub binding: Binding,
+    pub max_stack_size: Option<u32>,
 }
 
 /// What the database says about one affix record: its localized name
@@ -473,6 +476,10 @@ impl GameData {
                 .map(|bitmap| BitmapPath(bitmap.to_string())),
             reagent,
             binding,
+            max_stack_size: record
+                .integer("maxStackSize")
+                .and_then(|size| u32::try_from(size).ok())
+                .filter(|size| *size > 0),
         }))
     }
 

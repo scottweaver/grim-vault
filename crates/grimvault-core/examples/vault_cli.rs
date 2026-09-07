@@ -6,13 +6,16 @@
 //! ```text
 //! vault_cli [--mod NAME] <game dir> <save dir> <store.json> list
 //! vault_cli <game dir> <save dir> <store.json> vault <tab> <index>
+//! vault_cli <game dir> <save dir> <store.json> vault-tab <tab>
 //! vault_cli <game dir> <save dir> <store.json> place <id> <tab> [x y]
 //! vault_cli <game dir> <save dir> <store.json> reagents
 //! vault_cli <game dir> <save dir> <store.json> vault-reagent <index> <count>
 //! vault_cli <game dir> <save dir> <store.json> place-reagent <id>
+//! vault_cli <game dir> <save dir> <store.json> sync-reagents
 //! vault_cli <game dir> <save dir> <store.json> characters
 //! vault_cli <game dir> <save dir> <store.json> vault-sack <character> <sack> <index>
 //! vault_cli <game dir> <save dir> <store.json> place-sack <id> <character> <sack> [x y]
+//! vault_cli <game dir> <save dir> <store.json> vault-stash-tab <character> <tab>
 //! vault_cli <game dir> <save dir> <store.json> money <character> [<iron bits>]
 //! vault_cli <game dir> <save dir> <store.json> import-gds <file.gds>
 //! vault_cli <game dir> <save dir> <store.json> respec-attributes <character>
@@ -40,6 +43,11 @@
 //! adds a GD Stash export's items to the store, skipping entries
 //! already imported, and opens no game file.
 //!
+//! `vault-tab`, `vault-stash-tab`, and `sync-reagents` are the
+//! standing orders of `grimvault_core::bulk` run once: a whole tab
+//! into the store with duplicates (same record and seed) left in
+//! place, and the store's reagent counts raised to the storage's.
+//!
 //! `--mod NAME` works a mod's shared files under `save/<NAME>/`
 //! instead of the main campaign's; characters are the same either way.
 //!
@@ -62,6 +70,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use grimvault_core::bucket::{Bucket, Group};
+use grimvault_core::bulk;
 use grimvault_core::campaign::Campaign;
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::{PlayerFile, Realm};
@@ -81,9 +90,10 @@ use support::{cli_paths, describe, load_game_data};
 
 const BACKUPS: BackupPolicy = BackupPolicy::new("grimvault-bak", 5);
 const USAGE: &str = "usage: vault_cli [--game DIR] [--save DIR] [--store FILE] [--mod NAME] \
-                     (list | vault <tab> <index> | place <id> <tab> [x y] \
+                     (list | vault <tab> <index> | vault-tab <tab> | place <id> <tab> [x y] \
                      | reagents | vault-reagent <index> <count> | place-reagent <id> \
-                     | characters | vault-sack <character> <sack> <index> \
+                     | sync-reagents | characters | vault-sack <character> <sack> <index> \
+                     | vault-stash-tab <character> <tab> \
                      | place-sack <id> <character> <sack> [x y] | money <character> [<iron bits>] \
                      | import-gds <file.gds> \
                      | respec-attributes <character> | respec-masteries <character> \
@@ -99,6 +109,9 @@ enum Command {
         tab: TabIndex,
         index: ItemIndex,
     },
+    VaultTab {
+        tab: TabIndex,
+    },
     Place {
         id: StoredItemId,
         tab: TabIndex,
@@ -112,6 +125,7 @@ enum Command {
     PlaceReagent {
         id: StoredItemId,
     },
+    SyncReagents,
     Character(CharacterCommand),
     ImportGds {
         file: PathBuf,
@@ -209,6 +223,10 @@ enum CharacterCommand {
         character: CharacterArg,
         sack: SackIndex,
         index: ItemIndex,
+    },
+    VaultStashTab {
+        character: CharacterArg,
+        tab: TabIndex,
     },
     PlaceSack {
         id: StoredItemId,
@@ -321,6 +339,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             print_stash(&game_data, transfer_stash(&reparse(&stash_path)?)?);
             print_store(&game_data, &store);
         }
+        Command::VaultTab { tab } => {
+            let summary = bulk::vault_tab(
+                transfer_stash_mut(stash.model_mut())?,
+                &campaign,
+                tab,
+                &mut store,
+                &game_data,
+                now()?,
+            )?;
+            println!("auto-move of tab {tab}: {summary}");
+            if summary.is_noop() {
+                println!("nothing to write");
+            } else {
+                write_store(&store_path, &store)?;
+                write_stash(&stash_path, &stash)?;
+                print_stash(&game_data, transfer_stash(&reparse(&stash_path)?)?);
+            }
+            print_bucket_counts(&game_data, &store);
+        }
         Command::Place { id, tab, pos } => {
             let target = transfer_stash_mut(stash.model_mut())?;
             let landed = match pos {
@@ -372,6 +409,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             write_store(&store_path, &store)?;
             print_reagents(&game_data, reagent_storage(&reparse(&reagents_path)?)?);
             print_store(&game_data, &store);
+        }
+        Command::SyncReagents => {
+            let reagents = load_reagents(&reagents_path)?;
+            let summary = bulk::sync_reagents(
+                reagent_storage(reagents.model())?,
+                &campaign,
+                &mut store,
+                now()?,
+            );
+            println!("component sync: {summary}");
+            if summary.is_noop() {
+                println!("nothing to write");
+            } else {
+                write_store(&store_path, &store)?;
+            }
+            print_bucket_counts(&game_data, &store);
         }
         Command::Character(command) => {
             run_character(command, &save_dir, &store_path, &game_data, &mut store)?;
@@ -684,6 +737,10 @@ fn print_bucket_counts(game_data: &GameData, store: &VaultStore) {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per character command, dispatched top to bottom; splitting would hide the write order"
+)]
 fn run_character(
     command: CharacterCommand,
     save_dir: &Path,
@@ -718,6 +775,27 @@ fn run_character(
             write_player(&path, &player)?;
             print_character(game_data, character.realm, &reparse_player(&path)?);
             print_store(game_data, store);
+        }
+        CharacterCommand::VaultStashTab { character, tab } => {
+            let path = character.path(save_dir);
+            let mut player = load_player(&path)?;
+            let summary = bulk::vault_player_tab(
+                player.model_mut(),
+                character.realm,
+                tab,
+                store,
+                game_data,
+                now()?,
+            )?;
+            println!("auto-move of {character}'s stash tab {tab}: {summary}");
+            if summary.is_noop() {
+                println!("nothing to write");
+            } else {
+                write_store(store_path, store)?;
+                write_player(&path, &player)?;
+                print_character(game_data, character.realm, &reparse_player(&path)?);
+            }
+            print_bucket_counts(game_data, store);
         }
         CharacterCommand::PlaceSack {
             id,
@@ -940,6 +1018,10 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
     };
     let command = match (command.as_str(), rest) {
         ("list", []) => Command::List,
+        ("vault-tab", [tab]) => Command::VaultTab {
+            tab: TabIndex::new(tab.parse()?),
+        },
+        ("sync-reagents", []) => Command::SyncReagents,
         ("vault", [tab, index]) => Command::Vault {
             tab: TabIndex::new(tab.parse()?),
             index: ItemIndex::new(index.parse()?),
@@ -966,6 +1048,12 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
             id: StoredItemId::new(id.parse()?),
         },
         ("characters", []) => Command::Character(CharacterCommand::List),
+        ("vault-stash-tab", [character, tab]) => {
+            Command::Character(CharacterCommand::VaultStashTab {
+                character: CharacterArg::parse(character),
+                tab: TabIndex::new(tab.parse()?),
+            })
+        }
         ("vault-sack", [character, sack, index]) => {
             Command::Character(CharacterCommand::VaultSack {
                 character: CharacterArg::parse(character),

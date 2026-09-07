@@ -700,7 +700,7 @@ pub fn place_in_reagents(
 
 /// The count an item contributes to the storage: its stack, and one
 /// for an item written without a stack.
-fn stack_of(item: &Item) -> u32 {
+pub(crate) fn stack_of(item: &Item) -> u32 {
     item.stack_count.max(1)
 }
 

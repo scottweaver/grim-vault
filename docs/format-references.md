@@ -333,6 +333,45 @@ materia combines), stackCount`. **Versioned additions:**
 export format carries the same fields
 (`AscendantAffixNameRecord`, `RerollsUsed`, `AffixRerollsUsed`).
 
+### Stack size and seed identity — 2026-09-07
+
+What makes two items of one record the same item, for the bulk moves
+of `grimvault-core::bulk` (FEATURES.md 13): the roll seed, but only
+for the classes the game never stacks. Read from the templates and
+the engine records on the user's install (`database/templates.arc`,
+`records/game/gameengine.dbr`, `records/game/gameiteminfo.dbr`) and
+checked against the user's two GD Stash exports:
+
+- `templatebase/itembase.tpl` declares `maxStackSize` (int, default
+  0, "Overrides gameengine default"): a per-record override of the
+  engine's per-class stacking. Across every layer only the potions
+  (`OneShot_PotionHealth` / `_PotionMana`, 100) and five `QuestItem`
+  records (50) set it; components, augments, and every other record
+  leave it 0 and take the engine default. `gamedata::ItemInfo`
+  carries it as `max_stack_size`.
+- The engine defaults: `gameengine.dbr` `potionStackLimit`,
+  `questItemStackLimit`, `scrollStackLimit` (all 100) and
+  `gameiteminfo.dbr` `itemMaxStackSize` (1000). Which classes those
+  apply to is engine code, not data, so the app decides by class
+  through the type bucket: the equipment buckets and relics
+  (`ItemArtifact`) are one-per-instance and identified by seed; every
+  other bucket — components, augments, blueprints, transmuters,
+  consumables, quest items, notes, and the unmapped rest — is a
+  stack, as is any record with `maxStackSize` above one
+  (`bulk::Identity::of`).
+- Corroboration (3,794 exported entries): no `Armor*`, `Weapon*`, or
+  `ItemArtifact` entry carries a stack above 1, while `ItemRelic`
+  reaches 1000, `QuestItem` 1718, `ItemEnchantment` 72,
+  `ItemFactionBooster` 80, `OneShot_Scroll` 286, `ItemNote` 4, and
+  `ItemArtifactFormula` 2 — the stacks are exactly the non-equipment
+  classes. A zero seed appears on 14 equipment entries (GD Stash
+  creations) and on every blueprint, so zero is read as "never
+  rolled" and identifies nothing.
+
+Not verified: whether the game itself ever merges two equipment items
+of one record and seed (the duplicate rule only ever leaves an item
+in place, so a wrong call costs a manual drag, never an item).
+
 ### Item facets (monster infrequent, double rare, ascension)
 
 Established 2026-09-06 on the user's install (base + `gdx1`–`gdx3` +

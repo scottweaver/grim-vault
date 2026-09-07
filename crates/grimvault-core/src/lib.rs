@@ -27,9 +27,10 @@
 //! computed type view over it, [`reagents`] the rule for what belongs
 //! in the game's component / crafting-material storage, [`transfer`]
 //! the pure moves between the transfer stash, that storage, and the
-//! store, [`socket`] the component and augment an item carries and
-//! the edits that attach or free one, and [`gds`] the read-only import
-//! of GD Stash's exports.
+//! store, [`bulk`] the whole-tab moves and the additive storage sync
+//! under the seed-duplicate rule, [`socket`] the component and augment
+//! an item carries and the edits that attach or free one, and [`gds`]
+//! the read-only import of GD Stash's exports.
 //! [`respec`] is the full attribute and mastery refund on a
 //! character, under the same rules the game reads from its own
 //! records.
@@ -38,6 +39,7 @@ pub mod block;
 pub mod blocks;
 pub mod blueprint;
 pub mod bucket;
+pub mod bulk;
 pub mod campaign;
 pub mod crypto;
 pub mod facets;
