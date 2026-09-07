@@ -7,6 +7,7 @@
 
 pub mod character;
 pub mod crafting;
+pub mod inspector;
 pub mod reagents;
 pub mod stash;
 pub mod store;
@@ -22,6 +23,7 @@ use grimvault_core::gamedata::{GameData, Rarity};
 use grimvault_core::gdc::Sack;
 use grimvault_core::item::Item;
 use grimvault_core::respec::Reset;
+use grimvault_core::socket::Socket;
 use grimvault_core::transfer::{Footprints, ItemIndex};
 use univault_engine::grid::CellRect;
 use univault_engine::ids::GridPos;
@@ -69,6 +71,10 @@ pub struct DragFrame {
     /// A game-side container the user selected this frame — its tab,
     /// or the character whose sack now shows.
     pub touched: Option<Container>,
+    /// An item clicked without dragging: the inspector's selection.
+    pub select: Option<DragSource>,
+    /// A socket edit the inspector asked for.
+    pub socket: Option<crate::sockets::Request>,
     /// A character's iron bits, as the user set them.
     pub set_money: Option<(CharacterSlot, u32)>,
     /// A GD Stash export the user picked to import into the store.
@@ -389,6 +395,15 @@ fn report_gestures(
             index: entries[slot].index,
         });
     }
+    if response.clicked()
+        && cx.drag.is_none()
+        && let Some(slot) = occupant_under(response.interact_pointer_pos())
+    {
+        frame.select = Some(DragSource::Grid {
+            container,
+            index: entries[slot].index,
+        });
+    }
 }
 
 fn paint_grid_lines(painter: &Painter, geometry: &GridGeometry, palette: &Palette) {
@@ -557,6 +572,7 @@ pub fn paint_fit_preview(painter: &Painter, preview: Rect, fit: Fit) {
 /// blocks with the set and the requirements, then the base record in a
 /// muted monospace.
 pub fn item_tooltip(ui: &mut Ui, cx: &mut PaneCtx<'_>, item: &Item) {
+    let sockets = socket_line(cx, item);
     let facts = cx.facts.facts(cx.game, item);
     let (footprint, footprint_source) = footprint_or_unit(facts.base.footprint);
     let symbol = facts.facets.symbol();
@@ -606,6 +622,9 @@ pub fn item_tooltip(ui: &mut Ui, cx: &mut PaneCtx<'_>, item: &Item) {
     if !details.is_empty() {
         ui.label(details.join(" · "));
     }
+    if let Some(sockets) = sockets {
+        ui.label(RichText::new(sockets).color(cx.palette.heading));
+    }
     crate::stat_lines::stat_body(ui, cx.game, cx.palette, item);
     ui.label(
         RichText::new(&item.base_name)
@@ -620,6 +639,29 @@ pub fn item_tooltip(ui: &mut Ui, cx: &mut PaneCtx<'_>, item: &Item) {
                 .color(cx.palette.text_weak),
         );
     }
+}
+
+/// "Component: X · Augment: Y" for the sockets the item fills, `None`
+/// when both are empty.
+fn socket_line(cx: &mut PaneCtx<'_>, item: &Item) -> Option<String> {
+    let parts: Vec<String> = Socket::ALL
+        .into_iter()
+        .filter_map(|socket| {
+            let record = socket.record_of(item);
+            (!record.is_empty()).then(|| format!("{}: {}", socket.title(), part_name(cx, record)))
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// The database's name for a part record, as the base facts resolve
+/// it.
+pub fn part_name(cx: &mut PaneCtx<'_>, record: &str) -> String {
+    let part = Item {
+        base_name: record.to_string(),
+        ..Item::default()
+    };
+    cx.facts.base(cx.game, &part).name.clone()
 }
 
 #[cfg(test)]

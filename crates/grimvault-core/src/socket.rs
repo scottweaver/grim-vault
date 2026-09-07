@@ -56,6 +56,15 @@ impl Socket {
         }
     }
 
+    /// The label as a heading spells it.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Component => "Component",
+            Self::Augment => "Augment",
+        }
+    }
+
     /// The socket a part record fills, from its `Class`; `None` for
     /// anything that is not a part.
     #[must_use]

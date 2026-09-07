@@ -13,6 +13,7 @@ use grimvault_core::gamedata::{AffixInfo, BitmapPath, Footprint, GameData, ItemC
 use grimvault_core::item::Item;
 use grimvault_core::reagents::{ReagentKind, ReagentKinds};
 use grimvault_core::search::{AffixName, Subject};
+use grimvault_core::socket::Part;
 use grimvault_core::stats::ItemDetails;
 use grimvault_core::transfer::Footprints;
 use univault_engine::ids::RecordId;
@@ -99,18 +100,32 @@ impl<'a> ItemFacts<'a> {
 }
 
 /// The memo: base facts by base record path, affix records by affix
-/// record path, and the ascension table read once. Only the
-/// [`Footprints`] and [`ReagentKinds`] views read it without warming,
-/// so a caller that will move items warms every item involved first
+/// record path, the part a record is by record path, and the
+/// ascension table read once. Only the [`Footprints`] and
+/// [`ReagentKinds`] views read it without warming, so a caller that
+/// will move items warms every item involved first
 /// ([`FactsCache::warm`]).
 #[derive(Default)]
 pub struct FactsCache {
     bases: HashMap<String, BaseFacts>,
     affixes: HashMap<String, Option<AffixInfo>>,
+    parts: HashMap<String, Option<Part>>,
     ascension: Option<AscensionTable>,
 }
 
 impl FactsCache {
+    /// The part a record is — a component or an augment, with the
+    /// slots it admits — memoized; `None` when the database does not
+    /// know the record or it is no part.
+    pub fn part(&mut self, game: &GameData, record: &str) -> Option<&Part> {
+        if !self.parts.contains_key(record) {
+            let part =
+                RecordId::parse(record.to_string()).and_then(|id| Part::read(game, &id).ok());
+            self.parts.insert(record.to_string(), part);
+        }
+        self.parts.get(record).and_then(Option::as_ref)
+    }
+
     /// The facts for `item`, resolving and memoizing on first sight.
     pub fn facts(&mut self, game: &GameData, item: &Item) -> ItemFacts<'_> {
         self.warm(game, item);

@@ -842,6 +842,7 @@ fn row(
     }
     if response.clicked() {
         *selected = Some(stored.id());
+        frame.select = Some(source);
     }
     None
 }

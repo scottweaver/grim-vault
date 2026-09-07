@@ -17,7 +17,17 @@
 //! vault_cli <game dir> <save dir> <store.json> import-gds <file.gds>
 //! vault_cli <game dir> <save dir> <store.json> respec-attributes <character>
 //! vault_cli <game dir> <save dir> <store.json> respec-masteries <character>
+//! vault_cli <game dir> <save dir> <store.json> detach <location> (component | augment)
+//! vault_cli <game dir> <save dir> <store.json> attach <location> <id> [<seed>]
 //! ```
+//!
+//! `detach` frees the component or augment of the item at
+//! `<location>` into the store as an item of its own; `attach` puts
+//! stored item `<id>` (a component or augment; a stack gives one up)
+//! into the matching socket of that item under `<seed>` (decimal or
+//! `0x…`; the clock when omitted). `<location>` is
+//! `stash:<tab>:<index>`, `sack:<character>:<sack>:<index>`, or
+//! `own:<character>:<tab>:<index>`.
 //!
 //! The `reagent` commands work the component / crafting-material
 //! storage, `reagents.gst`, the same way; the `sack`, `money`, and
@@ -61,7 +71,8 @@ use grimvault_core::item::Item;
 use grimvault_core::loaded::Loaded;
 use grimvault_core::reagents::{ReagentKind, ReagentKinds};
 use grimvault_core::respec::{Reset, RespecRules};
-use grimvault_core::store::{StoredItem, StoredItemId, Timestamp, VaultStore};
+use grimvault_core::socket::{self, Part, Socket};
+use grimvault_core::store::{ItemOrigin, StoredItem, StoredItemId, Timestamp, VaultStore};
 use grimvault_core::transfer::{self, ItemIndex, ReagentIndex, SackIndex, TabIndex};
 use univault_engine::ids::{GridPos, RecordId};
 use univault_io::{BackupPolicy, backup_first_write, read_verified};
@@ -75,9 +86,12 @@ const USAGE: &str = "usage: vault_cli [--game DIR] [--save DIR] [--store FILE] [
                      | characters | vault-sack <character> <sack> <index> \
                      | place-sack <id> <character> <sack> [x y] | money <character> [<iron bits>] \
                      | import-gds <file.gds> \
-                     | respec-attributes <character> | respec-masteries <character>) \
-                     — <character> is Name, main/Name or user/Name; paths not given come from \
-                     the app's saved settings";
+                     | respec-attributes <character> | respec-masteries <character> \
+                     | detach <location> (component | augment) | attach <location> <id> [seed]) \
+                     — <character> is Name, main/Name or user/Name; <location> is \
+                     stash:<tab>:<index>, sack:<character>:<sack>:<index> or \
+                     own:<character>:<tab>:<index>; paths not given come from the app's saved \
+                     settings";
 
 enum Command {
     List,
@@ -102,6 +116,90 @@ enum Command {
     ImportGds {
         file: PathBuf,
     },
+    Socket(SocketCommand),
+}
+
+/// The commands that fill or free an item's sockets.
+enum SocketCommand {
+    Detach {
+        at: Location,
+        socket: Socket,
+    },
+    Attach {
+        at: Location,
+        id: StoredItemId,
+        seed: Option<u32>,
+    },
+}
+
+impl SocketCommand {
+    fn location(&self) -> &Location {
+        match self {
+            Self::Detach { at, .. } | Self::Attach { at, .. } => at,
+        }
+    }
+}
+
+/// Where an item sits, as the socket commands name it.
+enum Location {
+    Stash {
+        tab: TabIndex,
+        index: ItemIndex,
+    },
+    Sack {
+        character: CharacterArg,
+        sack: SackIndex,
+        index: ItemIndex,
+    },
+    OwnStash {
+        character: CharacterArg,
+        tab: TabIndex,
+        index: ItemIndex,
+    },
+}
+
+impl Location {
+    /// `stash:<tab>:<index>`, `sack:<character>:<sack>:<index>`, or
+    /// `own:<character>:<tab>:<index>`; the character may itself
+    /// carry a `/`.
+    fn parse(raw: &str) -> Result<Self, Box<dyn Error>> {
+        let mut parts = raw.rsplitn(3, ':');
+        let index = ItemIndex::new(parts.next().ok_or(USAGE)?.parse()?);
+        let slot: u32 = parts.next().ok_or(USAGE)?.parse()?;
+        let head = parts.next().ok_or(USAGE)?;
+        match head.split_once(':') {
+            None if head == "stash" => Ok(Self::Stash {
+                tab: TabIndex::new(slot),
+                index,
+            }),
+            Some(("sack", character)) => Ok(Self::Sack {
+                character: CharacterArg::parse(character),
+                sack: SackIndex::new(slot),
+                index,
+            }),
+            Some(("own", character)) => Ok(Self::OwnStash {
+                character: CharacterArg::parse(character),
+                tab: TabIndex::new(slot),
+                index,
+            }),
+            Some(_) | None => Err(USAGE.into()),
+        }
+    }
+}
+
+fn parse_socket(raw: &str) -> Result<Socket, Box<dyn Error>> {
+    match raw {
+        "component" => Ok(Socket::Component),
+        "augment" => Ok(Socket::Augment),
+        _ => Err(USAGE.into()),
+    }
+}
+
+fn parse_seed(raw: &str) -> Result<u32, Box<dyn Error>> {
+    Ok(match raw.strip_prefix("0x") {
+        Some(hex) => u32::from_str_radix(hex, 16)?,
+        None => raw.parse()?,
+    })
 }
 
 /// The commands that work a `player.gdc`.
@@ -278,9 +376,255 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::Character(command) => {
             run_character(command, &save_dir, &store_path, &game_data, &mut store)?;
         }
+        Command::Socket(command) => {
+            let ctx = SocketCtx {
+                save_dir: &save_dir,
+                store_path: &store_path,
+                stash_path: &stash_path,
+                campaign: &campaign,
+                game_data: &game_data,
+            };
+            run_socket(&command, &ctx, &mut stash, &mut store)?;
+        }
         Command::ImportGds { .. } => unreachable!("peeled off before the shared files are opened"),
     }
     Ok(())
+}
+
+/// What a socket command works with besides the item's own file.
+struct SocketCtx<'a> {
+    save_dir: &'a Path,
+    store_path: &'a Path,
+    stash_path: &'a Path,
+    campaign: &'a Campaign,
+    game_data: &'a GameData,
+}
+
+/// What a socket edit did to the store, which decides the write order:
+/// the part's destination goes first.
+enum SocketOutcome {
+    /// The store gave a part up: the item's file is the destination.
+    Attached,
+    /// The store received the freed part: it is the destination.
+    Detached,
+}
+
+/// Fills or frees a socket of the item at the command's location,
+/// writing the item's file and the store destination-first, then
+/// re-reading the file and printing the item as written.
+fn run_socket(
+    command: &SocketCommand,
+    ctx: &SocketCtx<'_>,
+    stash: &mut Loaded<GstFile>,
+    store: &mut VaultStore,
+) -> Result<(), Box<dyn Error>> {
+    let now = now()?;
+    match command.location() {
+        Location::Stash { tab, index } => {
+            let (tab, index) = (*tab, *index);
+            let origin = ItemOrigin::TransferStash {
+                campaign: ctx.campaign.clone(),
+                tab,
+            };
+            let item =
+                stash_item_mut(&mut transfer_stash_mut(stash.model_mut())?.tabs, tab, index)?;
+            let outcome = edit_socket(item, command, origin, ctx.game_data, store, now)?;
+            match outcome {
+                SocketOutcome::Attached => {
+                    write_stash(ctx.stash_path, stash)?;
+                    write_store(ctx.store_path, store)?;
+                }
+                SocketOutcome::Detached => {
+                    write_store(ctx.store_path, store)?;
+                    write_stash(ctx.stash_path, stash)?;
+                }
+            }
+            let written = reparse(ctx.stash_path)?;
+            let mut tabs = transfer_stash(&written)?.tabs.clone();
+            print_sockets(ctx.game_data, stash_item_mut(&mut tabs, tab, index)?);
+        }
+        Location::Sack {
+            character,
+            sack,
+            index,
+        } => {
+            let path = character.path(ctx.save_dir);
+            let mut player = load_player(&path)?;
+            let origin = ItemOrigin::Character {
+                realm: character.realm,
+                name: player.model().character_name().to_owned(),
+                sack: *sack,
+            };
+            let item = sack_item_mut(player.model_mut(), *sack, *index)?;
+            let outcome = edit_socket(item, command, origin, ctx.game_data, store, now)?;
+            write_socket_edit(&outcome, ctx, &path, &player, store)?;
+            let mut written = reparse_player(&path)?;
+            print_sockets(ctx.game_data, sack_item_mut(&mut written, *sack, *index)?);
+        }
+        Location::OwnStash {
+            character,
+            tab,
+            index,
+        } => {
+            let path = character.path(ctx.save_dir);
+            let mut player = load_player(&path)?;
+            let origin = ItemOrigin::CharacterStash {
+                realm: character.realm,
+                name: player.model().character_name().to_owned(),
+                tab: *tab,
+            };
+            let item = own_stash_item_mut(player.model_mut(), *tab, *index)?;
+            let outcome = edit_socket(item, command, origin, ctx.game_data, store, now)?;
+            write_socket_edit(&outcome, ctx, &path, &player, store)?;
+            let mut written = reparse_player(&path)?;
+            print_sockets(
+                ctx.game_data,
+                own_stash_item_mut(&mut written, *tab, *index)?,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The character's file and the store, the part's destination first.
+fn write_socket_edit(
+    outcome: &SocketOutcome,
+    ctx: &SocketCtx<'_>,
+    path: &Path,
+    player: &Loaded<PlayerFile>,
+    store: &VaultStore,
+) -> Result<(), Box<dyn Error>> {
+    match outcome {
+        SocketOutcome::Attached => {
+            write_player(path, player)?;
+            write_store(ctx.store_path, store)
+        }
+        SocketOutcome::Detached => {
+            write_store(ctx.store_path, store)?;
+            write_player(path, player)
+        }
+    }
+}
+
+/// The edit itself, on the item in place: every check runs before
+/// anything changes, so a refusal leaves the item and the store as
+/// they were.
+fn edit_socket(
+    item: &mut Item,
+    command: &SocketCommand,
+    origin: ItemOrigin,
+    game_data: &GameData,
+    store: &mut VaultStore,
+    now: Timestamp,
+) -> Result<SocketOutcome, Box<dyn Error>> {
+    match command {
+        SocketCommand::Detach { socket, .. } => {
+            let freed = socket::detach(item, *socket, clock_seed(now))?;
+            *item = freed.host;
+            let name = describe(game_data, &freed.part);
+            let stored = store.add(freed.part, origin, now);
+            println!("freed the {socket} {name} into the store as stored item {stored}");
+            Ok(SocketOutcome::Detached)
+        }
+        SocketCommand::Attach { id, seed, .. } => {
+            let slot = socket::host_slot(game_data, item)?;
+            let offered = store
+                .get(*id)
+                .ok_or_else(|| format!("the store has no item {id}"))?
+                .item()
+                .clone();
+            let record = RecordId::parse(offered.base_name.clone())
+                .ok_or_else(|| format!("stored item {id} names no record"))?;
+            let part = Part::read(game_data, &record)?;
+            let seed = seed.unwrap_or_else(|| clock_seed(now));
+            let edited = socket::attach(item, slot, &part, seed)?;
+            if offered.stack_count > 1 {
+                if let Some(stack) = store.item_mut(*id) {
+                    stack.stack_count = offered.stack_count - 1;
+                }
+            } else {
+                store.take(*id);
+            }
+            *item = edited;
+            println!(
+                "put {} in as the {} of the item (a {slot}) under seed {seed:#x}",
+                describe(game_data, &offered),
+                part.socket()
+            );
+            Ok(SocketOutcome::Attached)
+        }
+    }
+}
+
+/// The seed a freed part or a socket takes when none is given: the
+/// clock, which is as arbitrary as the game's own.
+fn clock_seed(now: Timestamp) -> u32 {
+    u32::try_from(now.unix_seconds() & u64::from(u32::MAX)).unwrap_or(0)
+}
+
+fn print_sockets(game_data: &GameData, item: &Item) {
+    println!("item as written: {}", describe(game_data, item));
+    for socket in Socket::ALL {
+        let record = socket.record_of(item);
+        if record.is_empty() {
+            println!("  {}: none", socket.title());
+        } else {
+            let part = Item {
+                base_name: record.to_string(),
+                ..Item::default()
+            };
+            println!("  {}: {}", socket.title(), describe(game_data, &part));
+        }
+    }
+    println!(
+        "  relic seed {:#x}, completion level {}, bonus {:?}; augment seed {:#x}, level {}",
+        item.relic_seed,
+        item.relic_completion_level,
+        item.relic_bonus,
+        item.augment_seed,
+        item.unknown
+    );
+}
+
+fn stash_item_mut(
+    tabs: &mut [grimvault_core::block::StashTab],
+    tab: TabIndex,
+    index: ItemIndex,
+) -> Result<&mut Item, Box<dyn Error>> {
+    tabs.get_mut(usize::try_from(tab.value())?)
+        .ok_or_else(|| format!("no tab {tab}"))?
+        .items
+        .get_mut(index.value())
+        .map(|placed| &mut placed.item)
+        .ok_or_else(|| format!("tab {tab} has no item {index}").into())
+}
+
+fn sack_item_mut(
+    player: &mut PlayerFile,
+    sack: SackIndex,
+    index: ItemIndex,
+) -> Result<&mut Item, Box<dyn Error>> {
+    player
+        .inventory_mut()
+        .ok_or("player.gdc carries no typed inventory (block 3)")?
+        .sacks_mut()
+        .get_mut(usize::try_from(sack.value())?)
+        .ok_or_else(|| format!("no sack {sack}"))?
+        .items
+        .get_mut(index.value())
+        .map(|placed| &mut placed.item)
+        .ok_or_else(|| format!("sack {sack} has no item {index}").into())
+}
+
+fn own_stash_item_mut(
+    player: &mut PlayerFile,
+    tab: TabIndex,
+    index: ItemIndex,
+) -> Result<&mut Item, Box<dyn Error>> {
+    let stash = player
+        .stash_mut()
+        .ok_or("player.gdc carries no typed stash (block 4)")?;
+    stash_item_mut(&mut stash.tabs, tab, index)
 }
 
 /// Imports a GD Stash export into the store, backup-first as every
@@ -664,6 +1008,20 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
         ("respec-masteries", [character]) => Command::Character(CharacterCommand::Respec {
             character: CharacterArg::parse(character),
             reset: Reset::Masteries,
+        }),
+        ("detach", [at, socket]) => Command::Socket(SocketCommand::Detach {
+            at: Location::parse(at)?,
+            socket: parse_socket(socket)?,
+        }),
+        ("attach", [at, id]) => Command::Socket(SocketCommand::Attach {
+            at: Location::parse(at)?,
+            id: StoredItemId::new(id.parse()?),
+            seed: None,
+        }),
+        ("attach", [at, id, seed]) => Command::Socket(SocketCommand::Attach {
+            at: Location::parse(at)?,
+            id: StoredItemId::new(id.parse()?),
+            seed: Some(parse_seed(seed)?),
         }),
         _ => return Err(USAGE.into()),
     };

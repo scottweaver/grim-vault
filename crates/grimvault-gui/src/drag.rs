@@ -10,6 +10,7 @@
 //! seeded with a clone and the source is never touched.
 
 use egui::Vec2;
+use grimvault_core::block::StashTab;
 use grimvault_core::campaign::Campaign;
 use grimvault_core::gamedata::Footprint;
 use grimvault_core::gdc::{PlayerFile, Realm};
@@ -382,10 +383,85 @@ impl<'a> Containers<'a> {
             .ok_or(ApplyError::CharacterNotEditable(slot))
     }
 
-    fn reagents(&mut self) -> Result<&mut ReagentStorage, ApplyError> {
+    pub(crate) fn reagents(&mut self) -> Result<&mut ReagentStorage, ApplyError> {
         self.reagents
             .as_deref_mut()
             .ok_or(ApplyError::NoReagentStorage)
+    }
+}
+
+/// The open containers as a read sees them: [`Containers`], which also
+/// edits, and [`Views`], which only looks — so a click can find its
+/// item without borrowing every document for writing.
+pub trait Ends {
+    fn campaign(&self) -> &Campaign;
+    fn stash_tabs(&self) -> &[StashTab];
+    fn store(&self) -> &VaultStore;
+    /// `None` while `reagents.gst` is absent or unusable.
+    fn storage(&self) -> Option<&ReagentStorage>;
+    /// A character open for editing, with its realm.
+    ///
+    /// # Errors
+    /// [`ApplyError::CharacterNotEditable`].
+    fn open_character(&self, slot: CharacterSlot) -> Result<(Realm, &PlayerFile), ApplyError>;
+}
+
+impl Ends for Containers<'_> {
+    fn campaign(&self) -> &Campaign {
+        self.campaign
+    }
+
+    fn stash_tabs(&self) -> &[StashTab] {
+        &self.stash.tabs
+    }
+
+    fn store(&self) -> &VaultStore {
+        self.store
+    }
+
+    fn storage(&self) -> Option<&ReagentStorage> {
+        self.reagents.as_deref()
+    }
+
+    fn open_character(&self, slot: CharacterSlot) -> Result<(Realm, &PlayerFile), ApplyError> {
+        self.character_ref(slot)
+            .map(|open| (open.realm, &*open.file))
+    }
+}
+
+/// The open containers borrowed for reading only; `characters` has
+/// one entry per character in the shell's order, `None` while
+/// unreadable or read-only.
+pub struct Views<'a> {
+    pub campaign: &'a Campaign,
+    pub stash: &'a TransferStash,
+    pub store: &'a VaultStore,
+    pub reagents: Option<&'a ReagentStorage>,
+    pub characters: Vec<Option<(Realm, &'a PlayerFile)>>,
+}
+
+impl Ends for Views<'_> {
+    fn campaign(&self) -> &Campaign {
+        self.campaign
+    }
+
+    fn stash_tabs(&self) -> &[StashTab] {
+        &self.stash.tabs
+    }
+
+    fn store(&self) -> &VaultStore {
+        self.store
+    }
+
+    fn storage(&self) -> Option<&ReagentStorage> {
+        self.reagents
+    }
+
+    fn open_character(&self, slot: CharacterSlot) -> Result<(Realm, &PlayerFile), ApplyError> {
+        self.characters
+            .get(slot.value())
+            .and_then(|entry| *entry)
+            .ok_or(ApplyError::CharacterNotEditable(slot))
     }
 }
 
@@ -440,19 +516,16 @@ pub fn apply(
 /// # Errors
 /// [`ApplyError::SourceGone`] when nothing is there, or an end that is
 /// not open.
-pub fn peek(
-    containers: &Containers<'_>,
-    source: DragSource,
-) -> Result<(Item, ItemOrigin), ApplyError> {
+pub fn peek(ends: &impl Ends, source: DragSource) -> Result<(Item, ItemOrigin), ApplyError> {
     let found = match source {
         DragSource::Grid {
             container: Container::TransferStash(tab),
             index,
-        } => grid_item(&containers.stash.tabs, tab, index).map(|item| {
+        } => grid_item(ends.stash_tabs(), tab, index).map(|item| {
             (
                 item,
                 ItemOrigin::TransferStash {
-                    campaign: containers.campaign.clone(),
+                    campaign: ends.campaign().clone(),
                     tab,
                 },
             )
@@ -461,17 +534,16 @@ pub fn peek(
             container: Container::Sack { character, sack },
             index,
         } => {
-            let open = containers.character_ref(character)?;
-            open.file
-                .inventory()
+            let (realm, file) = ends.open_character(character)?;
+            file.inventory()
                 .and_then(|inventory| inventory.sacks().get(slot(sack.value())?))
                 .and_then(|contents| contents.items.get(index.value()))
                 .map(|placed| {
                     (
                         placed.item.clone(),
                         ItemOrigin::Character {
-                            realm: open.realm,
-                            name: open.file.character_name().to_owned(),
+                            realm,
+                            name: file.character_name().to_owned(),
                             sack,
                         },
                     )
@@ -481,28 +553,26 @@ pub fn peek(
             container: Container::CharacterStash { character, tab },
             index,
         } => {
-            let open = containers.character_ref(character)?;
-            open.file
-                .stash()
+            let (realm, file) = ends.open_character(character)?;
+            file.stash()
                 .and_then(|stash| grid_item(&stash.tabs, tab, index))
                 .map(|item| {
                     (
                         item,
                         ItemOrigin::CharacterStash {
-                            realm: open.realm,
-                            name: open.file.character_name().to_owned(),
+                            realm,
+                            name: file.character_name().to_owned(),
                             tab,
                         },
                     )
                 })
         }
-        DragSource::Store(id) => containers
-            .store
+        DragSource::Store(id) => ends
+            .store()
             .get(id)
             .map(|stored| (stored.item().clone(), stored.origin().clone())),
-        DragSource::Reagent { index, count } => containers
-            .reagents
-            .as_deref()
+        DragSource::Reagent { index, count } => ends
+            .storage()
             .ok_or(ApplyError::NoReagentStorage)?
             .entries
             .get(index.value())
@@ -514,7 +584,7 @@ pub fn peek(
                         ..Item::default()
                     },
                     ItemOrigin::ReagentStorage {
-                        campaign: containers.campaign.clone(),
+                        campaign: ends.campaign().clone(),
                     },
                 )
             }),
@@ -522,14 +592,57 @@ pub fn peek(
     found.ok_or(ApplyError::SourceGone)
 }
 
-fn grid_item(
-    tabs: &[grimvault_core::block::StashTab],
-    tab: TabIndex,
-    index: ItemIndex,
-) -> Option<Item> {
+/// The item at `source` for editing in place — a socket filled or
+/// freed — with its cell, and in the store its id and provenance,
+/// untouched.
+///
+/// # Errors
+/// [`ApplyError::SourceGone`] when nothing is there, an end that is
+/// not open, or the storage, whose rows are records and counts rather
+/// than items.
+pub(crate) fn item_mut<'c>(
+    containers: &'c mut Containers<'_>,
+    source: DragSource,
+) -> Result<&'c mut Item, ApplyError> {
+    let found = match source {
+        DragSource::Grid {
+            container: Container::TransferStash(tab),
+            index,
+        } => grid_item_mut(&mut containers.stash.tabs, tab, index),
+        DragSource::Grid {
+            container: Container::Sack { character, sack },
+            index,
+        } => containers
+            .character(character)?
+            .file
+            .inventory_mut()
+            .and_then(|inventory| inventory.sacks_mut().get_mut(slot(sack.value())?))
+            .and_then(|contents| contents.items.get_mut(index.value()))
+            .map(|placed| &mut placed.item),
+        DragSource::Grid {
+            container: Container::CharacterStash { character, tab },
+            index,
+        } => containers
+            .character(character)?
+            .file
+            .stash_mut()
+            .and_then(|stash| grid_item_mut(&mut stash.tabs, tab, index)),
+        DragSource::Store(id) => containers.store.item_mut(id),
+        DragSource::Reagent { .. } => return Err(ApplyError::NotAnItemContainer(Doc::Reagents)),
+    };
+    found.ok_or(ApplyError::SourceGone)
+}
+
+fn grid_item(tabs: &[StashTab], tab: TabIndex, index: ItemIndex) -> Option<Item> {
     tabs.get(slot(tab.value())?)
         .and_then(|tab| tab.items.get(index.value()))
         .map(|placed| placed.item.clone())
+}
+
+fn grid_item_mut(tabs: &mut [StashTab], tab: TabIndex, index: ItemIndex) -> Option<&mut Item> {
+    tabs.get_mut(slot(tab.value())?)
+        .and_then(|tab| tab.items.get_mut(index.value()))
+        .map(|placed| &mut placed.item)
 }
 
 fn slot(index: u32) -> Option<usize> {
@@ -653,7 +766,7 @@ fn place(
 
 /// The source document as it was before a lift, so a refused
 /// placement can put it back exactly.
-enum Snapshot {
+pub(crate) enum Snapshot {
     Stash(TransferStash),
     Store(VaultStore),
     Reagents(ReagentStorage),
@@ -661,7 +774,7 @@ enum Snapshot {
 }
 
 impl Snapshot {
-    fn take(containers: &Containers<'_>, doc: Doc) -> Result<Self, ApplyError> {
+    pub(crate) fn take(containers: &Containers<'_>, doc: Doc) -> Result<Self, ApplyError> {
         Ok(match doc {
             Doc::Stash => Self::Stash(containers.stash.clone()),
             Doc::Store => Self::Store(containers.store.clone()),
@@ -681,7 +794,7 @@ impl Snapshot {
 
     /// Restores a snapshot that was taken from these same containers;
     /// an end that has since closed simply has nothing to restore.
-    fn restore(self, containers: &mut Containers<'_>) {
+    pub(crate) fn restore(self, containers: &mut Containers<'_>) {
         match self {
             Self::Stash(stash) => *containers.stash = stash,
             Self::Store(store) => *containers.store = store,

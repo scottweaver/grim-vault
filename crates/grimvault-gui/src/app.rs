@@ -6,6 +6,7 @@
 //! refresh).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use egui::{
@@ -14,9 +15,11 @@ use egui::{
 };
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gds;
+use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
 use grimvault_core::respec::{Reset, RespecRules};
 use grimvault_core::store::Timestamp;
+use univault_engine::ids::RecordId;
 use univault_io::read_verified;
 use univault_ui::theme::{Palette, Theme};
 
@@ -25,11 +28,11 @@ use crate::crafting::{self, Blueprints, CraftingFiles, FormulasOpenError, Illusi
 use crate::documents::{
     Backup, CharacterDoc, CharacterEntry, CharacterOpenError, CharacterSlot, Doc, Document, Edits,
     FileStamp, GstOpenError, Optional, ReagentDoc, Reagents, SaveError, SaveOutcome, StashDoc,
-    StoreDoc, StoreOpenError,
+    StoreDoc, StoreOpenError, Writable,
 };
 use crate::drag::{
     self, Applied, Container, Containers, DragSource, DragState, DropTarget, Fit, Landing,
-    LastActive, Mode, Move, OpenCharacter,
+    LastActive, Mode, Move, OpenCharacter, Views,
 };
 use crate::facts::FactsCache;
 use crate::grid::CELL_PX;
@@ -39,12 +42,14 @@ use crate::loader::{
     open_shared,
 };
 use crate::panes::character::CharacterView;
+use crate::panes::inspector::{self, Selected, Supplies};
 use crate::panes::stash::StashView;
 use crate::panes::store::{SEARCH_SHORTCUT, StoreMode, StoreView};
 use crate::panes::{self, DragFrame, PaneCtx};
 use crate::search::SearchCache;
 use crate::settings::{self, ConfigDir, Settings};
 use crate::setup::{DirProblem, GameDir, SaveDir, SetupState};
+use crate::sockets;
 use crate::theme::FITS;
 use crate::ui_state::{PersistedUiState, UiState};
 use crate::watch::{Observation, RefreshTracker, Watcher};
@@ -382,6 +387,21 @@ fn now() -> Timestamp {
     )
 }
 
+/// A seed for a socket or a freed part. The game's seeds are
+/// arbitrary 32-bit values and nothing this app shows depends on the
+/// roll, so the clock mixed with a counter — two edits in one instant
+/// still differ — is entropy enough.
+fn fresh_seed() -> u32 {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let low_seconds = u32::try_from(elapsed.as_secs() & u64::from(u32::MAX)).unwrap_or(0);
+    let tick = COUNTER.fetch_add(1, Ordering::Relaxed);
+    (elapsed.subsec_nanos() ^ low_seconds.rotate_left(16) ^ tick.wrapping_mul(0x9E37_79B9))
+        .wrapping_mul(2_654_435_761)
+}
+
 /// The documents the campaign selector swaps out.
 const CAMPAIGN_DOCS: [Doc; 4] = [Doc::Stash, Doc::Reagents, Doc::Blueprints, Doc::Illusions];
 
@@ -436,6 +456,7 @@ pub struct World {
     ui_state: PersistedUiState,
     character_view: CharacterView,
     last_active: LastActive,
+    selected: Option<Selected>,
     drag: Option<DragState>,
     autosave: Autosave,
     watcher: Result<Watcher, std::io::Error>,
@@ -491,6 +512,7 @@ impl World {
             ui_state,
             character_view: CharacterView::opening_on(loaded.newest_character),
             last_active: LastActive::default(),
+            selected: None,
             drag: None,
             autosave: Autosave::default(),
             watcher,
@@ -554,6 +576,7 @@ impl World {
         self.campaign = next;
         self.stash_view = StashView::default();
         self.last_active.forget();
+        self.selected = None;
         for warning in shared.warnings {
             toasts.error(warning);
         }
@@ -653,6 +676,7 @@ impl World {
                 )
             })
             .inner;
+        self.show_inspector(ui.ctx(), theme, mode, &mut frame);
         self.show_conflict_modal(ui.ctx(), theme, toasts);
         self.finish_frame(ui.ctx(), frame, modifiers, &theme.palette, toasts);
         if let Some(next) = switch {
@@ -673,6 +697,115 @@ impl World {
             && ctx.memory(|memory| memory.focused().is_none())
         {
             self.store_view.mode = StoreMode::Buckets;
+        }
+    }
+
+    /// The inspector window over the selected item, when there is one;
+    /// closing it drops the selection.
+    fn show_inspector(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        mode: Mode,
+        frame: &mut DragFrame,
+    ) {
+        let Some(selected) = self.selected.clone() else {
+            return;
+        };
+        let place = self.place_label(selected.source);
+        let mut cx = PaneCtx {
+            game: &self.game,
+            facts: &mut self.facts,
+            icons: &mut self.icons,
+            palette: &theme.palette,
+            drag: self.drag.as_ref(),
+            mode,
+        };
+        let supplies = Supplies {
+            store: self.store.store(),
+            reagents: self.reagents.doc().map(ReagentDoc::storage),
+        };
+        if !inspector::show(ctx, &selected, &place, supplies, theme, &mut cx, frame) {
+            self.selected = None;
+        }
+    }
+
+    /// Where an item sits, for the inspector's subtitle.
+    fn place_label(&self, source: DragSource) -> String {
+        match source {
+            DragSource::Grid {
+                container: Container::TransferStash(tab),
+                ..
+            } => format!("{} transfer stash, tab {}", self.campaign, tab.value() + 1),
+            DragSource::Grid {
+                container: Container::Sack { character, sack },
+                ..
+            } => format!(
+                "{}, sack {}",
+                self.doc_label(Doc::Character(character)),
+                sack.value() + 1
+            ),
+            DragSource::Grid {
+                container: Container::CharacterStash { character, tab },
+                ..
+            } => format!(
+                "{}, stash tab {}",
+                self.doc_label(Doc::Character(character)),
+                tab.value() + 1
+            ),
+            DragSource::Store(id) => self.store.store().get(id).map_or_else(
+                || format!("vault store, stored item {id}"),
+                |stored| format!("vault store, stored item {id} — from {}", stored.origin()),
+            ),
+            DragSource::Reagent { .. } => Doc::Reagents.to_string(),
+        }
+    }
+
+    /// The open containers for reading: what a click or a check of
+    /// the selection looks through, without counting as an edit.
+    fn views(&self) -> Views<'_> {
+        Views {
+            campaign: &self.campaign,
+            stash: self.stash.stash(),
+            store: self.store.store(),
+            reagents: self.reagents.doc().map(ReagentDoc::storage),
+            characters: self
+                .characters
+                .iter()
+                .map(|entry| {
+                    entry
+                        .doc()
+                        .filter(|doc| doc.writable() == Writable::Yes)
+                        .map(|doc| (doc.realm(), doc.file()))
+                })
+                .collect(),
+        }
+    }
+
+    /// Binds the inspector to the item at `source`, if one is there.
+    fn select(&mut self, source: DragSource) {
+        self.selected = drag::peek(&self.views(), source)
+            .ok()
+            .map(|(item, _)| Selected { source, item });
+    }
+
+    /// After a move or a reload: the selection stands while the same
+    /// item is still at its source, and lapses otherwise.
+    fn revalidate_selection(&mut self) {
+        let Some(selected) = &self.selected else {
+            return;
+        };
+        let still_there =
+            drag::peek(&self.views(), selected.source).is_ok_and(|(item, _)| item == selected.item);
+        if !still_there {
+            self.selected = None;
+        }
+    }
+
+    /// After a socket edit: the inspector follows the edited item.
+    fn refresh_selection(&mut self) {
+        if let Some(source) = self.selected.as_ref().map(|selected| selected.source) {
+            self.select(source);
         }
     }
 
@@ -724,6 +857,8 @@ impl World {
             ui.separator();
             ui.weak("right-click an item to move it between the game and the vault; hold Shift to copy");
             ui.separator();
+            ui.weak("click an item to inspect it and its sockets");
+            ui.separator();
             ui.weak(format!(
                 "game data: {} layers, {} item archives, {} mods, {} of {} tile symbols",
                 self.report.databases,
@@ -763,6 +898,12 @@ impl World {
         }
         if let Some(request) = frame.crafting {
             self.perform_crafting(request, toasts);
+        }
+        if let Some(request) = frame.socket {
+            self.perform_socket(request, toasts);
+        }
+        if let Some(source) = frame.select {
+            self.select(source);
         }
         if let Some(container) = frame.touched {
             self.last_active.touch(container);
@@ -880,35 +1021,10 @@ impl World {
         self.last_active.touch_move(mv);
         self.warm_for(mv);
         let now = now();
-        let World {
-            campaign,
-            stash,
-            store,
-            reagents,
-            characters,
-            facts,
-            ..
-        } = self;
-        let mut containers = Containers {
-            campaign,
-            stash: stash.stash_mut(),
-            store: store.store_mut(),
-            reagents: reagents.doc_mut().map(ReagentDoc::storage_mut),
-            characters: characters
-                .iter_mut()
-                .map(|entry| {
-                    let doc = entry.doc_mut()?;
-                    let realm = doc.realm();
-                    doc.file_mut()
-                        .ok()
-                        .map(|file| OpenCharacter { realm, file })
-                })
-                .collect(),
-        };
-        let carried = drag::peek(&containers, mv.source)
-            .ok()
-            .map(|(item, _)| item);
-        let outcome = drag::apply(mv, &mut containers, &*facts, now);
+        let (carried, outcome) = self.with_containers(|containers, facts, _| {
+            let carried = drag::peek(containers, mv.source).ok().map(|(item, _)| item);
+            (carried, drag::apply(mv, containers, facts, now))
+        });
         let moved = carried.map_or_else(
             || "the item".to_string(),
             |item| {
@@ -949,6 +1065,98 @@ impl World {
             Ok(Applied::Unmoved) => {}
             Err(error) => toasts.error(error.to_string()),
         }
+        self.revalidate_selection();
+    }
+
+    /// Every open container at once — the ends a move or a socket edit
+    /// reaches — with the memo and the game data beside them. Counts
+    /// as an edit of the store, so reads go through [`Self::views`].
+    fn with_containers<T>(
+        &mut self,
+        edit: impl FnOnce(&mut Containers<'_>, &FactsCache, &GameData) -> T,
+    ) -> T {
+        let World {
+            campaign,
+            stash,
+            store,
+            reagents,
+            characters,
+            facts,
+            game,
+            ..
+        } = self;
+        let mut containers = Containers {
+            campaign,
+            stash: stash.stash_mut(),
+            store: store.store_mut(),
+            reagents: reagents.doc_mut().map(ReagentDoc::storage_mut),
+            characters: characters
+                .iter_mut()
+                .map(|entry| {
+                    let doc = entry.doc_mut()?;
+                    let realm = doc.realm();
+                    doc.file_mut()
+                        .ok()
+                        .map(|file| OpenCharacter { realm, file })
+                })
+                .collect(),
+        };
+        edit(&mut containers, facts, game)
+    }
+
+    /// A socket edit from the inspector: the host and the part's
+    /// source are edited through the same containers a move uses, the
+    /// documents that changed join autosave with the part's
+    /// destination written first, and the inspector follows the
+    /// edited item.
+    fn perform_socket(&mut self, request: sockets::Request, toasts: &mut Toasts) {
+        let seed = fresh_seed();
+        let now = now();
+        let outcome = self.with_containers(|containers, _, game| {
+            sockets::apply(request, containers, game, seed, now)
+        });
+        match outcome {
+            Ok(sockets::Applied::Attached {
+                socket,
+                part,
+                host,
+                from,
+            }) => {
+                self.mark_edited(host);
+                self.mark_edited(from);
+                self.write_order.prioritize(host);
+                toasts.info(format!(
+                    "put {} in as the {socket} of the item in the {}",
+                    self.record_name(&part),
+                    self.doc_label(host)
+                ));
+            }
+            Ok(sockets::Applied::Detached {
+                socket,
+                part,
+                host,
+                stored,
+            }) => {
+                self.mark_edited(host);
+                self.mark_edited(Doc::Store);
+                self.write_order.prioritize(Doc::Store);
+                toasts.info(format!(
+                    "freed the {socket} {} into the vault store as stored item {stored}",
+                    self.record_name(&part)
+                ));
+            }
+            Err(error) => toasts.error(error.to_string()),
+        }
+        self.refresh_selection();
+    }
+
+    /// The database's name for a record, as the panes show it.
+    fn record_name(&mut self, record: &RecordId) -> String {
+        let item = Item {
+            base_name: record.as_str().to_string(),
+            ..Item::default()
+        };
+        self.facts.base(&self.game, &item).name.clone()
     }
 
     /// The storage tab a right-clicked store item belongs in, `None`
@@ -1355,6 +1563,7 @@ impl World {
                 }
             }
         }
+        self.revalidate_selection();
         Ok(())
     }
 
