@@ -98,7 +98,13 @@ Q&A). Items marked TBD are open questions, not decisions.
   The store is separate from tq-univault's (different game,
   different item identity) even though the envelope machinery is
   shared. Carried over from tq-univault's 2026-08-29 virtual-tabs
-  decision. (2026-09-03, bootstrap dialog)
+  decision. (2026-09-03, bootstrap dialog) Beside it the desktop
+  shell keeps **`ui-state.json`** (format tag `grimvault-ui-state`,
+  version 1): the store pane's mode, bucket, search bar and sort —
+  view state, never data. Self-describing like the store (unknown
+  top-level fields preserved), ignored when foreign or newer, written
+  after a second of quiet and on exit; losing it costs nothing but a
+  restored filter. (2026-09-06, search-view track)
 - The game's ARZ/ARC archives (record database, textures, strings)
   are read-only reference data. This app never writes them. The
   record database is **layered**: `database/database.arz`, then

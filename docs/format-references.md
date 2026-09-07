@@ -950,6 +950,76 @@ either tool's code or text tables is transcribed.
   `^H` highlighted numbers) are rendered from the theme, not from a
   verified palette.
 
+## Item search — 2026-09-06
+
+The rules the store search (`grimvault-core::search`, the GUI's
+search view, `examples/search_cli.rs`) applies over the stat lines
+above. Ported in shape from tq-univault's `query.rs` (MIT OR
+Apache-2.0, same author); every rule was re-checked against the
+3,205-item GD Stash collection in the user's vault store.
+
+- **Stat template.** A line's template is its text with every number
+  replaced by `#`: "+24% Pierce Resistance" → "+#% Pierce
+  Resistance", "9-67 Lightning Damage" → "#-# Lightning Damage",
+  "45.0 Second Skill Recharge" → "# Second Skill Recharge". A `-` is
+  part of the number only when directly attached and not itself
+  following a digit, so "-15% …" is one negative number and "9-67"
+  two; a `+` stays in the wording. The template is the key the
+  search's stat vocabulary groups the store's lines under (the picker
+  offers only templates the store's items actually produce) and one
+  of the two haystacks a stat criterion matches against — the other
+  is the line's text — so a picked template, free text ("cold
+  damage") and text with numbers ("40% cold") all hit.
+- **Value window.** A criterion's `min`/`max` compare the line's
+  largest *rendered* number (`StatLine::values`, the numbers the
+  template formatted — not digits found in prose), so "12-31
+  Physical Damage" is bounded on 31 and a numberless line ("Speed:
+  Very Slow") never satisfies a bounded criterion. Rendered numbers
+  are the record's nominal values (the seed roll is not public, see
+  "Item stat lines"), so a window is approximate by
+  `lootRandomizerJitter` in-game.
+- **Which lines.** "Any stat" reads every block the tooltip renders
+  — base, prefix, suffix, transmute modifier, component and its
+  completion bonus, augment, ascendant bonus — except a granted
+  skill's description prose (`LineKind::SkillDescription`); "Affix
+  stat" reads the prefix and suffix blocks only; "Affix name" reads
+  the affixes' `lootRandomizerName`s. Requirement lines, set members
+  and set bonuses are not stat lines.
+- **Three-way answers.** A stat or affix criterion that finds no
+  matching line is *unresolved*, not excluded, when one of the blocks
+  it read names a record no database layer has (the item's
+  `unrendered` carries the `MissingRecord`); a requirement cap passes
+  a requirement the item does not state, fails a stated one above the
+  cap whatever else is unknown, and is unresolved when the base
+  record is missing (the effective requirement is incomplete);
+  rarity, category and set need the base record and are unresolved
+  without it; the socket filter reads the item's own `relicName` and
+  always resolves. The GUI counts unresolved items in its summary
+  line rather than hiding them silently.
+- **Rarity** in the search is the *displayed* rarity — the base's
+  `itemClassification` raised by a rarer affix, a quest item always
+  quest — the colour the game names the item in; the tile border in
+  the bucket view still shows the base's own classification.
+- **Sort keys.** Name (case-folded), rarity (displayed, tier order
+  common → legendary, quest after), level requirement (the item's
+  effective `levelRequirement`, the maximum over its gating records),
+  type (the `Bucket` display order). Every key ranks ascending with a
+  name tiebreak; the direction is applied by the caller
+  (`univault_ui::sort::SortDirection` in the GUI, `--desc` in the
+  CLI). A column first opened sorts names and types A→Z, rarity and
+  level highest first.
+- **Not ported from tq-univault:** the expansion-origin filter.
+  Grim Dawn's expansion records share the base game's path
+  namespace (`gdx1/database/GDX1.arz` defines
+  `records/items/gearhead/d112_head.dbr` exactly as the base
+  archive spells its own), unlike Titan Quest's `XPACK*` prefixes,
+  so an item's origin is knowable only from *which archive* supplied
+  its record — and `GameData` composes anonymous layers (mods first
+  as fill, then whichever shipped archives exist), so naming the
+  layer would need labelled layer sets through both loaders, the
+  headless check and the real-file tests. Left out; a labelled
+  `LayerSet` is the follow-up if the filter is wanted.
+
 ## Rust prior art (2026-09-03)
 
 - crates.io: nothing for Grim Dawn or Titan Quest ARZ/ARC/save.
