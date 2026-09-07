@@ -349,6 +349,15 @@ impl VaultStore {
         self.items.iter().find(|stored| stored.id == id)
     }
 
+    /// The item of an entry for editing in place — a socket filled or
+    /// freed, a stack split — keeping its id and provenance.
+    pub fn item_mut(&mut self, id: StoredItemId) -> Option<&mut Item> {
+        self.items
+            .iter_mut()
+            .find(|stored| stored.id == id)
+            .map(|stored| &mut stored.item)
+    }
+
     /// Stores an item under a fresh id.
     pub fn add(&mut self, item: Item, origin: ItemOrigin, stored_at: Timestamp) -> StoredItemId {
         let id = self.next_id;

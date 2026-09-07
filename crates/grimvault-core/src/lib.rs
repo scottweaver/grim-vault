@@ -27,7 +27,9 @@
 //! computed type view over it, [`reagents`] the rule for what belongs
 //! in the game's component / crafting-material storage, [`transfer`]
 //! the pure moves between the transfer stash, that storage, and the
-//! store, and [`gds`] the read-only import of GD Stash's exports.
+//! store, [`socket`] the component and augment an item carries and
+//! the edits that attach or free one, and [`gds`] the read-only import
+//! of GD Stash's exports.
 //! [`respec`] is the full attribute and mastery refund on a
 //! character, under the same rules the game reads from its own
 //! records.
@@ -53,6 +55,7 @@ pub mod reagents;
 pub mod respec;
 pub mod search;
 pub mod settings;
+pub mod socket;
 pub mod stats;
 pub mod store;
 pub mod transfer;
