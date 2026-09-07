@@ -5,28 +5,33 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-07 (FEATURES.md 30 landed on `main` at
-`0d4efe2` — the store's groups regrouped around what an item is for:
-Relics with the accessories, Components and Augments as Item
-Upgrades, Crafting down to materials, blueprints and transmuters,
-Consumables and Other split; 504 tests; fast-forwarded and pushed;
-28–29 at `f400222` and 25–27 at `a22ac10` earlier the same evening)
+Last updated: 2026-09-07 (FEATURES.md 31 landed on `main` at
+`6d51441` — the learned-blueprint sync, a fourth standing order that
+turns every blueprint learned in the open campaign the vault has no
+item of into a blueprint item in the store; 505 tests; fast-forwarded
+and pushed; 30 at `0d4efe2`, 28–29 at `f400222`, 25–27 at `a22ac10`
+earlier the same evening)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
-**Resume here:** `main` at the `docs/state-post-features-30`
-fast-forward (feature tip `0d4efe2`) holds everything landed — every
-FEATURES.md item through 30 (there is no item 17) — 504 tests, clippy
+**Resume here:** `main` at the `docs/state-post-features-31`
+fast-forward (feature tip `6d51441`) holds everything landed — every
+FEATURES.md item through 31 (there is no item 17) — 505 tests, clippy
 pedantic clean, fmt clean, headless `--check` clean from the release
-build on a scratch copy of the saves. **Why 25–30:** the user asked
+build on a scratch copy of the saves. **Why 25–31:** the user asked
 in chat whether the vault is portable so a Linux binary on Bazzite
 can use the Mac's vault; it is (no path or platform fact in it), and
 they asked for the shared-location route to be first-class, plus
 export / import and a settings modal (25–27), then corrected what
 they saw in the window — crafting materials filed under Quest Items,
-stackables held as several stacks (28–29), and group tabs that did
-not say what they held (30) — all recorded in FEATURES.md by the
-agent, not the user, so the queue stays the one record. **Nine
+stackables held as several stacks (28–29), group tabs that did not
+say what they held (30) — and asked for learned blueprints to sync
+into the vault (31) — all recorded in FEATURES.md by the agent, not
+the user, so the queue stays the one record. **The first launch of
+`6d51441` on the real files adds 143 blueprint items** to the store
+from LootAscension's `formulas.gst` (the main campaign's 217 are all
+held already), on top of the 85-stack fold from 28–29 — both
+expected, both autosaved backup-first. **Nine
 components stay in two stacks after the fold** (Aether Soul,
 Whetstone, Bloody Whetstone, Aether Shard …): one stack came out of
 the reagent storage bare, the other out of a GD Stash export carrying
@@ -96,18 +101,18 @@ default `bulkDuplicates: skip`.
   far is in `docs/format-references.md` "GD Stash (eyes-only)
   findings".
 - **The user's feature queue is `FEATURES.md`** in the repo root
-  (untracked, user-authored, growing): items 1–30 are landed on
+  (untracked, user-authored, growing): items 1–31 are landed on
   `main` (there is no item 17) and each line carries a
   `[landed <date>: <rule>]` tag (20–24 tagged 2026-09-07 following
-  the pass the user agreed to for 1–19; 25–30 were *written* by the
+  the pass the user agreed to for 1–19; 25–31 were *written* by the
   agent from chat requests the same day, marked "asked in chat").
   They announce additions with "new items in FEATURES.md" / "new
   features are ready for review", and nothing is read until then.
   Items are executed on the fly, in parallel where independent — one
   fork agent per track in its own worktree, briefed with the design
   decisions up front; three tracks at once worked today, six on
-  2026-09-07's first pass; 25–27, 28–29 and 30 were single tracks in
-  the main checkout.
+  2026-09-07's first pass; 25–27, 28–29, 30 and 31 were single
+  tracks in the main checkout.
 - **Verifying the GUI without touching the user's setup:** point
   `GRIMVAULT_CONFIG_DIR` at a scratch directory holding a
   `settings.json` (`gameDir` = the real install, `saveDir` = a scratch
@@ -219,22 +224,23 @@ a confirmation, and one `bulkDuplicates` rule in `settings.json`, and
 — landed 2026-09-07 night — the vault store at any path via
 `storeFile`, vault export / import as a store merge, a settings
 modal behind ⚙, a Crafting Materials bucket, one consolidated stack
-per stackable record kept by the window, and the store's seven
-groups — Weapons, Armor, Accessories with Relics, Item Upgrades,
-Crafting, Consumables, Other) — 504 tests, clippy pedantic clean.
-Verified on scratch copies of the user's install and saves. **Not
-yet verified: the game reading any file this app wrote** — the next
-step is the user's acceptance run on the real install with the game
-closed, and now the Linux build on Bazzite sharing the NAS vault.
-The user's `FEATURES.md` is landed through item 30. grim-vault is
-the Grim Dawn sibling of tq-univault; PROJECT.md is bound with
-`tracker: none`.
+per stackable record kept by the window, the store's seven groups —
+Weapons, Armor, Accessories with Relics, Item Upgrades, Crafting,
+Consumables, Other — and the learned-blueprint sync as a fourth
+standing order) — 505 tests, clippy pedantic clean. Verified on
+scratch copies of the user's install and saves. **Not yet verified:
+the game reading any file this app wrote** — the next step is the
+user's acceptance run on the real install with the game closed, and
+now the Linux build on Bazzite sharing the NAS vault. The user's
+`FEATURES.md` is landed through item 31. grim-vault is the Grim Dawn
+sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
 
 ## Branches in flight
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at the `docs/state-post-features-30` fast-forward — every FEATURES.md item through 30; 504 tests green; pushed, `origin/main` in sync |
+| `main` | trunk | at the `docs/state-post-features-31` fast-forward — every FEATURES.md item through 31; 505 tests green; pushed, `origin/main` in sync |
+| `feat/blueprint-sync`, `docs/state-post-features-31` | FEATURES.md 31 | landed by fast-forward at `6d51441`; fully merged, awaiting the user's say-so to delete (no worktrees) |
 | `feat/store-groups`, `docs/state-post-features-30` | FEATURES.md 30 | landed by fast-forward at `0d4efe2`; fully merged, awaiting the user's say-so to delete (no worktrees) |
 | `feat/store-location-and-settings`, `docs/state-post-features-25-27` | FEATURES.md 25–27 | landed by fast-forward at `a22ac10`; fully merged, awaiting the user's say-so to delete (no worktrees) |
 | `feat/material-bucket-and-stacks`, `docs/state-post-features-28-29` | FEATURES.md 28–29 | landed by fast-forward at `f400222`; fully merged, awaiting the user's say-so to delete (no worktrees) |
@@ -259,7 +265,10 @@ the Grim Dawn sibling of tq-univault; PROJECT.md is bound with
    import it back (expect "nothing new"); see the first load fold the
    real store's split stacks (a toast, "store taken" in backup-first),
    Crafting > Crafting Materials populated and Other > Quest Items
-   down to the true quest items; then confirm every one of those
+   down to the true quest items, the blueprint sync toast adding
+   LootAscension's 143 unheld blueprints as items, and — after
+   learning a blueprint in-game — the guard's reload of `formulas.gst`
+   adding one more; then confirm every one of those
    in-game — **in particular whether the game accepts a stack placed
    from the vault that exceeds its own max stack size** (a
    consolidated stack of components can be thousands; the app never
@@ -306,6 +315,27 @@ the Grim Dawn sibling of tq-univault; PROJECT.md is bound with
    Stash does not read it either).
 
 ## Most recent meaningful progress
+
+- **2026-09-07 (latest) — FEATURES.md 31 landed on `main`
+  (fast-forward to `6d51441`).** The user asked for blueprints to
+  auto-sync to the vault when found in-game. Modelled as the
+  component sync's twin over `formulas.gst`: `bulk::blueprint_shortfall`
+  lists the learned records the store holds no item of (any origin —
+  a blueprint vaulted from a stash is the blueprint; record paths
+  compared with `ids::normalize`), `bulk::sync_blueprints` adds one
+  blueprint item each under `ItemOrigin::LearnedBlueprint
+  { campaign }`; `settings.json` `syncBlueprints` (default on);
+  `World::sync_blueprints` runs in `carry_out_orders` for
+  `Doc::Blueprints`, after an in-app add or import to the list, and
+  when the toggle turns on — from the list's toolbar or the ⚙ modal;
+  `--check` prints the plan; `vault_cli sync-blueprints`. 505 tests.
+  Why: the user thinks of the vault as the union of everything found;
+  the sync pattern was already accepted for reagents. Risk: a learned
+  blueprint becomes a *placeable item* in the vault — dropping it into
+  another campaign's stash conjures a blueprint drop from knowledge,
+  which is the point but is a duplication the game never offers
+  (Blocked / waiting 8); the first launch adds 143 items from
+  LootAscension's list.
 
 - **2026-09-07 (last) — FEATURES.md 30 landed on `main`
   (fast-forward to `0d4efe2`).** The user read the group tabs after
@@ -499,22 +529,6 @@ the Grim Dawn sibling of tq-univault; PROJECT.md is bound with
   write, which is right after play but wrong if the user edits the
   other campaign's files by hand in between.
 
-- **2026-09-06 — Mod databases and `gdx3` as game-data layers
-  (branch `feat/mod-characters`, not merged).** Core:
-  `gamedata::shipped_layers()` names base / `gdx1` / `gdx2` / `gdx3`,
-  `mod_layers()` turns a shell's listing of `mods/<Mod>/` into fill
-  layers (case-insensitive names, first `.arz` by name, folder
-  order), and `GameData::layered(shipped, mods)` composes them with
-  mods *below* everything shipped; both loaders read through it, the
-  `--check` transcript and the status bar count mod layers. Why: the
-  user authorised reading the mod databases, and the "unknown
-  records" that made the mod Zark's sacks refuse placements turned
-  out to be `gdx3` records the old three-entry constant lists never
-  read. Risk: a mod that *only* overrides shipped records changes
-  nothing here by design — if a mod character's items should show the
-  mod's names, that rule needs renegotiating; load time grows with
-  each mod's archives (Crucible's `Items.arc` is 4.6 MB).
-
 ## Blocked / waiting
 
 - **Waiting on the user — rules to confirm or overrule** (built under
@@ -535,7 +549,13 @@ the Grim Dawn sibling of tq-univault; PROJECT.md is bound with
   Stash export) stays a separate stack from the bare one out of the
   storage — nine records in the real store; folding across the
   modifier is a one-line change to `StackKey::of` if the user says
-  those are one item.
+  those are one item; (8) *new:* the blueprint sync represents a
+  learned blueprint as a blueprint *item* in the store (bucket
+  Blueprints, placeable back into any campaign's stash) rather than
+  as a separate knowledge list — the store stays one file of items
+  and the whole store UI applies; if the user wants a list that can
+  be pushed into a campaign's `formulas.gst` instead, that is a
+  different feature.
 - **Waiting on the user — the acceptance run** (next-up item 1) is
   under way in the relaunched build as of this checkpoint; its
   results are what make `main` trustworthy on real saves, and this
