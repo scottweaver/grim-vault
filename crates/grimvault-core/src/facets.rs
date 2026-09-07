@@ -486,6 +486,14 @@ impl Facets {
         labels
     }
 
+    /// The rarity the item shows as — its base's, raised by a rarer
+    /// affix, a quest item always quest — `None` when the base record
+    /// could not be read.
+    #[must_use]
+    pub fn displayed_rarity(&self) -> Option<Rarity> {
+        self.displayed
+    }
+
     /// Whether every facet could be decided.
     #[must_use]
     pub fn is_resolved(&self) -> bool {

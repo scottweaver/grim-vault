@@ -8,10 +8,13 @@
 //! database; every observed value maps explicitly and anything else
 //! lands in [`Bucket::Misc`] rather than being guessed at.
 
+use serde::{Deserialize, Serialize};
+
 use crate::gamedata::ItemClass;
 
 /// The top level of the view, in display order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Group {
     Weapons,
     Armor,
@@ -43,7 +46,8 @@ impl Group {
 }
 
 /// One bucket of the view, in display order within its [`Group`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Bucket {
     OneHanded,
     TwoHanded,

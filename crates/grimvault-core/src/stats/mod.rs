@@ -129,8 +129,22 @@ pub enum Requirement {
 }
 
 impl Requirement {
+    /// Every requirement, level first.
+    pub const ALL: [Self; 4] = [Self::Level, Self::Physique, Self::Cunning, Self::Spirit];
+
     /// The attribute requirements a record may state explicitly.
     pub const EXPLICIT: [Self; 3] = [Self::Physique, Self::Cunning, Self::Spirit];
+
+    /// The requirement as the game names it in English.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Level => "Level",
+            Self::Physique => "Physique",
+            Self::Cunning => "Cunning",
+            Self::Spirit => "Spirit",
+        }
+    }
 
     /// The record variable stating the requirement outright.
     #[must_use]

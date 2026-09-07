@@ -19,6 +19,8 @@ pub const CONFIG_DIR_ENV: &str = "GRIMVAULT_CONFIG_DIR";
 pub const SETTINGS_FILE: &str = "settings.json";
 /// The vault store's name inside the config directory.
 pub const STORE_FILE: &str = "vault-store.json";
+/// The desktop shell's persisted view state, beside the store.
+pub const UI_STATE_FILE: &str = "ui-state.json";
 /// The `format` tag every settings file carries.
 pub const FORMAT_TAG: &str = "grimvault-settings";
 /// The newest document version this build reads and the one it writes.
@@ -66,6 +68,11 @@ impl ConfigDir {
     #[must_use]
     pub fn store_file(&self) -> PathBuf {
         self.0.join(STORE_FILE)
+    }
+
+    #[must_use]
+    pub fn ui_state_file(&self) -> PathBuf {
+        self.0.join(UI_STATE_FILE)
     }
 }
 
@@ -195,6 +202,10 @@ mod tests {
         assert_eq!(
             dir.store_file(),
             PathBuf::from("/cfg/grim-vault/vault-store.json")
+        );
+        assert_eq!(
+            dir.ui_state_file(),
+            PathBuf::from("/cfg/grim-vault/ui-state.json")
         );
     }
 }

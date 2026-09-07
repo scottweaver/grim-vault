@@ -42,8 +42,13 @@ use crate::facets::Symbol;
 use crate::reagents::ReagentKind;
 use crate::stats::{RecordStats, Scale, SkillLevel, StatCache};
 
-/// Item quality as the game's `itemClassification` spells it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Item quality as the game's `itemClassification` spells it. Orders
+/// by tier, common to legendary; quest items sit after the ladder, as
+/// the game gives them no place on it.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "camelCase")]
 pub enum Rarity {
     Common,
     Magical,
@@ -54,6 +59,28 @@ pub enum Rarity {
 }
 
 impl Rarity {
+    /// Every rarity, in tier order.
+    pub const ALL: [Self; 6] = [
+        Self::Common,
+        Self::Magical,
+        Self::Rare,
+        Self::Epic,
+        Self::Legendary,
+        Self::Quest,
+    ];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Common => "Common",
+            Self::Magical => "Magical",
+            Self::Rare => "Rare",
+            Self::Epic => "Epic",
+            Self::Legendary => "Legendary",
+            Self::Quest => "Quest",
+        }
+    }
+
     /// `None` for a classification this app does not know, so an
     /// unrecognised quality never masquerades as a known one.
     #[must_use]

@@ -91,6 +91,10 @@ fn file_names(dir: &Path) -> Vec<String> {
 
 /// `Prefix Base Suffix xN [Rarity WxH]`, with what the database cannot
 /// resolve left out or marked.
+#[allow(
+    dead_code,
+    reason = "shared by every example; each uses its own subset"
+)]
 pub fn describe(game_data: &GameData, item: &Item) -> String {
     let Some(base) = RecordId::parse(item.base_name.clone()) else {
         return "<empty>".to_string();
@@ -130,6 +134,10 @@ pub fn describe(game_data: &GameData, item: &Item) -> String {
 /// the main campaign's are the default.
 pub struct CliPaths {
     pub game_dir: PathBuf,
+    #[allow(
+        dead_code,
+        reason = "shared by every example; each uses its own subset"
+    )]
     pub save_dir: PathBuf,
     // Shared by every example; the read-only ones never open the store
     // or the shared files.
