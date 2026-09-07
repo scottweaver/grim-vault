@@ -5,39 +5,47 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-07 (six more tracks landed on `main` at
-`666f592` — the search view, startup selection, right-click moves,
-parallel archive loading, component / augment socketing, and
-auto-move tabs with the reagent sync; FEATURES.md 1–19 are all
-landed and tagged; every landed branch and worktree deleted on the
-user's say-so; the in-game acceptance run is still pending;
-checkpointed before /clear)
+Last updated: 2026-09-07 (FEATURES.md 20–24 landed on `main` at
+`f6bd3d0` by three parallel tracks — the scrolling tab strip with
+storage tabs first, the purge-duplicates standing order, and the
+bulk move / copy / delete buttons under a `bulkDuplicates` rule;
+496 tests; the three agent worktrees and branches still exist,
+awaiting the user's say-so; the in-game acceptance run is still
+pending)
 
 ## Session handoff
-<!-- transient; owned by the checkpoint skill -->
-**Resume here:** `main` at `666f592` holds everything landed — every
-FEATURES.md item through 19 (there is no item 17) — 483 tests, clippy
-pedantic clean, headless `--check` clean on a scratch copy of the
-saves; there is no remote (the user declined creating the GitHub repo
-for now — do not push unprompted, next-up item 7). No track is in
-flight, and `main` is the only branch: on the user's say-so
-(2026-09-07, after the refresh) every landed branch, every
-`worktree-agent-*` ref, and all eleven worktrees under
-`.claude/worktrees/` (37 GB of build caches) were deleted; the two
-cherry-picked branches were force-deleted after `git cherry` showed
-their patches already in `main`. Parallel tracks are integrated by
-rebasing each onto the moving `main` — ask the agent to do it, it
-knows its own conflicts — and fast-forwarding; conflicts sat
-in `lib.rs` module lists and crate docs, the `World` initialiser in
-`app.rs`, `panes/mod.rs`, `settings.rs`, and `vault_cli.rs`.
-**Worktree agents share one `git stash` list** — a bare `stash pop` /
-`drop` in one worktree took another's entry today; brief agents never
-to bare-stash. The **user's acceptance run** (next-up item 1) is still
+**Resume here:** `main` at the `docs/state-post-features-20-24`
+fast-forward (feature tip `f6bd3d0`) holds everything landed — every
+FEATURES.md item through 24 (there is no item 17) — 496 tests, clippy
+pedantic clean, fmt clean, headless `--check` clean from the release
+build on a scratch copy of the saves; there is no remote (the user
+declined creating the GitHub repo for now — do not push unprompted,
+next-up item 7). No track is in flight. **Three landed branches and
+their worktrees still exist** — `feat/scrolling-tab-strip`
+(`7e3067f`), `feat/purge-duplicates` (`a6b06bc`), `feat/bulk-tab-ops`
+(`f6bd3d0`), each fast-forwarded into `main`, plus the
+`worktree-agent-*` refs and the `.claude/worktrees/agent-*` checkouts
+with their build caches; deleting them is destructive and waits for
+the user (the 2026-09-07 cleanup did the same on their say-so).
+Parallel tracks are integrated by rebasing each onto the moving
+`main` — ask the agent to do it, it knows its own conflicts — and
+fast-forwarding; today's conflicts sat in `bulk.rs`, `settings.rs`,
+`panes/mod.rs`, the tab-header rows of `panes/stash.rs` and
+`panes/character.rs`, `check.rs`, `app.rs`, and the ARCHITECTURE
+standing-orders paragraph, all resolved by the last agent to rebase.
+**Worktree agents share one `git stash` list** — brief them never to
+bare-stash. The **user's acceptance run** (next-up item 1) is still
 open: nothing the app writes has been read by the game yet. The user
 runs `target/release/grimvault-gui` and rebuilds with `cargo run
---release -p grimvault-gui`; the game was running during this session
-(the LootAscension stash and the custom-game Zark were written at
-13:25).
+--release -p grimvault-gui`; `target/release/grimvault-gui` and
+`examples/vault_cli` are built from `f6bd3d0`. The user's own
+instance (pid 14872 at the last checkpoint) was **not running** by
+the end of this session — no agent killed it (each quit only the
+instance it launched) — so the next launch is the new build, and its
+first load runs the component sync (default on) plus the standing
+orders in `settings.json` — the real file already nominates
+LootAscension stash tabs 2 and 3 for auto-move, now under the
+default `bulkDuplicates: skip`.
 
 - **GD Stash is an eyes-only reference (user, 2026-09-06):** the
   user's copy at `/Volumes/scott-games/GDStash_v190a` decompiles
@@ -48,20 +56,17 @@ runs `target/release/grimvault-gui` and rebuilds with `cargo run
   code or its data tables, never let decompiled output into the repo
   (ARCHITECTURE "Parser provenance"). Everything it has told us so
   far is in `docs/format-references.md` "GD Stash (eyes-only)
-  findings": the `.gds` export layout (verified on the user's own
-  export), the illusion slot ids (corroborated), names for the
-  `player.gdc` fields the typing pass left unnamed, the equipment
-  slot order, and where the level / respec numbers come from
-  (`records/creatures/pc/playerlevels.dbr`).
+  findings".
 - **The user's feature queue is `FEATURES.md`** in the repo root
-  (untracked, user-authored, growing): items 1–19 are landed on
-  `main` (there is no item 17) and each line now carries a
-  `[landed <date>: <rule>]` tag, applied 2026-09-07 in the one pass
-  the user agreed to. They announce additions with "new items in
-  FEATURES.md", and nothing is read until then. The user asked for
-  items to be executed on the fly, in parallel where independent —
-  one fork agent per track in its own worktree, briefed with the
-  design decisions up front, worked for six tracks at once.
+  (untracked, user-authored, growing): items 1–24 are landed on
+  `main` (there is no item 17) and each line carries a
+  `[landed <date>: <rule>]` tag (20–24 tagged 2026-09-07 following
+  the pass the user agreed to for 1–19). They announce additions
+  with "new items in FEATURES.md" / "new features are ready for
+  review", and nothing is read until then. Items are executed on
+  the fly, in parallel where independent — one fork agent per track
+  in its own worktree, briefed with the design decisions up front;
+  three tracks at once worked today, six on 2026-09-07's first pass.
 - **Verifying the GUI without touching the user's setup:** point
   `GRIMVAULT_CONFIG_DIR` at a scratch directory holding a
   `settings.json` (`gameDir` = the real install, `saveDir` = a scratch
@@ -69,13 +74,16 @@ runs `target/release/grimvault-gui` and rebuilds with `cargo run
   see real timestamps), optionally a `vault-store.json` beside it
   (`vault_cli … import-gds` fills one from the user's export), launch
   `target/release/grimvault-gui` by absolute path (a relative path
-  from a worktree ran the main checkout's binary today), wait ~15 s
-  for the load, and capture the window by id (`screencapture -x -o
-  -l<id>`, the id from `CGWindowListCopyWindowInfo` filtered by pid).
-  The harness refuses a fake `HOME` for worktree agents; the config
-  dir variable is enough. No synthetic input; look at what renders.
-  The user's own instance is usually running — never kill a
-  `grimvault-gui` you did not start.
+  from a worktree runs the main checkout's binary), wait ~15 s for
+  the load, and capture the window by id (`screencapture -x -o
+  -l<id>`, the id from `CGWindowListCopyWindowInfo` filtered by pid —
+  in JXA wrap it in `ObjC.castRefToObject`; winit lists five helper
+  windows, the real one is the ~1380×952 entry). The harness refuses
+  a fake `HOME` for worktree agents; the config dir variable is
+  enough. No synthetic input; look at what renders — modals and
+  hover-scrolling are covered by unit tests only. The user's own
+  instance is usually running — never kill a `grimvault-gui` you did
+  not start.
 - **Gap found 2026-09-06:** the shared files come in an
   expansion-level family — `.gst` / `.gsh` (softcore / hardcore),
   `.dst` / `.dsh` (Forgotten Gods level), `.cst`, `.bst` … — and the
@@ -89,66 +97,46 @@ runs `target/release/grimvault-gui` and rebuilds with `cargo run
   `userdata/<id>/219990/remote/save` path in older notes is the
   cloud-enabled location and is stale for this machine.
 - **The game may be running:** the live `user/_Zark/player.gdc`
-  changed under a copy during the session. Never read live files —
+  changed under a copy during a session. Never read live files —
   `cp` to the scratchpad first. Scratch copies are gone with the
   session.
 - **Mod layout, confirmed on disk 2026-09-06:** `main/_<Name>/` and
-  `user/_<Name>/` hold `player.gdc` of the same format (both user/
-  characters parse fully typed and round-trip); the file never names
-  a mod, and the game lists every `user/` character under every mod.
-  Each mod keeps its own `save/<Mod>/{transfer,reagents,formulas,
-  transmutes}.gst` with the mod name inside (LootAscension: 10-tab
-  stash, 82 reagent entries) and its own `mods/<Mod>/database/
+  `user/_<Name>/` hold `player.gdc` of the same format; the file
+  never names a mod, and the game lists every `user/` character under
+  every mod. Each mod keeps its own `save/<Mod>/{transfer,reagents,
+  formulas,transmutes}.gst` with the mod name inside (LootAscension:
+  10-tab stash, 82 reagent entries) and its own `mods/<Mod>/database/
   <Mod>.arz`. The database is a fill layer and the stash folder is a
-  selectable campaign (both user decisions 2026-09-06, ARCHITECTURE
-  "Source of truth" / "ARZ/ARC archives"). `formulas.gst` (plaintext
-  blueprints) and `transmutes.gst` (illusions, parsed) exist per
-  campaign too and are still not shown anywhere.
-- **Why the mod Zark's sacks refused placements, resolved:** the
-  "unknown records" (`quest_areah_woodchip.dbr` etc.) were **Fangs of
-  Asterkarn records** — `gdx3` is installed and the loaders had
-  stopped at `gdx2`; the same ids also exist in LootAscension's
-  database. With `gdx3` and the mod fill layers read, `--check` shows
-  no unknown record and vault → place back into the mod Zark's own
-  sack ends byte-identical. The install has two mods: `survivalmode`
-  (the Crucible, with its own `Text_EN.arc` and `Items.arc`) and
-  `LootAscension` (database only).
-- **Known nits, unfiled:** single-mastery characters show the raw
-  class tag; the illusion collection is parsed but not shown;
+  selectable campaign (ARCHITECTURE "Source of truth" / "ARZ/ARC
+  archives").
+- **Known nits, unfiled:** `AutoMoveTab` / `AutoMoveTarget` now name
+  the tab identity for both standing orders and want an
+  order-neutral name (deferred today to keep three tracks from
+  colliding); `vault_cli vault-tab` / `vault-stash-tab` pass
+  `BulkDuplicates::Skip` rather than reading the setting; a
+  hand-edited settings file listing one tab twice runs its order
+  twice (the UI dedups); the scroll strip is not in the `dev`
+  preview harness; single-mastery characters show the raw class tag;
   equipped items are display-only; a copy keeps the original's seed;
   double-click still targets the stash tab showing while right-click
-  targets the last-touched game grid (a one-line change to unify);
-  the search view has no expansion-origin filter (GD's expansion
-  records share the base path namespace — reason and follow-up in
-  `docs/format-references.md`); `vault_cli` prints refusals in Debug
-  form; `a1670af` carries an early uncompiled copy of
-  `gui/src/automove.rs` superseded by the next commit.
+  targets the last-touched game grid; the search view has no
+  expansion-origin filter; `vault_cli` prints refusals in Debug form;
+  `a1670af` carries an early uncompiled copy of `gui/src/automove.rs`
+  superseded by the next commit.
 - **Unverified in the window:** drag-and-drop, autosave, the copy
   modifier, the iron-bits field, the Reload/Keep-mine modal, the
-  realm-labelled picker, the campaign switch, and — new 2026-09-07 —
-  right-click / Shift+right-click moves, the item inspector (opens on
-  a plain left click; never captured, it needs a click), the
-  auto-move and sync toggles with their toasts, the search table's
-  gestures (header sort, autocomplete, reveal, drag from a row), and
-  the remembered-campaign write on switch are covered by unit tests
-  and headless CLI runs only (synthetic input is banned); the search
-  view, the panes, and the status-bar hints were seen rendering in
-  captures. Whether the game keeps a zero-count reagent entry,
-  accepts a socket this app filled (a seed the game did not roll), or
-  accepts any file this app wrote is unknown. The mod fill rule is
-  proven by a fixture test, not yet by a mod-only item on a real
-  character.
-- **Environment left behind:** the user's `grimvault-gui` was
-  relaunched during the session (pid 14872 at checkpoint; the
-  original pid 46247 is gone) — whether it is the new build is
-  unknown; every agent-launched instance was quit.
-  `target/release/grimvault-gui` and `examples/vault_cli` are built
-  from `666f592`. Settings are seeded in `~/Library/Application
-  Support/grim-vault/settings.json` with the save dir
-  `/Volumes/scott-games/Grim Dawn Saves/save`; no real
-  `vault-store.json` exists yet, so the first launch of the new build
-  will run the component-storage sync (default on) and fill the store
-  with the open campaign's reagent counts — by design, and store-only.
+  realm-labelled picker, the campaign switch, right-click moves, the
+  item inspector, the standing-order toggles' effects, the search
+  table's gestures, and — new today — the Delete-all confirmation
+  modal, a Move all / Copy all click, the store's duplicates
+  checkbox, and hover-scrolling or wheel-scrolling the tab strip are
+  covered by unit tests, headless CLI / `--check` runs, and (for the
+  purge) one live debug-GUI run against scratch files only; the new
+  tab order, the right chevron with a clipped tab behind it, the
+  header buttons, and the checkbox were seen rendering in captures.
+  Whether the game keeps a zero-count reagent entry, accepts a
+  socket this app filled, or accepts any file this app wrote is
+  unknown.
 - **Skill note:** `/checkpoint` and `/wrap-up` assume a remote and a
   PR; both run local equivalents here (a docs commit on a
   `docs/state-post-*` branch fast-forwarded into `main`, feature
@@ -159,56 +147,44 @@ runs `target/release/grimvault-gui` and rebuilds with `cargo run
 Fast track to a usable Grim Dawn tool (user decision 2026-09-03; the
 separate-repo extraction of the shared engine is deferred,
 ARCHITECTURE.md "Crate layering"). On `main` (landed by local
-fast-forwards on 2026-09-03 and 2026-09-06; no remote yet) **M1–M5
-are done and the app runs**: a five-crate workspace —
+fast-forwards on 2026-09-03, 2026-09-06 and 2026-09-07; no remote yet)
+**M1–M5 are done and the app runs**: a five-crate workspace —
 `univault-engine` (tq-univault's parsers vendored, GD LZ4 dialect),
 `univault-io` (safe-io with post-write re-read), `univault-ui`
-(art-free egui kit), `grimvault-core` (rolling-XOR codec, **every
-`player.gdc` block typed** so edits re-key correctly, `*.gst`, layered
+(art-free egui kit, now with the chevron scroll strip), `grimvault-core`
+(rolling-XOR codec, every `player.gdc` block typed, `*.gst`, layered
 game-data facade, `vault-store.json`, buckets, stash *and* sack
-transfer ops, the `Loaded` lossless gate, and — after the user's
-first live run — the account-wide component / crafting-material
-storage `reagents.gst` typed and writable), and `grimvault-gui` (the
-egui shell: setup with dir candidates, background load with progress,
-transfer-stash grids with icons, store by Group/Bucket, characters
-with editable sacks and own-stash tabs when every block is typed
-(read-only badge otherwise), listed `main/` then `user/` with a
-`Realm` carried by every vaulted item's origin, a campaign selector
-opening one campaign's stash and component storage at a time (main
-or any `save/<Mod>/`, the newest one by default, the campaign in
-every origin), installed mods' databases as fill layers under the
-shipped ones (`gdx3` included), one generic move — lift into a scratch
-store, place out of it, restore the source on refusal — for every
-pairing of transfer stash / sacks / own stash / store / component
-storage, copy by holding Alt or ⌘/Ctrl on the drop, an iron-bits
-field, autosave 600 ms quiet with backup-first once per load across
-every document, external-change guard with a Reload/Keep-mine modal
-that now watches every `player.gdc`, `--check` headless mode), and — landed the afternoon of 2026-09-06 —
-`.gds` import into the store, attribute and mastery respecs,
-blueprints and illusions per campaign (adds only), item facets with
-the game's own tile symbols and a first store search, the item stat
-engine behind the tooltip, and the badge-size fix — and, landed
-2026-09-07 by six parallel agents, tq-univault's search view (typed
-query, three-way verdicts, one sortable table, `ui-state.json`),
-startup on the remembered campaign and the last-played character,
-right-click moves between game and vault, parallel archive reads
-(~12 s over the NAS), component / augment sockets through an item
-inspector, and standing orders — auto-move tabs and the additive
-component-storage sync — under a seed-duplicate rule — 483 tests,
-clippy pedantic clean. Verified on scratch copies of the user's
-install and saves. **Not yet verified: the game reading any file this
-app wrote** — the next step is the user's acceptance run on the real
-install with the game closed. The user's `FEATURES.md` is landed
-through item 19; GD Stash is an eyes-only reference for whatever
-comes next. grim-vault is the Grim Dawn sibling of tq-univault;
-PROJECT.md is bound with `tracker: none`.
+transfer ops, the `Loaded` lossless gate, the component storage
+`reagents.gst`, the `bulk` module with the seed-duplicate rule, the
+purge, and the tab / sack move, copy and clear ops), and
+`grimvault-gui` (the egui shell: setup, background load, transfer-stash
+grids with icons, store by Group/Bucket with tq-univault's search
+view, characters with editable sacks and own-stash tabs, a campaign
+selector, mod databases as fill layers, one generic move for every
+container pairing, copy by modifier, right-click moves, an item
+inspector with sockets, iron bits and respecs, blueprints and
+illusions per campaign, `.gds` import, autosave 600 ms quiet with
+backup-first once per load, the external-change guard with a
+Reload/Keep-mine modal, `--check` headless mode, standing orders —
+auto-move, purge, the additive component sync — and, landed
+2026-09-07 evening, a scrolling tab strip with the storage tabs
+first, Move all / Copy all on every tab and sack, Delete all… behind
+a confirmation, and one `bulkDuplicates` rule in `settings.json`) —
+496 tests, clippy pedantic clean. Verified on scratch copies of the
+user's install and saves. **Not yet verified: the game reading any
+file this app wrote** — the next step is the user's acceptance run on
+the real install with the game closed. The user's `FEATURES.md` is
+landed through item 24. grim-vault is the Grim Dawn sibling of
+tq-univault; PROJECT.md is bound with `tracker: none`.
 
 ## Branches in flight
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at the `docs/state-post-cleanup` fast-forward — every FEATURES.md item through 19; 483 tests green; no remote and no GitHub repo yet |
-| *(none)* | — | the twelve landed track branches of 2026-09-06 and 2026-09-07, their docs branches, and every `worktree-agent-*` ref were deleted on 2026-09-07 with the user's say-so; no worktrees remain |
+| `main` | trunk | at the `docs/state-post-features-20-24` fast-forward — every FEATURES.md item through 24; 496 tests green; no remote and no GitHub repo yet |
+| `feat/scrolling-tab-strip` | items 21–22 | landed (`7e3067f` fast-forwarded into `main`); branch, `worktree-agent-a7404fe4053e14018` ref and `.claude/worktrees/agent-a7404fe4053e14018` await deletion on the user's say-so |
+| `feat/purge-duplicates` | item 23 | landed (`a6b06bc`); branch, `worktree-agent-a0e85a7b24ed6632e` ref and `.claude/worktrees/agent-a0e85a7b24ed6632e` await deletion |
+| `feat/bulk-tab-ops` | items 20 + 24 | landed (`f6bd3d0`); branch, `worktree-agent-aedbcc9191fd5d281` ref and `.claude/worktrees/agent-aedbcc9191fd5d281` await deletion |
 
 ## Next up
 
@@ -221,42 +197,72 @@ PROJECT.md is bound with `tracker: none`.
    add a blueprint and an illusion; reset a spare character's
    attributes and masteries; search the store (⌘F), right-click an
    item each way, click an item and free / fill a socket in the
-   inspector, nominate a spare stash tab as auto-move, watch the
-   component sync fill the store, relaunch to see the remembered
-   campaign; then confirm every one of those in-game. Nothing this app
-   writes has been read by the game yet — this run is what makes
-   `main` trusted.
-2. **FEATURES.md 20 onward** as the user announces them — one fork
+   inspector, nominate a spare stash tab as auto-move and another as
+   purge, Move all / Copy all a spare tab, Delete all… a spare tab,
+   flip the store's "Skip duplicates in bulk moves" box, hover a strip
+   chevron while dragging, watch the component sync fill the store,
+   relaunch to see the remembered campaign; then confirm every one of
+   those in-game. Nothing this app writes has been read by the game
+   yet — this run is what makes `main` trusted.
+2. **FEATURES.md 25 onward** as the user announces them — one fork
    agent per independent item in its own worktree, branch from
    `main`, decisions fixed in the brief, the eyes-only GD Stash rule,
    no bare `git stash`, no STATE.md edits by agents; the integrator
    asks each agent to rebase onto the moving `main` before landing.
-3. **Stash file family:** decide how the `.dst` / `.gsh` twins are
+3. **Cleanup awaiting the user:** delete the three landed branches,
+   the `worktree-agent-*` refs, and the worktrees (`git worktree
+   remove`, then `git branch -d`); then the `AutoMoveTab` /
+   `AutoMoveTarget` rename to an order-neutral name.
+4. **Stash file family:** decide how the `.dst` / `.gsh` twins are
    shown (further campaigns? a mode selector?) — design dialog first.
-4. **Follow-ups:** equipment slots as drag ends (slot order and the
-   `ItemSlots` rule are recorded); level / XP edits need an evaluator
-   for `experienceLevelEquation` (its text is in
+5. **Follow-ups:** equipment slots as drag ends; level / XP edits need
+   an evaluator for `experienceLevelEquation` (its text is in
    `docs/format-references.md`); a fresh seed on copy; drop-to-socket
-   through `drag::Move` (needs a new `DropTarget` kind); unify the
-   double-click and right-click targets; search rows carrying the
-   right-click and inspector gestures were wired, but a duplicate /
-   extract gesture like tq-univault's is not.
-5. **Launch time** is bytes, not sequencing: ~1.06 GB of the 1.26 GB
+   through `drag::Move`; unify the double-click and right-click
+   targets; `vault_cli` reading `bulkDuplicates`; a duplicate /
+   extract gesture on search rows like tq-univault's.
+6. **Launch time** is bytes, not sequencing: ~1.06 GB of the 1.26 GB
    read per launch is `Items.arc` textures read whole only to be
    indexed. Read them by entry as `UI.arc` already is, or build the
-   game-data cache under the config dir (names, rarity, class,
-   footprint, icon RGBA, stat lines per referenced record),
-   stamp-keyed to the archives.
-6. Deferred: extract the `univault-*` crates to their own repo and
+   game-data cache under the config dir, stamp-keyed to the archives.
+7. Deferred: extract the `univault-*` crates to their own repo and
    re-point tq-univault (R1–R5 done on the vendored copies).
-7. Create the GitHub repo (`scottweaver/grim-vault`, PROJECT.md's
+8. Create the GitHub repo (`scottweaver/grim-vault`, PROJECT.md's
    commented `github:` block is pre-filled) and push when ready; the
    wrap-up routine's PR steps stay inert until then.
-8. **Mod support leftovers:** the remembered campaign (item 12) now
-   covers the wrong-default case; `playmenu.cpn` remains unread (GD
+9. **Mod support leftovers:** `playmenu.cpn` remains unread (GD
    Stash does not read it either).
 
 ## Most recent meaningful progress
+
+- **2026-09-07 (evening) — FEATURES.md 20–24 landed on `main` (three
+  fast-forwards to `f6bd3d0`).** The user announced the five items;
+  they were split into three independent tracks and built by fork
+  agents in worktrees with the decisions fixed in the brief, each
+  rebased onto the moving `main` by its own agent: (C) an art-free
+  `univault-ui::components::scroll_strip` — a hidden-bar horizontal
+  scroll area with pointer-position chevrons shared with the vendored
+  `tabbed_panel` through a new `chevron` module, so a drag scrolls it
+  — replacing both wrapping strips, with Components and Crafting
+  materials first; (B) `purgeDuplicates` in `settings.json` as a
+  second standing order under `StandingOrder { AutoMove,
+  PurgeDuplicates }`, `bulk::purge_duplicates` deleting only what the
+  store already holds by record and seed, run after every auto-move
+  at the same moments and gate, `--check` printing its plan, recorded
+  in ARCHITECTURE "Data flow" as the one order that destroys items;
+  (A) `bulkDuplicates: skip | allow` (default skip) governing every
+  bulk move or copy into the store including auto-move, `TabPlan`
+  generalized over any item iterator, `copy_tab` / `copy_player_tab`
+  / `vault_sack` / `copy_sack` / `clear_tab`, Move all / Copy all on
+  every tab and sack, Delete all… on transfer and own-stash tabs
+  behind a modal, the store's "Skip duplicates in bulk moves" box,
+  `BulkOp::Transfer(Mode) | Clear` so a clear can never reach the
+  copy path. 496 tests. Why: the user asked for the queue to keep
+  landing on the fly. Risk: two more writes the app makes that
+  destroy items (purge on the app's initiative, delete-all on a
+  click) rest on the once-per-load backup and are unverified in-game;
+  the purge has no confirmation beyond its checkbox; the duplicates
+  rule now changes what auto-move leaves behind.
 
 - **2026-09-07 — Six more tracks landed on `main` (fast-forwards and
   two cherry-picks to `666f592`).** Resumed after a usage-limit
@@ -282,8 +288,8 @@ PROJECT.md is bound with `tracker: none`.
   parallel; six agents at once with the integrator rebasing each onto
   the moving `main` worked. Risk: nothing verified in-game still; the
   sync is on by default and fills the store at first launch; a
-  nominated tab keeps its seed duplicates; a shared-stash collision
-  between two worktrees cost a detour and is now a briefing rule.
+  shared-stash collision between two worktrees cost a detour and is
+  now a briefing rule.
 
 - **2026-09-06 — Six tracks landed on `main` (fast-forwards to
   `f1f10f6`).** Built in parallel by agents in worktrees from the
@@ -422,43 +428,29 @@ PROJECT.md is bound with `tracker: none`.
   settings fallback. Why: the work is usable and the branches were
   pure history at this point; landing it makes `main` the thing to
   build on. Risk: nothing is off this machine yet — a GitHub push is
-  next-up item 5.
-
-- **2026-09-03 — Component and crafting-material storage (branch
-  `feat/gd-read-stack`, not merged).** User feedback from the first
-  live run: the app lacked the game's dedicated component and
-  crafting-material storage. Decoded `reagents.gst` (block 20 v1:
-  zero marker, empty mod name, count, then `record + u32 count`
-  entries) and `transmutes.gst` (block 19 v2: the per-slot illusion
-  collection, typed read-only). Classification comes from the
-  database's own `craftingMaterial` flag (125 records: 107
-  `ItemRelic` components, 18 quest-class materials). Core gained
-  `ReagentStorage`, `Illusions`, `reagents::ReagentKind`, four
-  transfer ops, `ItemOrigin::ReagentStorage`, and `relicBitmap` as
-  an icon source (components had no icon before). GUI: Components /
-  Crafting materials tabs beside the stash with the full drag
-  matrix, a third document under autosave / backup / guard,
-  `WriteOrder` promoting the destination. `reagents.gst` is now a
-  writable game-owned file in ARCHITECTURE. CLI vault → place ends
-  byte-identical. 288 tests. Why: a vault that ignores the storage
-  the game itself uses for components is not usable. Risk: the game
-  has not yet read a rewritten `reagents.gst`; whether it tolerates
-  a removed (zero-count) entry versus expecting it kept is unknown.
+  next-up item 8.
 
 ## Blocked / waiting
 
-- **Waiting on the user — three rules to confirm or overrule** (built
-  under stated assumptions on 2026-09-07, each a one-line change if
-  reversed): (1) a nominated auto-move tab keeps its seed duplicates
-  rather than destroying or merging them, so it can end non-empty;
-  (2) the component-storage sync is a high-water mark that refills
-  the vault after the user moves reagents out of it, and is on by
-  default; (3) double-click targets the stash tab showing while
-  right-click targets the last-touched game grid.
+- **Waiting on the user — rules to confirm or overrule** (built under
+  stated assumptions, each a small change if reversed): (1) *resolved
+  today by design:* a nominated auto-move tab keeps its seed
+  duplicates under the default `bulkDuplicates: skip` and moves them
+  under `allow`; (2) the component-storage sync is a high-water mark
+  that refills the vault after the user moves reagents out of it, and
+  is on by default; (3) double-click targets the stash tab showing
+  while right-click targets the last-touched game grid; (4) *new:*
+  Delete all… covers transfer-stash tabs and a character's own-stash
+  tabs, never sacks; (5) *new:* the purge runs with no confirmation
+  beyond its checkbox and its hover text; (6) *new:* one global
+  duplicates rule governs the manual bulk buttons and auto-move
+  alike, and the store's checkbox is where it lives.
 - **Waiting on the user — the acceptance run** (next-up item 1) is
   what makes `main` trustworthy on real saves; until it runs, every
-  write path rests on byte-identical re-encodes and CLI round trips
-  only.
+  write path rests on byte-identical re-encodes and CLI / headless
+  round trips only.
+- **Waiting on the user — cleanup** of the three landed branches,
+  their `worktree-agent-*` refs, and worktrees (next-up item 3).
 - Environment note: the game install and saves live on
   a network mount (`/Volumes/scott-games/…`) that may not be present;
   check before assuming. The saves carry Steam-cloud (`remote/save/`)
