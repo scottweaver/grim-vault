@@ -33,11 +33,14 @@ impl SortDirection {
         }
     }
 
+    /// The glyph a sorted column header shows. These are the triangles
+    /// egui's own widgets use, so egui's bundled fonts always carry them
+    /// (Ubuntu-Light has no U+25B2 / U+25BC).
     #[must_use]
     pub fn arrow(self) -> &'static str {
         match self {
-            Self::Ascending => "▲",
-            Self::Descending => "▼",
+            Self::Ascending => "⏶",
+            Self::Descending => "⏷",
         }
     }
 

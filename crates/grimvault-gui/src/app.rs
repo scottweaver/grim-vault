@@ -298,7 +298,7 @@ fn show_loading(
                 if slot + 1 == count {
                     ui.spinner();
                 } else {
-                    ui.colored_label(FITS, "✓");
+                    ui.colored_label(FITS, "✔");
                 }
                 ui.label(step.to_string());
             });

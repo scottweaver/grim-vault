@@ -507,7 +507,7 @@ fn criteria_rows(
                 );
             }
             if ui
-                .button("✕")
+                .button("✖")
                 .on_hover_text("Remove this criterion")
                 .clicked()
             {
@@ -518,7 +518,7 @@ fn criteria_rows(
     if let Some(index) = remove {
         criteria.remove(index);
     }
-    if ui.button("＋ Add stat / affix criterion").clicked() {
+    if ui.button("+ Add stat / affix criterion").clicked() {
         criteria.push(Criterion::default());
     }
 }
@@ -675,6 +675,11 @@ fn sort_header(ui: &mut Ui, label: &str, key: SortKey, sort: &mut Sort) {
     }
 }
 
+/// The narrowest table that keeps a readable stats column: a pane
+/// narrower than this scrolls sideways rather than squeezing the
+/// stats away.
+const MIN_TABLE_WIDTH: f32 = 720.0;
+
 fn table(
     ui: &mut Ui,
     doc: &StoreDoc,
@@ -686,49 +691,57 @@ fn table(
     let mut sort = view.sort;
     let mut reveal = None;
     let items = doc.store().items();
-    TableBuilder::new(ui)
-        .striped(true)
-        .resizable(true)
-        .sense(Sense::click_and_drag())
-        .column(Column::exact(ICON + 8.0))
-        .column(Column::initial(190.0).at_least(120.0).clip(true))
-        .column(Column::initial(72.0).clip(true))
-        .column(Column::initial(84.0).clip(true))
-        .column(Column::initial(110.0).clip(true))
-        .column(Column::remainder().clip(true))
-        .header(22.0, |mut header| {
-            header.col(|_| {});
-            header.col(|ui| sort_header(ui, "Name", SortKey::Name, &mut sort));
-            header.col(|ui| sort_header(ui, "Rarity", SortKey::Rarity, &mut sort));
-            header.col(|ui| sort_header(ui, "Requires", SortKey::Level, &mut sort));
-            header.col(|ui| sort_header(ui, "Type", SortKey::Category, &mut sort));
-            header.col(|ui| {
-                ui.strong("Stats");
-            });
-        })
-        .body(|body| {
-            let SearchCache {
-                index,
-                rows,
-                selected,
-                ..
-            } = cache;
-            let heights = rows.iter().map(|slot| index[*slot].height);
-            body.heterogeneous_rows(heights, |mut table_row| {
-                let Some(indexed) = rows.get(table_row.index()).map(|slot| &index[*slot]) else {
-                    return;
-                };
-                let Some(stored) = items
-                    .get(indexed.index)
-                    .filter(|stored| stored.id() == indexed.id)
-                else {
-                    return;
-                };
-                table_row.set_selected(*selected == Some(indexed.id));
-                if let Some(id) = row(&mut table_row, indexed, stored, selected, cx, frame) {
-                    reveal = Some(id);
-                }
-            });
+    let width = ui.available_width().max(MIN_TABLE_WIDTH);
+    egui::ScrollArea::horizontal()
+        .id_salt("search-table")
+        .show(ui, |ui| {
+            ui.set_width(width);
+            TableBuilder::new(ui)
+                .striped(true)
+                .resizable(true)
+                .sense(Sense::click_and_drag())
+                .column(Column::exact(ICON + 8.0))
+                .column(Column::initial(170.0).at_least(120.0).clip(true))
+                .column(Column::initial(64.0).clip(true))
+                .column(Column::initial(80.0).clip(true))
+                .column(Column::initial(100.0).clip(true))
+                .column(Column::remainder().at_least(200.0).clip(true))
+                .header(22.0, |mut header| {
+                    header.col(|_| {});
+                    header.col(|ui| sort_header(ui, "Name", SortKey::Name, &mut sort));
+                    header.col(|ui| sort_header(ui, "Rarity", SortKey::Rarity, &mut sort));
+                    header.col(|ui| sort_header(ui, "Requires", SortKey::Level, &mut sort));
+                    header.col(|ui| sort_header(ui, "Type", SortKey::Category, &mut sort));
+                    header.col(|ui| {
+                        ui.strong("Stats");
+                    });
+                })
+                .body(|body| {
+                    let SearchCache {
+                        index,
+                        rows,
+                        selected,
+                        ..
+                    } = cache;
+                    let heights = rows.iter().map(|slot| index[*slot].height);
+                    body.heterogeneous_rows(heights, |mut table_row| {
+                        let Some(indexed) = rows.get(table_row.index()).map(|slot| &index[*slot])
+                        else {
+                            return;
+                        };
+                        let Some(stored) = items
+                            .get(indexed.index)
+                            .filter(|stored| stored.id() == indexed.id)
+                        else {
+                            return;
+                        };
+                        table_row.set_selected(*selected == Some(indexed.id));
+                        if let Some(id) = row(&mut table_row, indexed, stored, selected, cx, frame)
+                        {
+                            reveal = Some(id);
+                        }
+                    });
+                });
         });
     if sort != view.sort {
         view.sort = sort;
