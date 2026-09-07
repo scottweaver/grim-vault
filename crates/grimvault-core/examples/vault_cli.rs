@@ -815,7 +815,11 @@ fn run_consolidate_stacks(store_path: &Path, game_data: &GameData) -> Result<(),
 }
 
 fn print_bucket_counts(game_data: &GameData, store: &VaultStore) {
-    println!("\nstore: {} items", store.len());
+    println!(
+        "\nstore: {} items, {} blueprints known",
+        store.len(),
+        store.blueprints().len()
+    );
     let mut counts: BTreeMap<Bucket, usize> = BTreeMap::new();
     for stored in store.items() {
         *counts

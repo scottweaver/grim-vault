@@ -137,7 +137,15 @@ fn header(
     ui.label(theme.heading("Vault store"));
     ui.label(theme.path_text(doc.path().display().to_string()));
     ui.horizontal_wrapped(|ui| {
-        ui.label(format!("{} items", doc.store().len()));
+        ui.label(format!(
+            "{} items · {} blueprints known",
+            doc.store().len(),
+            doc.store().blueprints().len()
+        ))
+        .on_hover_text(
+            "Blueprints the vault has seen learned in any campaign — knowledge the sync records, \
+             not items.",
+        );
         ui.separator();
         ui.selectable_value(&mut view.mode, StoreMode::Buckets, "Buckets");
         ui.selectable_value(&mut view.mode, StoreMode::Search, "Search")

@@ -105,7 +105,13 @@ Q&A). Items marked TBD are open questions, not decisions.
   correction 2026-09-07) — never stored membership — so an item
   cannot be misfiled, and moving or copying its bytes cannot change
   what it is. Buckets are unbounded; no capacity and no grid
-  positions are persisted. **A stackable record is one stack** (user
+  positions are persisted. **Beside the items the store keeps what
+  the player has learned** (2026-09-07): a `blueprints` list, one
+  entry per `ItemArtifactFormula` record with the campaign it was
+  first seen learned in and when — knowledge the blueprint sync
+  records, never an item, absent from a file that has none so older
+  files read unchanged and older readers carry it through as an
+  unknown field. **A stackable record is one stack** (user
   rule 2026-09-07): whenever the store changes, the shell folds every
   later entry of a record the game stacks (`bulk::Identity::Stack`)
   into its first — units summed, ids retired, the first entry's
@@ -288,11 +294,13 @@ Q&A). Items marked TBD are open questions, not decisions.
   same moments but writes only the store: it adds one stack of the
   shortfall per record and never removes, reduces, or touches
   `reagents.gst`. **The learned-blueprint sync** (`syncBlueprints`,
-  default on; 2026-09-07, user request) is its twin over
-  `formulas.gst`: every blueprint learned in the open campaign that
-  the store holds no item of — any origin counts — becomes a blueprint
-  item in the store under `ItemOrigin::LearnedBlueprint { campaign }`,
-  at the same moments and also after an in-app add or import to the
+  default on; 2026-09-07, user request, narrowed the same day to
+  "just detect and store") is its twin over `formulas.gst`: every
+  blueprint learned in the open campaign that the vault does not know
+  yet is recorded in the store's learned-blueprint list
+  (`VaultStore::learn_blueprint`: record, campaign, moment) — as
+  knowledge, never as an item, so nothing can be placed from it — at
+  the same moments and also after an in-app add or import to the
   list; store only, nothing removed, the list untouched. A headless
   `--check` run from the saved settings prints the rule and what all
   four orders would do without writing.

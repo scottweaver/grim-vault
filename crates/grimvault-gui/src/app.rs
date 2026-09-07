@@ -794,8 +794,8 @@ impl World {
     }
 
     /// The learned-blueprint sync: every blueprint the campaign's
-    /// list holds and the store has no item of becomes a blueprint
-    /// item in the store; store only, nothing removed.
+    /// list holds and the vault does not know yet is recorded as
+    /// learned; store only, nothing removed, no item made.
     fn sync_blueprints(&mut self, toasts: &mut Toasts) {
         if self.settings.sync_blueprints == BlueprintSync::Off {
             return;
@@ -814,9 +814,7 @@ impl World {
         }
         self.mark_edited(Doc::Store);
         self.write_order.prioritize(Doc::Store);
-        toasts.info(format!(
-            "synced the learned blueprints into the vault store: {summary}"
-        ));
+        toasts.info(format!("vault: {summary}"));
     }
 
     /// A tab nominated for a standing order or withdrawn from it; a

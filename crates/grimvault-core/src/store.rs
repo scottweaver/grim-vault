@@ -13,6 +13,13 @@
 //! newer writer's additions are not erased by an older reader; a newer
 //! *version* is refused outright.
 //!
+//! Beside the items the store keeps what the player has learned: the
+//! blueprints ([`LearnedBlueprint`]), one entry per record, each
+//! naming the campaign it was first seen learned in and when —
+//! knowledge, not items; nothing here can be placed in a game grid.
+//! The list is absent from a file that has none, so a store written
+//! before it looks the same.
+//!
 //! The document shape:
 //!
 //! ```json
@@ -27,6 +34,9 @@
 //!       "storedAt": 1756900000,
 //!       "item": { "baseName": "records/items/materia/a.dbr", "prefixName": "", "...": "..." }
 //!     }
+//!   ],
+//!   "blueprints": [
+//!     { "record": "records/items/crafting/blueprints/b.dbr", "campaign": "main", "learnedAt": 1756900000 }
 //!   ]
 //! }
 //! ```
@@ -38,6 +48,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
+use univault_engine::ids::normalize;
 
 use crate::campaign::Campaign;
 use crate::gdc::Realm;
@@ -128,9 +139,6 @@ pub enum ItemOrigin {
         #[serde(default = "campaign_before_mods_were_recorded")]
         campaign: Campaign,
     },
-    /// A blueprint learned in a campaign (`formulas.gst`), added to the
-    /// vault as a blueprint item by the blueprint sync.
-    LearnedBlueprint { campaign: Campaign },
     /// An entry of a GD Stash export (`.gds`, [`crate::gds`]): the
     /// export's file name, and the two facts only that file records —
     /// the mode the item was played in and the character it is
@@ -158,9 +166,6 @@ impl fmt::Display for ItemOrigin {
             }
             Self::ReagentStorage { campaign } => {
                 write!(f, "{campaign} component / crafting-material storage")
-            }
-            Self::LearnedBlueprint { campaign } => {
-                write!(f, "{campaign} learned blueprint")
             }
             Self::GdStashExport { file, mode, owner } => match owner {
                 Some(owner) => write!(f, "GD Stash export {file} ({mode}, soulbound to {owner})"),
@@ -264,6 +269,23 @@ impl StackKey {
     }
 }
 
+/// A blueprint the player has learned: its `ItemArtifactFormula`
+/// record, the campaign it was first seen learned in, and when.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LearnedBlueprint {
+    pub record: String,
+    pub campaign: Campaign,
+    pub learned_at: Timestamp,
+}
+
+/// What [`VaultStore::learn_blueprint`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Learned {
+    Recorded,
+    AlreadyKnown,
+}
+
 /// What [`VaultStore::merge`] did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Merged {
@@ -276,14 +298,16 @@ pub struct Merged {
     /// Stacks the store held fewer of than the other store, raised
     /// to the other's count.
     pub raised: usize,
+    /// Learned blueprints the other store knew and this one did not.
+    pub blueprints: usize,
 }
 
 impl fmt::Display for Merged {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} added, {} already held, {} stacks raised",
-            self.added, self.already_held, self.raised
+            "{} added, {} already held, {} stacks raised, {} blueprints recorded",
+            self.added, self.already_held, self.raised, self.blueprints
         )
     }
 }
@@ -333,6 +357,7 @@ pub enum StoreError {
 pub struct VaultStore {
     next_id: StoredItemId,
     items: Vec<StoredItem>,
+    blueprints: Vec<LearnedBlueprint>,
     extra: Map<String, Value>,
 }
 
@@ -349,6 +374,7 @@ impl VaultStore {
         Self {
             next_id: StoredItemId(1),
             items: Vec::new(),
+            blueprints: Vec::new(),
             extra: Map::new(),
         }
     }
@@ -393,9 +419,17 @@ impl VaultStore {
             .map_or(document.next_id, |max| {
                 document.next_id.max(max.successor())
             });
+        let mut known: HashSet<String> = HashSet::new();
+        let blueprints = document
+            .blueprints
+            .into_owned()
+            .into_iter()
+            .filter(|learned| known.insert(normalize(&learned.record)))
+            .collect();
         Ok(Self {
             next_id,
             items,
+            blueprints,
             extra: document.extra.into_owned(),
         })
     }
@@ -414,6 +448,7 @@ impl VaultStore {
             version: FORMAT_VERSION,
             next_id: self.next_id,
             items: Cow::Borrowed(&self.items),
+            blueprints: Cow::Borrowed(&self.blueprints),
             extra: Cow::Borrowed(&self.extra),
         };
         let mut bytes = serde_json::to_vec_pretty(&document)
@@ -426,6 +461,41 @@ impl VaultStore {
     #[must_use]
     pub fn items(&self) -> &[StoredItem] {
         &self.items
+    }
+
+    /// The learned blueprints, in the order they were recorded.
+    #[must_use]
+    pub fn blueprints(&self) -> &[LearnedBlueprint] {
+        &self.blueprints
+    }
+
+    /// Whether a blueprint record is among the learned; record paths
+    /// compare the way the game's database keys do.
+    #[must_use]
+    pub fn knows_blueprint(&self, record: &str) -> bool {
+        let wanted = normalize(record);
+        self.blueprints
+            .iter()
+            .any(|learned| normalize(&learned.record) == wanted)
+    }
+
+    /// Records a blueprint as learned unless it is known already; the
+    /// first campaign and moment stand.
+    pub fn learn_blueprint(
+        &mut self,
+        record: String,
+        campaign: Campaign,
+        at: Timestamp,
+    ) -> Learned {
+        if self.knows_blueprint(&record) {
+            return Learned::AlreadyKnown;
+        }
+        self.blueprints.push(LearnedBlueprint {
+            record,
+            campaign,
+            learned_at: at,
+        });
+        Learned::Recorded
     }
 
     #[must_use]
@@ -466,9 +536,21 @@ impl VaultStore {
     /// count is raised to `other`'s when that is higher, in the stack
     /// that already holds the record or a new one, and left alone
     /// otherwise — a high-water mark, so a repeated merge never doubles
-    /// a stack.
+    /// a stack. Learned blueprints are a union: every record `other`
+    /// knows and this store does not is recorded under `other`'s
+    /// campaign and moment.
     pub fn merge(&mut self, other: &VaultStore, is_stack: impl Fn(&Item) -> bool) -> Merged {
         let mut merged = Merged::default();
+        for learned in &other.blueprints {
+            if self.learn_blueprint(
+                learned.record.clone(),
+                learned.campaign.clone(),
+                learned.learned_at,
+            ) == Learned::Recorded
+            {
+                merged.blueprints += 1;
+            }
+        }
         let mut held: HashSet<Fact<'_>> = self
             .items
             .iter()
@@ -594,6 +676,8 @@ struct StoreFile<'a> {
     version: u32,
     next_id: StoredItemId,
     items: Cow<'a, [StoredItem]>,
+    #[serde(default, skip_serializing_if = "<[LearnedBlueprint]>::is_empty")]
+    blueprints: Cow<'a, [LearnedBlueprint]>,
     #[serde(flatten)]
     extra: Cow<'a, Map<String, Value>>,
 }
@@ -769,12 +853,13 @@ mod tests {
             Merged {
                 added: 2,
                 already_held: 2,
-                raised: 0
+                raised: 0,
+                blueprints: 0
             }
         );
         assert_eq!(
             merged.to_string(),
-            "2 added, 2 already held, 0 stacks raised"
+            "2 added, 2 already held, 0 stacks raised, 0 blueprints recorded"
         );
         let ids: Vec<StoredItemId> = mine.items().iter().map(StoredItem::id).collect();
         assert_eq!(
@@ -796,7 +881,8 @@ mod tests {
             Merged {
                 added: 0,
                 already_held: 4,
-                raised: 0
+                raised: 0,
+                blueprints: 0
             }
         );
         let copy = VaultStore::from_json(&mine.to_json()).unwrap();
@@ -805,7 +891,8 @@ mod tests {
             Merged {
                 added: 0,
                 already_held: 3,
-                raised: 0
+                raised: 0,
+                blueprints: 0
             }
         );
         assert_eq!(mine.len(), 3);
@@ -851,7 +938,8 @@ mod tests {
             Merged {
                 added: 1,
                 already_held: 0,
-                raised: 1
+                raised: 1,
+                blueprints: 0
             }
         );
         assert_eq!(mine.get(shards).unwrap().item().stack_count, 7);
@@ -863,7 +951,8 @@ mod tests {
             Merged {
                 added: 0,
                 already_held: 2,
-                raised: 0
+                raised: 0,
+                blueprints: 0
             }
         );
         assert_eq!(mine.get(shards).unwrap().item().stack_count, 7);
@@ -883,7 +972,8 @@ mod tests {
             Merged {
                 added: 1,
                 already_held: 0,
-                raised: 0
+                raised: 0,
+                blueprints: 0
             }
         );
         assert_eq!(
@@ -891,7 +981,8 @@ mod tests {
             Merged {
                 added: 0,
                 already_held: 1,
-                raised: 0
+                raised: 0,
+                blueprints: 0
             }
         );
     }
@@ -954,6 +1045,59 @@ mod tests {
         assert_eq!(
             store.add(stack(SHARD, 1), ItemOrigin::Unknown, at(8)),
             StoredItemId::new(8)
+        );
+    }
+
+    #[test]
+    fn learned_blueprints_are_one_per_record_survive_the_round_trip_and_merge_as_a_union() {
+        const BLUEPRINT: &str = "records/items/crafting/blueprints/craft_b.dbr";
+        let mut store = VaultStore::new();
+        assert!(!store.to_json().windows(10).any(|w| w == b"blueprints"));
+        assert_eq!(
+            store.learn_blueprint(BLUEPRINT.into(), Campaign::Main, at(5)),
+            Learned::Recorded
+        );
+        let loot = Campaign::Mod(crate::campaign::ModName::parse("LootAscension").unwrap());
+        assert_eq!(
+            store.learn_blueprint(
+                BLUEPRINT.to_uppercase().replace('/', "\\"),
+                loot.clone(),
+                at(9)
+            ),
+            Learned::AlreadyKnown
+        );
+        assert!(store.knows_blueprint(BLUEPRINT));
+        assert!(!store.knows_blueprint("records/items/crafting/blueprints/other.dbr"));
+        assert_eq!(store.blueprints().len(), 1);
+        assert_eq!(store.blueprints()[0].campaign, Campaign::Main);
+        assert_eq!(store.blueprints()[0].learned_at, at(5));
+
+        let bytes = store.to_json();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["blueprints"],
+            json!([{ "record": BLUEPRINT, "campaign": "main", "learnedAt": 5 }])
+        );
+        assert_eq!(VaultStore::from_json(&bytes).unwrap(), store);
+
+        let twice = br#"{"format":"grimvault-store","version":1,"nextId":1,"items":[],"blueprints":[{"record":"records/a.dbr","campaign":"main","learnedAt":1},{"record":"RECORDS/A.DBR","campaign":"main","learnedAt":2}]}"#;
+        assert_eq!(VaultStore::from_json(twice).unwrap().blueprints().len(), 1);
+
+        let mut other = VaultStore::new();
+        other.learn_blueprint(BLUEPRINT.into(), loot.clone(), at(1));
+        other.learn_blueprint(
+            "records/items/crafting/blueprints/craft_c.dbr".into(),
+            loot,
+            at(2),
+        );
+        let merged = store.merge(&other, |_| false);
+        assert_eq!(merged.blueprints, 1);
+        assert_eq!(store.blueprints().len(), 2);
+        assert_eq!(store.merge(&other, |_| false).blueprints, 0);
+        assert!(
+            merged
+                .to_string()
+                .ends_with("0 stacks raised, 1 blueprints recorded")
         );
     }
 
@@ -1026,23 +1170,6 @@ mod tests {
             ItemOrigin::ReagentStorage {
                 campaign: Campaign::Main
             }
-        );
-        let learned = ItemOrigin::LearnedBlueprint {
-            campaign: loot.clone(),
-        };
-        let learned_json = json!({ "kind": "learnedBlueprint", "campaign": "LootAscension" });
-        assert_eq!(serde_json::to_value(&learned).unwrap(), learned_json);
-        assert_eq!(
-            serde_json::from_value::<ItemOrigin>(learned_json).unwrap(),
-            learned
-        );
-        assert_eq!(learned.to_string(), "LootAscension learned blueprint");
-        assert_eq!(
-            ItemOrigin::LearnedBlueprint {
-                campaign: Campaign::Main
-            }
-            .to_string(),
-            "main campaign learned blueprint"
         );
         let bound = ItemOrigin::GdStashExport {
             file: "gd-stash-export.gds".into(),

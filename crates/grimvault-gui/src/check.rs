@@ -193,7 +193,7 @@ fn print_orders(settings: &Settings, world: &LoadedWorld) {
     {
         let missing = bulk::blueprint_shortfall(&doc.formulas().entries, store);
         println!(
-            "  blueprint sync would add {} blueprint item(s) to the vault",
+            "  blueprint sync would record {} newly learned blueprint(s)",
             missing.len()
         );
     }
@@ -276,9 +276,10 @@ fn print_store(doc: &StoreDoc, facts: &mut FactsCache, game: &GameData) {
         " (absent; created by the first save)".to_string()
     };
     println!(
-        "\nstore: {}{status}: {} items",
+        "\nstore: {}{status}: {} items, {} blueprints known",
         doc.path().display(),
-        store.len()
+        store.len(),
+        store.blueprints().len()
     );
     let folded = store.clone().consolidate_stacks(|item| game.is_stack(item));
     if folded.entries > 0 {
