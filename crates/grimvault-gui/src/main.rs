@@ -23,6 +23,7 @@ mod settings;
 mod setup;
 mod stat_lines;
 mod theme;
+mod ui_state;
 mod watch;
 
 use std::ffi::OsString;

@@ -12,6 +12,9 @@ workspace = true
 [dependencies]
 eframe = "0.36.1"
 egui = "0.36"
+# The search view's table; default features pull loaders and mime
+# tables this shell does not use.
+egui_extras = { version = "0.36", default-features = false }
 rfd = "0.17.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -19,7 +22,7 @@ thiserror = "2"
 grimvault-core = { path = "../grimvault-core" }
 univault-engine = { path = "../univault-engine" }
 univault-io = { path = "../univault-io" }
-univault-ui = { path = "../univault-ui" }
+univault-ui = { path = "../univault-ui", features = ["serde"] }
 
 [dev-dependencies]
 univault-engine = { path = "../univault-engine", features = ["test-util"] }

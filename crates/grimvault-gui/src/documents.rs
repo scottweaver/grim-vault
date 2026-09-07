@@ -601,6 +601,10 @@ pub enum StoreOpenError {
 pub struct StoreDoc {
     tracking: Tracking,
     store: VaultStore,
+    /// Counts every chance the contents had to change — each mutable
+    /// borrow and each reload — so a view caching a derived shape of
+    /// the store knows when to rebuild without diffing the items.
+    revision: u64,
 }
 
 impl StoreDoc {
@@ -625,7 +629,14 @@ impl StoreDoc {
         Ok(Self {
             tracking: Tracking::fresh(path),
             store,
+            revision: 0,
         })
+    }
+
+    /// Changes whenever the store may have changed.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     #[must_use]
@@ -649,6 +660,7 @@ impl StoreDoc {
 
     /// The store for editing; call [`Tracking::mark_edited`] after.
     pub fn store_mut(&mut self) -> &mut VaultStore {
+        self.revision += 1;
         &mut self.store
     }
 
@@ -673,7 +685,9 @@ impl StoreDoc {
     /// # Errors
     /// [`StoreOpenError`].
     pub fn reload(&mut self) -> Result<(), StoreOpenError> {
+        let revision = self.revision + 1;
         *self = Self::open(self.tracking.path.clone())?;
+        self.revision = revision;
         Ok(())
     }
 }

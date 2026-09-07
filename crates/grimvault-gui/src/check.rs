@@ -20,7 +20,7 @@ use grimvault_core::transfer::SackIndex;
 use univault_engine::ids::RecordId;
 
 use crate::crafting::{Blueprints, IllusionCollection};
-use crate::documents::{CharacterDoc, CharacterEntry, Optional, Reagents, Writable};
+use crate::documents::{CharacterDoc, CharacterEntry, Optional, Reagents, StoreDoc, Writable};
 use crate::facts::FactsCache;
 use crate::loader::{LoadStep, WorldPaths, load_world};
 use crate::panes::character::{EQUIPMENT_SLOTS, WEAPON_SLOTS};
@@ -49,6 +49,7 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
         game: GameDir::parse(game)?,
         save: SaveDir::parse(save)?,
         store: config.store_file(),
+        ui_state: config.ui_state_file(),
     };
     let mut progress = |step: LoadStep| println!("… {step}");
     let world = load_world(&paths, &mut progress)?;
@@ -112,26 +113,7 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
     let mut problems = print_blueprints(&world.blueprints, &mut facts, &world.game);
     problems += print_illusions(&world.illusions, &mut facts, &world.game);
 
-    let store = world.store.store();
-    let status = if world.store.path().is_file() {
-        String::new()
-    } else {
-        " (absent; created by the first save)".to_string()
-    };
-    println!(
-        "\nstore: {}{status}: {} items",
-        world.store.path().display(),
-        store.len()
-    );
-    for stored in store.items() {
-        let bucket = facts.base(&world.game, stored.item()).bucket;
-        println!(
-            "  {} {} [{}]",
-            stored.id(),
-            describe(&mut facts, &world.game, stored.item()),
-            bucket.label()
-        );
-    }
+    print_store(&world.store, &mut facts, &world.game);
 
     println!(
         "\ncharacters: {} found under {} and {}",
@@ -149,6 +131,29 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
         }
     }
     Ok(problems)
+}
+
+fn print_store(doc: &StoreDoc, facts: &mut FactsCache, game: &GameData) {
+    let store = doc.store();
+    let status = if doc.path().is_file() {
+        String::new()
+    } else {
+        " (absent; created by the first save)".to_string()
+    };
+    println!(
+        "\nstore: {}{status}: {} items",
+        doc.path().display(),
+        store.len()
+    );
+    for stored in store.items() {
+        let bucket = facts.base(game, stored.item()).bucket;
+        println!(
+            "  {} {} [{}]",
+            stored.id(),
+            describe(facts, game, stored.item()),
+            bucket.label()
+        );
+    }
 }
 
 fn print_reagents(reagents: &Reagents, facts: &mut FactsCache, game: &GameData) {

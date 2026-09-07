@@ -38,11 +38,13 @@ use crate::loader::{
 };
 use crate::panes::character::CharacterView;
 use crate::panes::stash::StashView;
-use crate::panes::store::StoreView;
+use crate::panes::store::{SEARCH_SHORTCUT, StoreMode, StoreView};
 use crate::panes::{self, DragFrame, PaneCtx};
+use crate::search::SearchCache;
 use crate::settings::{self, ConfigDir, Settings};
 use crate::setup::{DirProblem, GameDir, SaveDir, SetupState};
 use crate::theme::FITS;
+use crate::ui_state::{PersistedUiState, UiState};
 use crate::watch::{Observation, RefreshTracker, Watcher};
 use grimvault_core::campaign::Campaign;
 
@@ -106,6 +108,7 @@ fn world_paths(saved: &Settings, config: &ConfigDir) -> Result<WorldPaths, DirPr
         game: GameDir::parse(&saved.game_dir)?,
         save: SaveDir::parse(&saved.save_dir)?,
         store: config.store_file(),
+        ui_state: config.ui_state_file(),
     })
 }
 
@@ -205,6 +208,7 @@ fn show_setup(
                 game,
                 save,
                 store: config.store_file(),
+                ui_state: config.ui_state_file(),
             };
             next = Some(Phase::Loading(loader::start(paths, ui.ctx().clone())));
         }
@@ -406,6 +410,8 @@ pub struct World {
     icons: IconCache,
     stash_view: StashView,
     store_view: StoreView,
+    search_cache: SearchCache,
+    ui_state: PersistedUiState,
     character_view: CharacterView,
     drag: Option<DragState>,
     autosave: Autosave,
@@ -434,6 +440,8 @@ impl World {
         let write_order = WriteOrder::new(SHARED_DOCS.into_iter().chain(
             (0..loaded.characters.len()).map(|slot| Doc::Character(CharacterSlot::new(slot))),
         ));
+        let ui_state = PersistedUiState::load(paths.ui_state.clone());
+        let store_view = ui_state.on_disk().store.clone();
         let world = Self {
             paths,
             game: loaded.game,
@@ -449,7 +457,9 @@ impl World {
             facts: FactsCache::default(),
             icons: IconCache::with_symbols(loaded.symbols),
             stash_view: StashView::default(),
-            store_view: StoreView::default(),
+            store_view,
+            search_cache: SearchCache::default(),
+            ui_state,
             character_view: CharacterView::default(),
             drag: None,
             autosave: Autosave::default(),
@@ -530,6 +540,7 @@ impl World {
     fn show(&mut self, ui: &mut Ui, theme: &Theme, toasts: &mut Toasts) {
         let mut frame = DragFrame::default();
         let mode = mode_of(ui.input(|input| input.modifiers));
+        self.search_shortcuts(ui.ctx());
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui, theme, toasts));
         egui::Panel::bottom("characters")
             .resizable(true)
@@ -568,6 +579,7 @@ impl World {
                     ui,
                     &self.store,
                     &mut self.store_view,
+                    &mut self.search_cache,
                     theme,
                     &mut cx,
                     &mut frame,
@@ -606,6 +618,36 @@ impl World {
         self.finish_frame(ui.ctx(), frame, mode, &theme.palette, toasts);
         if let Some(next) = switch {
             self.switch_campaign(next, toasts);
+        }
+        self.persist_ui_state(ui.ctx());
+    }
+
+    /// ⌘F / Ctrl+F opens the search view with its name field focused;
+    /// Esc with nothing focused returns to the buckets.
+    fn search_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|input| input.consume_shortcut(&SEARCH_SHORTCUT)) {
+            self.store_view.mode = StoreMode::Search;
+            self.search_cache.focus_requested = true;
+        }
+        if self.store_view.mode == StoreMode::Search
+            && ctx.input(|input| input.key_pressed(egui::Key::Escape))
+            && ctx.memory(|memory| memory.focused().is_none())
+        {
+            self.store_view.mode = StoreMode::Buckets;
+        }
+    }
+
+    /// The live view state, as it would be written.
+    fn ui_snapshot(&self) -> UiState {
+        UiState::of(&self.store_view, self.ui_state.on_disk())
+    }
+
+    /// Persists the view state once it has held still; called at the
+    /// end of every frame.
+    fn persist_ui_state(&mut self, ctx: &egui::Context) {
+        let current = self.ui_snapshot();
+        if let Some(wait) = self.ui_state.observe(current, Instant::now()) {
+            ctx.request_repaint_after(wait);
         }
     }
 
@@ -1158,7 +1200,8 @@ impl World {
     }
 
     /// Unsaved edits at exit are written unless an external change is
-    /// pending a decision — then nothing is overwritten.
+    /// pending a decision — then nothing is overwritten. The view
+    /// state is written regardless: it is a convenience, not data.
     fn flush_on_exit(&mut self) {
         if self.gate() == Gate::Open {
             let mut discard = Toasts::default();
@@ -1166,6 +1209,8 @@ impl World {
                 eprintln!("grim-vault: final save failed: {error}");
             }
         }
+        let current = self.ui_snapshot();
+        self.ui_state.flush(current);
     }
 
     /// Writes one document; an absent or unusable shared file, or an

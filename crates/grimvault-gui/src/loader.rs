@@ -43,6 +43,8 @@ pub struct WorldPaths {
     pub game: GameDir,
     pub save: SaveDir,
     pub store: PathBuf,
+    /// The shell's persisted view state, beside the store.
+    pub ui_state: PathBuf,
 }
 
 /// One step of the load, reported as it starts.

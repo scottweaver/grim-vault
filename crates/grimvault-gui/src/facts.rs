@@ -12,6 +12,8 @@ use grimvault_core::facets::{AffixEvidence, AscensionTable, BaseEvidence, Facets
 use grimvault_core::gamedata::{AffixInfo, BitmapPath, Footprint, GameData, ItemClass, Rarity};
 use grimvault_core::item::Item;
 use grimvault_core::reagents::{ReagentKind, ReagentKinds};
+use grimvault_core::search::{AffixName, Subject};
+use grimvault_core::stats::ItemDetails;
 use grimvault_core::transfer::Footprints;
 use univault_engine::ids::RecordId;
 
@@ -47,7 +49,7 @@ pub struct ItemFacts<'a> {
     pub facets: Facets,
 }
 
-impl ItemFacts<'_> {
+impl<'a> ItemFacts<'a> {
     /// `Prefix Base Suffix`, parts the database cannot name omitted.
     #[must_use]
     pub fn display_name(&self) -> String {
@@ -56,6 +58,30 @@ impl ItemFacts<'_> {
             .flatten()
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// What a query asks about, from these facts; `name` is the
+    /// caller's [`Self::display_name`] and `details` the stat body when
+    /// the query needs one.
+    #[must_use]
+    pub fn subject<'s>(
+        &self,
+        item: &'s Item,
+        name: &'s str,
+        details: Option<&'s ItemDetails>,
+    ) -> Subject<'s>
+    where
+        'a: 's,
+    {
+        Subject {
+            item,
+            name,
+            prefix: AffixName::of(&item.prefix_name, self.prefix),
+            suffix: AffixName::of(&item.suffix_name, self.suffix),
+            base: self.base.evidence,
+            facets: self.facets,
+            details,
+        }
     }
 
     /// Up to two initials of the base name, for the fallback tile.

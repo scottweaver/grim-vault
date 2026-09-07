@@ -73,7 +73,8 @@ fn block_title(ui: &mut Ui, palette: &Palette, block: &Block) {
     ui.label(RichText::new(title).color(palette.heading).strong());
 }
 
-fn stat_text(palette: &Palette, line: &StatLine) -> RichText {
+/// One stat line in the theme's colour for its emphasis.
+pub fn stat_text(palette: &Palette, line: &StatLine) -> RichText {
     let text = RichText::new(&line.text);
     match line.emphasis {
         Emphasis::Base => text.color(palette.text_strong),
