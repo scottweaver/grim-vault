@@ -10,20 +10,36 @@ Last updated: 2026-09-07 (FEATURES.md 20–24 landed on `main` at
 storage tabs first, the purge-duplicates standing order, and the
 bulk move / copy / delete buttons under a `bulkDuplicates` rule;
 496 tests; the three landed branches and worktrees deleted on the
-user's say-so; the in-game acceptance run is still pending)
+user's say-so; the GitHub repo `scottweaver/grim-vault` created and
+`main` pushed at `0e3f39d`; checkpointed before /clear while the
+user's acceptance run is under way in the relaunched build)
 
 ## Session handoff
-**Resume here:** `main` at the `docs/state-post-features-20-24`
-fast-forward (feature tip `f6bd3d0`) holds everything landed — every
-FEATURES.md item through 24 (there is no item 17) — 496 tests, clippy
-pedantic clean, fmt clean, headless `--check` clean from the release
-build on a scratch copy of the saves; there is no remote (the user
-declined creating the GitHub repo for now — do not push unprompted,
-next-up item 7). No track is in flight, and `main` is the only
-branch: the three
-landed branches, their `worktree-agent-*` refs, and the
-`.claude/worktrees/agent-*` checkouts were deleted on the user's
-say-so once everything was fast-forwarded.
+<!-- transient; owned by the checkpoint skill -->
+**Resume here:** `main` at `0e3f39d` (feature tip `f6bd3d0`) holds
+everything landed — every FEATURES.md item through 24 (there is no
+item 17) — 496 tests, clippy pedantic clean, fmt clean, headless
+`--check` clean from the release build on a scratch copy of the
+saves. **The remote exists now:** the user created
+`github.com/scottweaver/grim-vault` (public, Issues enabled) on
+2026-09-07 at 14:54 local and pushed; `origin/main` is in sync at
+`0e3f39d`, so next-up item 7 is done — push after every landing from
+now on (`git push`, never force). PROJECT.md still binds
+`tracker: none` and the skills still run their local equivalents;
+switching to `tracker: github` (`/bootstrap-project` edit mode, the
+commented block is pre-filled) and to PR-based landing per
+METHODOLOGIES is the user's call (Blocked / waiting). No track is in
+flight, and `main` is the only branch: the three landed branches,
+their `worktree-agent-*` refs, and the `.claude/worktrees/agent-*`
+checkouts were deleted on the user's say-so once everything was
+fast-forwarded. **The acceptance run is under way, results unknown
+here:** the user relaunched the `f6bd3d0` build at 14:49 (pid 26200
+at checkpoint) and at 14:50 nominated LootAscension stash tabs 2 and
+3 for *purge* as well as auto-move under `bulkDuplicates: skip`; the
+real store (2.8 MB) was rewritten at 14:50 with a backup beside it,
+so the standing orders of the new build have already run on the real
+files. Ask the user what the game did with them before assuming any
+write path works or fails.
 Parallel tracks are integrated by rebasing each onto the moving
 `main` — ask the agent to do it, it knows its own conflicts — and
 fast-forwarding; today's conflicts sat in `bulk.rs`, `settings.rs`,
@@ -75,7 +91,9 @@ default `bulkDuplicates: skip`.
   the load, and capture the window by id (`screencapture -x -o
   -l<id>`, the id from `CGWindowListCopyWindowInfo` filtered by pid —
   in JXA wrap it in `ObjC.castRefToObject`; winit lists five helper
-  windows, the real one is the ~1380×952 entry). The harness refuses
+  windows, the real one is the ~1380×952 entry). Over the SMB
+  mount `cp -Rp` copies everything but exits non-zero on `chflags`,
+  so never chain it with `&&`. The harness refuses
   a fake `HOME` for worktree agents; the config dir variable is
   enough. No synthetic input; look at what renders — modals and
   hover-scrolling are covered by unit tests only. The user's own
@@ -134,17 +152,20 @@ default `bulkDuplicates: skip`.
   Whether the game keeps a zero-count reagent entry, accepts a
   socket this app filled, or accepts any file this app wrote is
   unknown.
-- **Skill note:** `/checkpoint` and `/wrap-up` assume a remote and a
-  PR; both run local equivalents here (a docs commit on a
-  `docs/state-post-*` branch fast-forwarded into `main`, feature
-  branches fast-forwarded instead of merged).
+- **Skill note:** the remote exists since 2026-09-07 evening, but
+  until PROJECT.md is rebound to `tracker: github` and the user opts
+  into PRs, `/checkpoint` and `/wrap-up` keep running their local
+  equivalents (a docs commit on a `docs/state-post-*` branch
+  fast-forwarded into `main`, feature branches fast-forwarded instead
+  of merged) followed by `git push`.
 
 ## Active workstream
 
 Fast track to a usable Grim Dawn tool (user decision 2026-09-03; the
 separate-repo extraction of the shared engine is deferred,
 ARCHITECTURE.md "Crate layering"). On `main` (landed by local
-fast-forwards on 2026-09-03, 2026-09-06 and 2026-09-07; no remote yet)
+fast-forwards on 2026-09-03, 2026-09-06 and 2026-09-07; pushed to
+`origin/main` since 2026-09-07 evening)
 **M1–M5 are done and the app runs**: a five-crate workspace —
 `univault-engine` (tq-univault's parsers vendored, GD LZ4 dialect),
 `univault-io` (safe-io with post-write re-read), `univault-ui`
@@ -178,7 +199,7 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at the `docs/state-post-features-20-24` fast-forward — every FEATURES.md item through 24; 496 tests green; no remote and no GitHub repo yet |
+| `main` | trunk | at the `docs/state-post-features-20-24` fast-forward — every FEATURES.md item through 24; 496 tests green; pushed, `origin/main` in sync |
 | *(none)* | — | the three track branches of 2026-09-07 evening (`feat/scrolling-tab-strip`, `feat/purge-duplicates`, `feat/bulk-tab-ops`), their `worktree-agent-*` refs, and their worktrees were deleted on the user's say-so; no worktrees remain |
 
 ## Next up
@@ -221,9 +242,11 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
    game-data cache under the config dir, stamp-keyed to the archives.
 7. Deferred: extract the `univault-*` crates to their own repo and
    re-point tq-univault (R1–R5 done on the vendored copies).
-8. Create the GitHub repo (`scottweaver/grim-vault`, PROJECT.md's
-   commented `github:` block is pre-filled) and push when ready; the
-   wrap-up routine's PR steps stay inert until then.
+8. ~~Create the GitHub repo and push~~ — done by the user on
+   2026-09-07 (`scottweaver/grim-vault`, public, Issues enabled).
+   Left: decide whether to rebind PROJECT.md to `tracker: github`
+   and land future tracks through PRs (wrap-up's PR steps are live
+   once that happens).
 9. **Mod support leftovers:** `playmenu.cpn` remains unread (GD
    Stash does not read it either).
 
@@ -440,9 +463,13 @@ tq-univault; PROJECT.md is bound with `tracker: none`.
   duplicates rule governs the manual bulk buttons and auto-move
   alike, and the store's checkbox is where it lives.
 - **Waiting on the user — the acceptance run** (next-up item 1) is
-  what makes `main` trustworthy on real saves; until it runs, every
-  write path rests on byte-identical re-encodes and CLI / headless
-  round trips only.
+  under way in the relaunched build as of this checkpoint; its
+  results are what make `main` trustworthy on real saves, and this
+  session knows none of them.
+- **Waiting on the user — tracker and landing flow:** with the repo
+  on GitHub, rebind PROJECT.md to `tracker: github` and switch to
+  PR-based landing, or keep the local fast-forward flow plus `git
+  push`.
 - Environment note: the game install and saves live on
   a network mount (`/Volumes/scott-games/…`) that may not be present;
   check before assuming. The saves carry Steam-cloud (`remote/save/`)
