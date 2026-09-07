@@ -13,6 +13,7 @@ use egui::{
 };
 use grimvault_core::bucket::{Bucket, Group};
 use grimvault_core::search::{Query, Verdict};
+use grimvault_core::settings::{BulkDuplicates, Settings};
 use grimvault_core::stats;
 use grimvault_core::store::{StoredItem, StoredItemId};
 use serde::{Deserialize, Serialize};
@@ -118,10 +119,21 @@ fn filtered<'a>(items: &'a [StoredItem], view: &StoreView, cx: &mut PaneCtx<'_>)
     }
 }
 
-/// The heading, the store's path, its size, the mode switch, and the
-/// one action that brings items in from outside the game: importing a
-/// GD Stash export.
-fn header(ui: &mut Ui, doc: &StoreDoc, view: &mut StoreView, theme: &Theme, frame: &mut DragFrame) {
+const SKIP_DUPLICATES_WHY: &str = "Bulk moves and copies into the vault — the buttons on a tab and the auto-move standing \
+     order — pass over an item whose record and roll seed the store already holds. Drags, \
+     double-clicks and right-clicks always land.";
+
+/// The heading, the store's path, its size, the mode switch, the one
+/// action that brings items in from outside the game — importing a
+/// GD Stash export — and the bulk-duplicates rule.
+fn header(
+    ui: &mut Ui,
+    doc: &StoreDoc,
+    view: &mut StoreView,
+    settings: &Settings,
+    theme: &Theme,
+    frame: &mut DragFrame,
+) {
     ui.label(theme.heading("Vault store"));
     ui.label(theme.path_text(doc.path().display().to_string()));
     ui.horizontal_wrapped(|ui| {
@@ -146,6 +158,19 @@ fn header(ui: &mut Ui, doc: &StoreDoc, view: &mut StoreView, theme: &Theme, fram
                 .add_filter("GD Stash export", &["gds"])
                 .pick_file();
         }
+        ui.separator();
+        let mut skipping = settings.bulk_duplicates == BulkDuplicates::Skip;
+        if ui
+            .checkbox(&mut skipping, "Skip duplicates in bulk moves")
+            .on_hover_text(SKIP_DUPLICATES_WHY)
+            .changed()
+        {
+            frame.bulk_duplicates = Some(if skipping {
+                BulkDuplicates::Skip
+            } else {
+                BulkDuplicates::Allow
+            });
+        }
     });
 }
 
@@ -158,7 +183,7 @@ pub fn show(
     cx: &mut PaneCtx<'_>,
     frame: &mut DragFrame,
 ) {
-    header(ui, doc, view, theme, frame);
+    header(ui, doc, view, cx.settings, theme, frame);
     ui.separator();
     drop_zone(ui, cx, frame);
     match view.mode {

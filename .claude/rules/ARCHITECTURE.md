@@ -250,20 +250,26 @@ Q&A). Items marked TBD are open questions, not decisions.
   never runs on a dirty pane (a reload only ever replaces a clean
   one) or while the conflict modal is up. An item the store already
   holds under the same record and roll seed is left in the tab by the
-  auto-move, never destroyed by it (`grimvault-core::bulk`; the
-  identity rule is in `docs/format-references.md`). **The purge
+  auto-move under the default `bulkDuplicates: skip` and moved under
+  `allow` — one rule in `settings.json` for every bulk move or copy
+  into the store, a tab's "Move all" / "Copy all" buttons and the
+  standing order alike, while single drags, double-clicks and
+  right-clicks always land (2026-09-07, FEATURES.md 24); the
+  auto-move never destroys one (`grimvault-core::bulk`; the identity
+  rule is in `docs/format-references.md`). **The purge
   (`purgeDuplicates`, the same entry shape) is the one order that
   destroys items:** a nominated tab loses every item whose record and
   roll seed the store already holds — membership is the store's
   alone, so two in-tab copies of a seed the store lacks both stay,
-  and stacks and unrolled (zero-seed) items are never duplicates — at
-  the same moments, under the same gate and autosave path, with the
-  store never changed; the auto-move runs first, so a tab under both
-  orders ends empty. The component-storage sync (`syncReagents`,
-  default on) runs at the same moments but writes only the store: it
-  adds one stack of the shortfall per record and never removes,
-  reduces, or touches `reagents.gst`. A headless `--check` run from
-  the saved settings prints what all three orders would do without
+  and stacks and unrolled (zero-seed) items are never duplicates, and
+  `bulkDuplicates` has no say — at the same moments, under the same
+  gate and autosave path, with the store never changed; the auto-move
+  runs first, so a tab under both orders ends empty. The
+  component-storage sync (`syncReagents`, default on) runs at the
+  same moments but writes only the store: it adds one stack of the
+  shortfall per record and never removes, reduces, or touches
+  `reagents.gst`. A headless `--check` run from the saved settings
+  prints the rule and what all three orders would do without
   writing.
 
 ## External boundaries

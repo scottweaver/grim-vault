@@ -17,7 +17,8 @@ use univault_ui::components::scroll_strip::{self, ScrollStrip, StripInk};
 use univault_ui::theme::Theme;
 
 use super::{
-    DragFrame, GridEntry, GridSpec, Interaction, PaneCtx, container_tab, extent, grid_surface,
+    Confirmation, DragFrame, GridEntry, GridSpec, Interaction, PaneCtx, PendingClear,
+    READ_ONLY_WHY, bulk_buttons, clear_button, confirm_clear, container_tab, extent, grid_surface,
     item_tooltip, order_toggles, sack_entries, stash_entries,
 };
 use crate::documents::{Backup, CharacterDoc, CharacterEntry, CharacterSlot, Edits, Writable};
@@ -33,13 +34,21 @@ pub enum CharacterTab {
     Stash(usize),
 }
 
-/// The picker's choice, the container tab, and the reset awaiting
+/// An edit awaiting the user's confirmation: a reset of the
+/// character, or the emptying of one of its stash tabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Confirm {
+    Reset(Reset),
+    Clear(PendingClear),
+}
+
+/// The picker's choice, the container tab, and the edit awaiting
 /// the user's confirmation, if any.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CharacterView {
     pub selected: usize,
     pub tab: CharacterTab,
-    pub confirm: Option<Reset>,
+    pub confirm: Option<Confirm>,
 }
 
 impl Default for CharacterView {
@@ -215,7 +224,7 @@ fn body(
         respec_buttons(ui, editable, view);
         ui.label(theme.path_text(doc.path().display().to_string()));
     });
-    confirm_reset(ui, slot, file.character_name(), view, theme, frame);
+    confirm_pending(ui, slot, file.character_name(), view, theme, frame);
     let sacks = file
         .inventory()
         .map_or(&[][..], |inventory| inventory.sacks());
@@ -273,16 +282,17 @@ fn body(
             );
         }
     });
-    show_container(ui, slot, doc, view.tab, cx, frame);
+    show_container(ui, slot, doc, view, cx, frame);
 }
 
-/// The selected container: a sack or own-stash tab as a grid, editable
-/// when the character is, or the equipment list.
+/// The selected container: a sack or own-stash tab as a grid under a
+/// header of bulk buttons, editable when the character is, or the
+/// equipment list.
 fn show_container(
     ui: &mut Ui,
     slot: CharacterSlot,
     doc: &CharacterDoc,
-    tab: CharacterTab,
+    view: &mut CharacterView,
     cx: &mut PaneCtx<'_>,
     frame: &mut DragFrame,
 ) {
@@ -295,24 +305,27 @@ fn show_container(
     let available: Vec2 = ui.available_size();
     egui::ScrollArea::both()
         .auto_shrink([false, false])
-        .show(ui, |ui| match tab {
+        .show(ui, |ui| match view.tab {
             CharacterTab::Sack(index) => match (sacks.get(index), sack_index(index)) {
                 (Some(sack), Some(sack_index)) => {
+                    let container = editable.then_some(Container::Sack {
+                        character: slot,
+                        sack: sack_index,
+                    });
                     let entries = sack_entries(sack, cx);
                     let (cols, rows) = sack_dims(sack_index, &entries);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("{cols}×{rows} cells · {} items", sack.items.len()));
+                        ui.separator();
+                        bulk_buttons(ui, container, sack.items.len(), frame);
+                    });
                     let spec = GridSpec {
                         available,
                         cols,
                         rows,
                     };
-                    let interaction = if editable {
-                        Interaction::Editable(Container::Sack {
-                            character: slot,
-                            sack: sack_index,
-                        })
-                    } else {
-                        Interaction::ReadOnly
-                    };
+                    let interaction =
+                        container.map_or(Interaction::ReadOnly, Interaction::Editable);
                     grid_surface(ui, spec, &entries, interaction, cx, frame);
                 }
                 (None, _) | (_, None) => {
@@ -322,18 +335,29 @@ fn show_container(
             CharacterTab::Equipped => equipped(ui, file, cx),
             CharacterTab::Stash(index) => match (stash_tabs.get(index), tab_index(index)) {
                 (Some(stash_tab), Some(tab_index)) => {
-                    if editable {
-                        order_toggles(
-                            ui,
-                            &AutoMoveTab::CharacterStash {
-                                realm: doc.realm(),
-                                name: doc.name().to_owned(),
-                                tab: tab_index,
-                            },
-                            cx,
-                            frame,
-                        );
-                    }
+                    let container = editable.then_some(Container::CharacterStash {
+                        character: slot,
+                        tab: tab_index,
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        if editable {
+                            order_toggles(
+                                ui,
+                                &AutoMoveTab::CharacterStash {
+                                    realm: doc.realm(),
+                                    name: doc.name().to_owned(),
+                                    tab: tab_index,
+                                },
+                                cx,
+                                frame,
+                            );
+                            ui.separator();
+                        }
+                        bulk_buttons(ui, container, stash_tab.items.len(), frame);
+                        if let Some(pending) = clear_button(ui, container, stash_tab.items.len()) {
+                            view.confirm = Some(Confirm::Clear(pending));
+                        }
+                    });
                     let entries = stash_entries(stash_tab, cx);
                     let cols = i32::try_from(stash_tab.width).unwrap_or(0);
                     let rows = i32::try_from(stash_tab.height).unwrap_or(0);
@@ -342,14 +366,8 @@ fn show_container(
                         cols,
                         rows,
                     };
-                    let interaction = if editable {
-                        Interaction::Editable(Container::CharacterStash {
-                            character: slot,
-                            tab: tab_index,
-                        })
-                    } else {
-                        Interaction::ReadOnly
-                    };
+                    let interaction =
+                        container.map_or(Interaction::ReadOnly, Interaction::Editable);
                     grid_surface(ui, spec, &entries, interaction, cx, frame);
                 }
                 (None, _) | (_, None) => {
@@ -423,9 +441,6 @@ fn money_field(
     }
 }
 
-const READ_ONLY_WHY: &str = "This character is read-only: a block of its player.gdc is not typed, so nothing before it \
-     can be edited.";
-
 /// What each reset does, for its button and its confirmation.
 fn reset_explanation(reset: Reset) -> &'static str {
     match reset {
@@ -454,15 +469,15 @@ fn respec_buttons(ui: &mut Ui, editable: bool, view: &mut CharacterView) {
             .on_disabled_hover_text(READ_ONLY_WHY)
             .clicked()
         {
-            view.confirm = Some(reset);
+            view.confirm = Some(Confirm::Reset(reset));
         }
     }
 }
 
-/// The confirmation a reset needs before it is reported: nothing is
-/// edited until the user confirms, and Esc, a click outside, or
-/// Cancel drops the request.
-fn confirm_reset(
+/// The confirmation a reset or a clear needs before it is reported:
+/// nothing is edited until the user confirms, and Esc, a click
+/// outside, or Cancel drops the request.
+fn confirm_pending(
     ui: &Ui,
     slot: CharacterSlot,
     name: &str,
@@ -470,9 +485,36 @@ fn confirm_reset(
     theme: &Theme,
     frame: &mut DragFrame,
 ) {
-    let Some(reset) = view.confirm else {
-        return;
-    };
+    match view.confirm {
+        None => {}
+        Some(Confirm::Reset(reset)) => confirm_reset(ui, slot, name, reset, view, theme, frame),
+        Some(Confirm::Clear(pending)) => {
+            let label = container_name(pending.container, name);
+            if confirm_clear(ui, pending, &label, theme, frame) == Confirmation::Settled {
+                view.confirm = None;
+            }
+        }
+    }
+}
+
+/// A container as the confirmation names it.
+fn container_name(container: Container, name: &str) -> String {
+    match container {
+        Container::TransferStash(tab) => format!("transfer stash tab {}", tab.value() + 1),
+        Container::Sack { sack, .. } => format!("{name}'s sack {}", sack.value() + 1),
+        Container::CharacterStash { tab, .. } => format!("{name}'s stash {}", tab.value() + 1),
+    }
+}
+
+fn confirm_reset(
+    ui: &Ui,
+    slot: CharacterSlot,
+    name: &str,
+    reset: Reset,
+    view: &mut CharacterView,
+    theme: &Theme,
+    frame: &mut DragFrame,
+) {
     let mut confirmed = None;
     let response = egui::Modal::new(Id::new("respec-confirm")).show(ui.ctx(), |ui| {
         ui.set_max_width(440.0);
@@ -581,6 +623,51 @@ mod tests {
             i32::try_from(sack.width).unwrap(),
             i32::try_from(sack.height).unwrap(),
         )
+    }
+
+    #[test]
+    fn the_confirmation_names_the_container_after_the_character() {
+        let zark = CharacterSlot::new(1);
+        assert_eq!(
+            container_name(
+                Container::CharacterStash {
+                    character: zark,
+                    tab: TabIndex::new(1)
+                },
+                "Zark"
+            ),
+            "Zark's stash 2"
+        );
+        assert_eq!(
+            container_name(
+                Container::Sack {
+                    character: zark,
+                    sack: SackIndex::MAIN
+                },
+                "Zark"
+            ),
+            "Zark's sack 1"
+        );
+        assert_eq!(
+            container_name(Container::TransferStash(TabIndex::new(0)), "Zark"),
+            "transfer stash tab 1"
+        );
+    }
+
+    #[test]
+    fn picking_another_character_drops_a_pending_confirmation() {
+        let mut view = CharacterView::opening_on(Some(CharacterSlot::new(2)));
+        assert_eq!(view.selected, 2);
+        view.confirm = Some(Confirm::Clear(PendingClear {
+            container: Container::CharacterStash {
+                character: CharacterSlot::new(2),
+                tab: TabIndex::new(0),
+            },
+            count: 3,
+        }));
+        let fresh = CharacterView::opening_on(Some(CharacterSlot::new(0)));
+        assert_eq!(fresh.confirm, None);
+        assert_ne!(view.confirm, fresh.confirm);
     }
 
     #[test]

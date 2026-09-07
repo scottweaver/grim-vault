@@ -61,7 +61,9 @@ impl TabIndex {
         self.0
     }
 
-    fn slot(self) -> Option<usize> {
+    /// The index as a position in the file's tab list.
+    #[must_use]
+    pub fn slot(self) -> Option<usize> {
         usize::try_from(self.0).ok()
     }
 }
@@ -840,7 +842,7 @@ fn move_into_sack(
     Ok(())
 }
 
-fn sack_ref(player: &PlayerFile, sack: SackIndex) -> Result<&Sack, TransferError> {
+pub(crate) fn sack_ref(player: &PlayerFile, sack: SackIndex) -> Result<&Sack, TransferError> {
     let sacks = player
         .inventory()
         .ok_or(TransferError::NoInventory)?
@@ -966,13 +968,16 @@ fn move_into_tab(
     Ok(())
 }
 
-fn tab_ref(tabs: &[StashTab], tab: TabIndex) -> Result<&StashTab, TransferError> {
+pub(crate) fn tab_ref(tabs: &[StashTab], tab: TabIndex) -> Result<&StashTab, TransferError> {
     tab.slot()
         .and_then(|slot| tabs.get(slot))
         .ok_or(TransferError::NoSuchTab(tab))
 }
 
-fn tab_mut(tabs: &mut [StashTab], tab: TabIndex) -> Result<&mut StashTab, TransferError> {
+pub(crate) fn tab_mut(
+    tabs: &mut [StashTab],
+    tab: TabIndex,
+) -> Result<&mut StashTab, TransferError> {
     tab.slot()
         .and_then(|slot| tabs.get_mut(slot))
         .ok_or(TransferError::NoSuchTab(tab))

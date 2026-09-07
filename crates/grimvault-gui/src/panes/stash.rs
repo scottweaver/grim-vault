@@ -18,8 +18,9 @@ use univault_ui::theme::Theme;
 
 use super::crafting::{self, CraftingView};
 use super::{
-    DragFrame, DropCandidate, GridSpec, Interaction, PaneCtx, container_tab, grid_surface,
-    order_toggles, outline, reagents, stash_entries,
+    Confirmation, DragFrame, DropCandidate, GridSpec, Interaction, PaneCtx, PendingClear,
+    bulk_buttons, clear_button, confirm_clear, container_tab, grid_surface, order_toggles, outline,
+    reagents, stash_entries,
 };
 use crate::crafting::{Blueprints, Crafting, IllusionCollection};
 use crate::documents::{Reagents, StashDoc};
@@ -37,12 +38,14 @@ pub enum Showing {
 /// The pane's selection: the surface showing, the stash tab last
 /// chosen (the target of a double-clicked store item even while
 /// another tab shows), how many a storage drag carries (0 for the
-/// whole entry), and the crafting tabs' own state.
+/// whole entry), the crafting tabs' own state, and the "Delete all"
+/// awaiting confirmation, if any.
 pub struct StashView {
     pub tab: TabIndex,
     pub showing: Showing,
     pub reagent_amount: u32,
     pub crafting: CraftingView,
+    pub confirm_clear: Option<PendingClear>,
 }
 
 impl Default for StashView {
@@ -52,6 +55,7 @@ impl Default for StashView {
             showing: Showing::Stash,
             reagent_amount: 0,
             crafting: CraftingView::default(),
+            confirm_clear: None,
         }
     }
 }
@@ -114,6 +118,47 @@ pub fn show(
         Showing::Crafting(Crafting::Blueprints) => ("Blueprints", blueprints.path()),
         Showing::Crafting(Crafting::Illusions) => ("Illusions", illusions.path()),
     };
+    let switch = campaign_picker(ui, heading, selection, theme);
+    ui.label(theme.path_text(path.display().to_string()));
+    let stash = doc.stash();
+    ScrollStrip::new("stash-tabs", StripInk::from_palette(cx.palette)).show(ui, |ui| {
+        reagent_tabs(ui, storage, view, cx, frame);
+        ui.separator();
+        stash_tabs(ui, stash.tabs.as_slice(), view, cx, frame);
+        ui.separator();
+        crafting_tabs(ui, blueprints, illusions, view);
+    });
+    match view.showing {
+        Showing::Stash => show_tab(
+            ui,
+            selection.campaign,
+            stash.tabs.as_slice(),
+            view,
+            theme,
+            cx,
+            frame,
+        ),
+        Showing::Reagents(kind) => {
+            reagents::show(ui, storage, kind, &mut view.reagent_amount, cx, frame);
+        }
+        Showing::Crafting(Crafting::Blueprints) => {
+            crafting::show_blueprints(ui, blueprints, &mut view.crafting, cx, frame);
+        }
+        Showing::Crafting(Crafting::Illusions) => {
+            crafting::show_illusions(ui, illusions, &mut view.crafting, cx, frame);
+        }
+    }
+    switch
+}
+
+/// The heading beside the campaign selector; `Some` when another
+/// campaign was picked.
+fn campaign_picker(
+    ui: &mut Ui,
+    heading: &str,
+    selection: Selection<'_>,
+    theme: &Theme,
+) -> Option<Campaign> {
     let mut switch = None;
     ui.horizontal(|ui| {
         ui.label(theme.heading(heading));
@@ -134,52 +179,30 @@ pub fn show(
             .response
             .on_hover_text(CAMPAIGN_WHY);
     });
-    ui.label(theme.path_text(path.display().to_string()));
-    let stash = doc.stash();
-    ScrollStrip::new("stash-tabs", StripInk::from_palette(cx.palette)).show(ui, |ui| {
-        reagent_tabs(ui, storage, view, cx, frame);
-        ui.separator();
-        stash_tabs(ui, stash.tabs.as_slice(), view, cx, frame);
-        ui.separator();
-        crafting_tabs(ui, blueprints, illusions, view);
-    });
-    match view.showing {
-        Showing::Stash => show_tab(
-            ui,
-            selection.campaign,
-            stash.tabs.as_slice(),
-            view,
-            cx,
-            frame,
-        ),
-        Showing::Reagents(kind) => {
-            reagents::show(ui, storage, kind, &mut view.reagent_amount, cx, frame);
-        }
-        Showing::Crafting(Crafting::Blueprints) => {
-            crafting::show_blueprints(ui, blueprints, &mut view.crafting, cx, frame);
-        }
-        Showing::Crafting(Crafting::Illusions) => {
-            crafting::show_illusions(ui, illusions, &mut view.crafting, cx, frame);
-        }
-    }
     switch
 }
 
+/// The tab showing: its header — size, the auto-move toggle, the bulk
+/// buttons — the "Delete all" confirmation while one is up, and the
+/// grid.
 fn show_tab(
     ui: &mut Ui,
     campaign: &Campaign,
     tabs: &[StashTab],
-    view: &StashView,
+    view: &mut StashView,
+    theme: &Theme,
     cx: &mut PaneCtx<'_>,
     frame: &mut DragFrame,
 ) {
-    let Some(tab) = usize::try_from(view.tab.value())
-        .ok()
-        .and_then(|slot| tabs.get(slot))
+    let Some((slot, tab)) = view
+        .tab
+        .slot()
+        .and_then(|slot| tabs.get(slot).map(|tab| (slot, tab)))
     else {
         ui.label("The stash has no tabs.");
         return;
     };
+    let container = Container::TransferStash(view.tab);
     ui.horizontal_wrapped(|ui| {
         ui.label(format!(
             "{}×{} cells · {} items",
@@ -197,7 +220,18 @@ fn show_tab(
             cx,
             frame,
         );
+        ui.separator();
+        bulk_buttons(ui, Some(container), tab.items.len(), frame);
+        if let Some(pending) = clear_button(ui, Some(container), tab.items.len()) {
+            view.confirm_clear = Some(pending);
+        }
     });
+    if let Some(pending) = view.confirm_clear {
+        let label = format!("transfer stash {}", tab_name(slot, tab));
+        if confirm_clear(ui, pending, &label, theme, frame) == Confirmation::Settled {
+            view.confirm_clear = None;
+        }
+    }
     let entries = stash_entries(tab, cx);
     let unresolved = entries
         .iter()
@@ -223,7 +257,7 @@ fn show_tab(
                     rows,
                 },
                 &entries,
-                Interaction::Editable(Container::TransferStash(view.tab)),
+                Interaction::Editable(container),
                 cx,
                 frame,
             );
@@ -325,12 +359,16 @@ fn crafting_tabs(
 }
 
 fn tab_label(slot: usize, tab: &StashTab) -> String {
-    let name = if tab.decoration.button_name.is_empty() {
+    format!("{} ({})", tab_name(slot, tab), tab.items.len())
+}
+
+/// The game's button name for the tab, or its number.
+fn tab_name(slot: usize, tab: &StashTab) -> String {
+    if tab.decoration.button_name.is_empty() {
         format!("Tab {}", slot + 1)
     } else {
         tab.decoration.button_name.clone()
-    };
-    format!("{name} ({})", tab.items.len())
+    }
 }
 
 fn reagent_tab_label(storage: &Reagents, kind: ReagentKind, cx: &mut PaneCtx<'_>) -> String {

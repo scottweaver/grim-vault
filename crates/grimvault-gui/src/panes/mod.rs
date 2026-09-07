@@ -15,20 +15,20 @@ pub mod store;
 use std::path::PathBuf;
 
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Response, RichText, Sense, Stroke,
-    StrokeKind, Ui, Vec2, pos2, vec2,
+    Align2, Color32, CornerRadius, FontId, Id, Painter, Pos2, Rect, Response, RichText, Sense,
+    Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
 };
 use grimvault_core::block::StashTab;
 use grimvault_core::gamedata::{GameData, Rarity};
 use grimvault_core::gdc::Sack;
 use grimvault_core::item::Item;
 use grimvault_core::respec::Reset;
-use grimvault_core::settings::{AutoMoveTab, ReagentSync, Settings, StandingOrder};
+use grimvault_core::settings::{AutoMoveTab, BulkDuplicates, ReagentSync, Settings, StandingOrder};
 use grimvault_core::socket::Socket;
 use grimvault_core::transfer::{Footprints, ItemIndex};
 use univault_engine::grid::CellRect;
 use univault_engine::ids::GridPos;
-use univault_ui::theme::Palette;
+use univault_ui::theme::{Palette, Theme};
 
 use crate::automove::OrderRequest;
 use crate::badges::{Badge, paint_badge};
@@ -92,15 +92,210 @@ pub struct DragFrame {
     pub standing_order: Option<OrderRequest>,
     /// The component-storage sync switched on or off.
     pub reagent_sync: Option<ReagentSync>,
+    /// A whole container moved or copied into the store, or emptied
+    /// — the last only once confirmed.
+    pub bulk: Option<BulkRequest>,
+    /// The bulk-duplicates rule switched.
+    pub bulk_duplicates: Option<BulkDuplicates>,
 }
 
+/// What a container's header buttons ask for: every item into the
+/// store — moved or copied, under the bulk-duplicates rule — or the
+/// container emptied, which touches no store. The two are distinct
+/// variants so the transfer path can never be handed a clear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BulkOp {
+    Transfer(Mode),
+    Clear,
+}
+
+impl BulkOp {
+    /// The verb as a toast reports it done.
+    #[must_use]
+    pub fn done(self) -> &'static str {
+        match self {
+            Self::Transfer(Mode::Move) => "moved",
+            Self::Transfer(Mode::Copy) => "copied",
+            Self::Clear => "deleted",
+        }
+    }
+}
+
+impl std::fmt::Display for BulkOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Transfer(Mode::Move) => "move all",
+            Self::Transfer(Mode::Copy) => "copy all",
+            Self::Clear => "delete all",
+        })
+    }
+}
+
+/// A bulk operation on one game-side container.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BulkRequest {
+    pub container: Container,
+    pub op: BulkOp,
+}
+
+/// A "Delete all" awaiting the user's confirmation: the tab and how
+/// many items it held when asked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingClear {
+    pub container: Container,
+    pub count: usize,
+}
+
+/// Whether a confirmation is still up after this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Confirmation {
+    Pending,
+    Settled,
+}
+
+/// Why an editable-looking character takes no edits.
+pub const READ_ONLY_WHY: &str = "This character is read-only: a block of its player.gdc is not typed, so nothing before it \
+     can be edited.";
+
 const AUTO_MOVE_WHY: &str = "Every item in this tab is moved into the vault store whenever the app loads or \
-     reloads the file — after the game writes it, too — leaving the tab empty. An item the store \
-     already holds under the same record and roll seed is left in place; stacks are never \
-     treated as duplicates.";
+     reloads the file — after the game writes it, too — leaving the tab empty. Under the store's \
+     \"Skip duplicates in bulk moves\" an item the store already holds under the same record and \
+     roll seed is left in place; stacks are never treated as duplicates.";
 const PURGE_WHY: &str = "Whenever the app loads or reloads this tab — after the game writes it, too — every \
-     item whose record and roll seed the vault store already holds is deleted from the tab. \
-     Stacks are never duplicates. The file is backed up once per load before the first write.";
+     item whose record and roll seed the vault store already holds is deleted from the tab, \
+     whatever the store's duplicates setting says. Stacks are never duplicates. The file is \
+     backed up once per load before the first write.";
+const MOVE_ALL_WHY: &str = "Moves every item here into the vault store through the same moves a drag makes. Under the \
+     store's \"Skip duplicates in bulk moves\" an item the store already holds under the same \
+     record and roll seed stays here.";
+const COPY_ALL_WHY: &str = "Copies every item here into the vault store and leaves this container as it is. The \
+     store's \"Skip duplicates in bulk moves\" applies.";
+const DELETE_ALL_WHY: &str =
+    "Deletes every item here after a confirmation. Nothing enters the vault store.";
+const EMPTY_WHY: &str = "There is nothing here to act on.";
+
+/// The "Move all" and "Copy all" buttons on a container's header,
+/// reporting a click through the frame. `container` is `None` for a
+/// read-only character; that and an empty container disable the
+/// buttons, each saying why on hover.
+pub fn bulk_buttons(
+    ui: &mut Ui,
+    container: Option<Container>,
+    count: usize,
+    frame: &mut DragFrame,
+) {
+    for (mode, label, why) in [
+        (Mode::Move, "Move all to vault", MOVE_ALL_WHY),
+        (Mode::Copy, "Copy all to vault", COPY_ALL_WHY),
+    ] {
+        if let Some(container) = header_button(ui, container, count, label, why) {
+            frame.bulk = Some(BulkRequest {
+                container,
+                op: BulkOp::Transfer(mode),
+            });
+        }
+    }
+}
+
+/// The "Delete all…" button on a stash tab's header: a click asks for
+/// confirmation rather than acting, so the request comes back to the
+/// caller to hold until [`confirm_clear`] settles it.
+pub fn clear_button(
+    ui: &mut Ui,
+    container: Option<Container>,
+    count: usize,
+) -> Option<PendingClear> {
+    header_button(ui, container, count, "Delete all…", DELETE_ALL_WHY)
+        .map(|container| PendingClear { container, count })
+}
+
+fn header_button(
+    ui: &mut Ui,
+    container: Option<Container>,
+    count: usize,
+    label: &str,
+    why: &str,
+) -> Option<Container> {
+    let disabled_why = match container {
+        None => READ_ONLY_WHY,
+        Some(_) => EMPTY_WHY,
+    };
+    let enabled = container.is_some() && count > 0;
+    let clicked = ui
+        .add_enabled(enabled, egui::Button::new(label))
+        .on_hover_text(why)
+        .on_disabled_hover_text(disabled_why)
+        .clicked();
+    clicked.then_some(container).flatten()
+}
+
+/// The confirmation a clear needs before it is reported: nothing is
+/// edited until the user confirms, and Esc, a click outside, or
+/// Cancel drops the request. `label` names the tab as the heading
+/// reads it.
+pub fn confirm_clear(
+    ui: &Ui,
+    pending: PendingClear,
+    label: &str,
+    theme: &Theme,
+    frame: &mut DragFrame,
+) -> Confirmation {
+    let count = pending.count;
+    let mut confirmed = None;
+    let response = egui::Modal::new(Id::new("clear-confirm")).show(ui.ctx(), |ui| {
+        ui.set_max_width(440.0);
+        ui.label(theme.heading(format!("Delete all {count} items in {label}?")));
+        ui.label(
+            "Every item in the tab is deleted; none of them enters the vault store. The file is \
+             written by autosave, backup-first, and the game's own copy is backed up once per \
+             load, so the pre-session file survives beside it.",
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button(format!("Delete {count} items")).clicked() {
+                confirmed = Some(true);
+            }
+            if ui.button("Cancel").clicked() {
+                confirmed = Some(false);
+            }
+        });
+    });
+    let answer = match confirmed {
+        Some(true) => Answer::Confirmed,
+        Some(false) => Answer::Cancelled,
+        None if response.should_close() => Answer::Cancelled,
+        None => Answer::Waiting,
+    };
+    let (state, request) = settle_clear(answer, pending);
+    if request.is_some() {
+        frame.bulk = request;
+    }
+    state
+}
+
+/// What the user did to a confirmation this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Answer {
+    Confirmed,
+    Cancelled,
+    Waiting,
+}
+
+/// Whether the confirmation stays up and what it reports: only a
+/// confirmed clear becomes a request.
+fn settle_clear(answer: Answer, pending: PendingClear) -> (Confirmation, Option<BulkRequest>) {
+    match answer {
+        Answer::Confirmed => (
+            Confirmation::Settled,
+            Some(BulkRequest {
+                container: pending.container,
+                op: BulkOp::Clear,
+            }),
+        ),
+        Answer::Cancelled => (Confirmation::Settled, None),
+        Answer::Waiting => (Confirmation::Pending, None),
+    }
+}
 
 /// The checkbox label and explanation of an order's toggle.
 fn order_toggle_text(order: StandingOrder) -> (&'static str, &'static str) {
@@ -711,7 +906,42 @@ pub fn part_name(cx: &mut PaneCtx<'_>, record: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use grimvault_core::transfer::TabIndex;
+
     use super::*;
+
+    #[test]
+    fn only_a_confirmed_clear_becomes_a_request() {
+        let pending = PendingClear {
+            container: Container::TransferStash(TabIndex::new(2)),
+            count: 5,
+        };
+        assert_eq!(
+            settle_clear(Answer::Waiting, pending),
+            (Confirmation::Pending, None)
+        );
+        assert_eq!(
+            settle_clear(Answer::Cancelled, pending),
+            (Confirmation::Settled, None)
+        );
+        assert_eq!(
+            settle_clear(Answer::Confirmed, pending),
+            (
+                Confirmation::Settled,
+                Some(BulkRequest {
+                    container: Container::TransferStash(TabIndex::new(2)),
+                    op: BulkOp::Clear,
+                })
+            )
+        );
+    }
+
+    #[test]
+    fn bulk_ops_name_themselves_for_the_toasts() {
+        assert_eq!(BulkOp::Transfer(Mode::Move).to_string(), "move all");
+        assert_eq!(BulkOp::Transfer(Mode::Copy).done(), "copied");
+        assert_eq!(BulkOp::Clear.done(), "deleted");
+    }
 
     #[test]
     fn stash_cells_round_and_never_go_negative() {

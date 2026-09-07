@@ -15,12 +15,14 @@ use egui::{
 };
 use grimvault_core::bulk;
 use grimvault_core::gamedata::GameData;
+use grimvault_core::gdc::{PlayerFile, Realm};
 use grimvault_core::gds;
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
 use grimvault_core::respec::{Reset, RespecRules};
-use grimvault_core::settings::{ReagentSync, StandingOrder};
+use grimvault_core::settings::{BulkDuplicates, ReagentSync, StandingOrder};
 use grimvault_core::store::Timestamp;
+use grimvault_core::transfer::TransferError;
 use univault_engine::ids::RecordId;
 use univault_io::read_verified;
 use univault_ui::theme::{Palette, Theme};
@@ -34,8 +36,8 @@ use crate::documents::{
     StoreDoc, StoreOpenError, Writable,
 };
 use crate::drag::{
-    self, Applied, Container, Containers, DragSource, DragState, DropTarget, Fit, Landing,
-    LastActive, Mode, Move, OpenCharacter, Views,
+    self, Applied, ApplyError, Container, Containers, DragSource, DragState, DropTarget, Fit,
+    Landing, LastActive, Mode, Move, OpenCharacter, Views,
 };
 use crate::facts::FactsCache;
 use crate::grid::CELL_PX;
@@ -48,7 +50,7 @@ use crate::panes::character::CharacterView;
 use crate::panes::inspector::{self, Selected, Supplies};
 use crate::panes::stash::StashView;
 use crate::panes::store::{SEARCH_SHORTCUT, StoreMode, StoreView};
-use crate::panes::{self, DragFrame, PaneCtx};
+use crate::panes::{self, BulkOp, BulkRequest, DragFrame, PaneCtx};
 use crate::search::SearchCache;
 use crate::settings::{self, ConfigDir, Settings};
 use crate::setup::{DirProblem, GameDir, SaveDir, SetupState};
@@ -427,6 +429,28 @@ fn right_click_mode(modifiers: egui::Modifiers) -> Mode {
     }
 }
 
+/// What a bulk operation did, for the toast and the dirty marks.
+enum BulkDone {
+    Transferred(bulk::BulkSummary),
+    Cleared(bulk::ClearSummary),
+}
+
+/// A character's file for editing, with its realm — a free function
+/// so the store and the memo can be borrowed beside it.
+fn editable_character(
+    characters: &mut [CharacterEntry],
+    slot: CharacterSlot,
+) -> Result<(Realm, &mut PlayerFile), ApplyError> {
+    let doc = characters
+        .get_mut(slot.value())
+        .and_then(CharacterEntry::doc_mut)
+        .ok_or(ApplyError::CharacterNotEditable(slot))?;
+    let realm = doc.realm();
+    doc.file_mut()
+        .map(|file| (realm, file))
+        .map_err(|_| ApplyError::CharacterNotEditable(slot))
+}
+
 /// Which standing orders a (re)load carries out: every one, the
 /// open campaign's shared files', or one document's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -674,6 +698,7 @@ impl World {
         self.warm_doc(Doc::Store);
         let label = self.target_label(target);
         let at = now();
+        let rule = self.settings.bulk_duplicates;
         let outcome = match target {
             AutoMoveTarget::TransferStash(tab) => bulk::vault_tab(
                 self.stash.stash_mut(),
@@ -681,6 +706,7 @@ impl World {
                 tab,
                 self.store.store_mut(),
                 &self.facts,
+                rule,
                 at,
             ),
             AutoMoveTarget::CharacterStash { character, tab } => {
@@ -699,6 +725,7 @@ impl World {
                         tab,
                         self.store.store_mut(),
                         &self.facts,
+                        rule,
                         at,
                     ),
                     Err(error) => {
@@ -822,6 +849,181 @@ impl World {
         if sync == ReagentSync::On && self.gate() == Gate::Open {
             self.sync_reagents(toasts);
         }
+    }
+
+    fn set_bulk_duplicates(
+        &mut self,
+        rule: BulkDuplicates,
+        config: &ConfigDir,
+        toasts: &mut Toasts,
+    ) {
+        self.settings.bulk_duplicates = rule;
+        self.save_settings(config, toasts);
+    }
+
+    /// A container as the bulk toasts name it.
+    fn container_label(&self, container: Container) -> String {
+        match container {
+            Container::TransferStash(tab) => format!("transfer stash tab {}", tab.value() + 1),
+            Container::Sack { character, sack } => format!(
+                "{} sack {}",
+                self.doc_label(Doc::Character(character)),
+                sack.value() + 1
+            ),
+            Container::CharacterStash { character, tab } => format!(
+                "{} stash tab {}",
+                self.doc_label(Doc::Character(character)),
+                tab.value() + 1
+            ),
+        }
+    }
+
+    /// A whole container moved or copied into the store through the
+    /// same moves a drag makes, under the bulk-duplicates rule, or a
+    /// stash tab emptied after the user confirmed; the documents
+    /// touched join autosave with the store written first. Refused
+    /// while an external change awaits the user's decision.
+    fn bulk(&mut self, request: BulkRequest, toasts: &mut Toasts) {
+        if self.gate() == Gate::Suspended {
+            toasts.error("decide the pending external change before a bulk operation");
+            return;
+        }
+        let BulkRequest { container, op } = request;
+        let doc = container.doc();
+        let label = self.container_label(container);
+        self.warm_doc(doc);
+        self.warm_doc(Doc::Store);
+        let outcome = match op {
+            BulkOp::Transfer(mode) => self.bulk_transfer(container, mode),
+            BulkOp::Clear => self.bulk_clear(container),
+        };
+        match outcome {
+            Ok(BulkDone::Transferred(summary)) if summary.is_noop() => {
+                toasts.info(format!(
+                    "nothing to {op} from the {label}: {} duplicate(s) left in place",
+                    summary.duplicates
+                ));
+            }
+            Ok(BulkDone::Transferred(summary)) => {
+                self.mark_edited(Doc::Store);
+                if op == BulkOp::Transfer(Mode::Move) {
+                    self.mark_edited(doc);
+                }
+                self.write_order.prioritize(Doc::Store);
+                toasts.info(format!(
+                    "{} {} item(s) from the {label} into the vault store; {} duplicate(s) \
+                     left in place",
+                    op.done(),
+                    summary.moved.len(),
+                    summary.duplicates
+                ));
+            }
+            Ok(BulkDone::Cleared(summary)) if summary.is_noop() => {
+                toasts.info(format!("the {label} was already empty"));
+            }
+            Ok(BulkDone::Cleared(summary)) => {
+                self.mark_edited(doc);
+                self.write_order.prioritize(doc);
+                toasts.info(format!("emptied the {label}: {summary}"));
+            }
+            Err(error) => toasts.error(format!("{op} on the {label} failed: {error}")),
+        }
+        self.revalidate_selection();
+    }
+
+    /// Every item of a container into the store — lifted out of it
+    /// or cloned — under the bulk-duplicates rule.
+    fn bulk_transfer(&mut self, container: Container, mode: Mode) -> Result<BulkDone, ApplyError> {
+        let rule = self.settings.bulk_duplicates;
+        let at = now();
+        let summary = match container {
+            Container::TransferStash(tab) => match mode {
+                Mode::Move => bulk::vault_tab(
+                    self.stash.stash_mut(),
+                    &self.campaign,
+                    tab,
+                    self.store.store_mut(),
+                    &self.facts,
+                    rule,
+                    at,
+                ),
+                Mode::Copy => bulk::copy_tab(
+                    self.stash.stash(),
+                    &self.campaign,
+                    tab,
+                    self.store.store_mut(),
+                    &self.facts,
+                    rule,
+                    at,
+                ),
+            }?,
+            Container::Sack { character, sack } => {
+                let (realm, file) = editable_character(&mut self.characters, character)?;
+                match mode {
+                    Mode::Move => bulk::vault_sack(
+                        file,
+                        realm,
+                        sack,
+                        self.store.store_mut(),
+                        &self.facts,
+                        rule,
+                        at,
+                    ),
+                    Mode::Copy => bulk::copy_sack(
+                        file,
+                        realm,
+                        sack,
+                        self.store.store_mut(),
+                        &self.facts,
+                        rule,
+                        at,
+                    ),
+                }?
+            }
+            Container::CharacterStash { character, tab } => {
+                let (realm, file) = editable_character(&mut self.characters, character)?;
+                match mode {
+                    Mode::Move => bulk::vault_player_tab(
+                        file,
+                        realm,
+                        tab,
+                        self.store.store_mut(),
+                        &self.facts,
+                        rule,
+                        at,
+                    ),
+                    Mode::Copy => bulk::copy_player_tab(
+                        file,
+                        realm,
+                        tab,
+                        self.store.store_mut(),
+                        &self.facts,
+                        rule,
+                        at,
+                    ),
+                }?
+            }
+        };
+        Ok(BulkDone::Transferred(summary))
+    }
+
+    /// Empties a stash tab; a sack is never offered a "Delete all",
+    /// so one asked for is refused loudly rather than emptied.
+    fn bulk_clear(&mut self, container: Container) -> Result<BulkDone, ApplyError> {
+        let summary = match container {
+            Container::TransferStash(tab) => {
+                bulk::clear_tab(&mut self.stash.stash_mut().tabs, tab)?
+            }
+            Container::Sack { character, .. } => {
+                return Err(ApplyError::NotAnItemContainer(Doc::Character(character)));
+            }
+            Container::CharacterStash { character, tab } => {
+                let (_, file) = editable_character(&mut self.characters, character)?;
+                let tabs = &mut file.stash_mut().ok_or(TransferError::NoPlayerStash)?.tabs;
+                bulk::clear_tab(tabs, tab)?
+            }
+        };
+        Ok(BulkDone::Cleared(summary))
     }
 
     /// Every document, in default write order.
@@ -1131,6 +1333,12 @@ impl World {
         }
         if let Some(sync) = frame.reagent_sync {
             self.set_reagent_sync(sync, config, toasts);
+        }
+        if let Some(rule) = frame.bulk_duplicates {
+            self.set_bulk_duplicates(rule, config, toasts);
+        }
+        if let Some(request) = frame.bulk {
+            self.bulk(request, toasts);
         }
         if let Some((slot, money)) = frame.set_money {
             self.set_money(slot, money, toasts);

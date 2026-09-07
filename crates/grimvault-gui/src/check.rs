@@ -139,8 +139,10 @@ fn print_orders(settings: &Settings, world: &LoadedWorld) {
         ReagentSync::On => "on",
         ReagentSync::Off => "off",
     };
+    let rule = settings.bulk_duplicates;
     println!(
-        "\nstanding orders: {} tab(s) nominated for auto-move, {} for purge; component sync {sync}",
+        "\nstanding orders: {} tab(s) nominated for auto-move, {} for purge; component sync \
+         {sync}; bulk duplicates {rule}",
         settings.auto_move.len(),
         settings.purge_duplicates.len()
     );
@@ -152,7 +154,7 @@ fn print_orders(settings: &Settings, world: &LoadedWorld) {
                 Err(skipped) => skipped.to_string(),
                 Ok((tabs, tab)) => match order {
                     StandingOrder::AutoMove => {
-                        match bulk::plan_for(tabs, tab, store, &world.game) {
+                        match bulk::plan_for(tabs, tab, store, &world.game, rule) {
                             Ok(plan) => format!(
                                 "would move {} item(s), leaving {} duplicate(s)",
                                 plan.moving.len(),

@@ -1,6 +1,7 @@
 //! The persisted setup — where the game and the saves live, which
-//! tabs empty themselves into the vault, and whether the component
-//! storage syncs — as one self-describing JSON file (`settings.json`,
+//! tabs empty themselves into the vault, whether the component
+//! storage syncs, and whether bulk moves admit seed duplicates — as
+//! one self-describing JSON file (`settings.json`,
 //! format tag [`FORMAT_TAG`]) under the app's config directory, shared
 //! by the desktop app and the command-line examples so a path given
 //! once serves every tool. Pure: parsing and serializing only; reading
@@ -151,6 +152,28 @@ pub enum ReagentSync {
     Off,
 }
 
+/// Whether a bulk move or copy into the store — a tab's "Move all" /
+/// "Copy all" buttons and the auto-move standing order alike — admits
+/// an item the store already holds under the same record and roll
+/// seed. Single drags, double-clicks and right-clicks are deliberate
+/// acts and always land.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BulkDuplicates {
+    #[default]
+    Skip,
+    Allow,
+}
+
+impl fmt::Display for BulkDuplicates {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Skip => "skipped",
+            Self::Allow => "allowed",
+        })
+    }
+}
+
 /// What setup decided, the campaign the user selected last, and the
 /// vault's standing orders. Raw paths: the directories are
 /// re-validated against the platform markers every time they are
@@ -158,7 +181,7 @@ pub enum ReagentSync {
 /// a preference, not a fact about the saves: a shell re-checks that it
 /// still exists before opening it. A file written before a field
 /// existed simply has none: no campaign, no tab nominated for either
-/// order, the sync on.
+/// order, the sync on, bulk duplicates skipped.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -172,6 +195,8 @@ pub struct Settings {
     pub purge_duplicates: Vec<AutoMoveTab>,
     #[serde(default)]
     pub sync_reagents: ReagentSync,
+    #[serde(default)]
+    pub bulk_duplicates: BulkDuplicates,
 }
 
 /// Why a settings document was refused.
@@ -196,7 +221,7 @@ struct SettingsFile {
 
 impl Settings {
     /// The settings for two directories: no campaign remembered, no
-    /// tab nominated, the sync on.
+    /// tab nominated, the sync on, bulk duplicates skipped.
     #[must_use]
     pub fn for_dirs(game_dir: PathBuf, save_dir: PathBuf) -> Self {
         Self {
@@ -206,6 +231,7 @@ impl Settings {
             auto_move: Vec::new(),
             purge_duplicates: Vec::new(),
             sync_reagents: ReagentSync::default(),
+            bulk_duplicates: BulkDuplicates::default(),
         }
     }
 
@@ -220,6 +246,7 @@ impl Settings {
             auto_move: self.auto_move.clone(),
             purge_duplicates: self.purge_duplicates.clone(),
             sync_reagents: self.sync_reagents,
+            bulk_duplicates: self.bulk_duplicates,
         }
     }
 
@@ -336,6 +363,7 @@ mod tests {
         assert!(text.contains("\"version\": 1"), "{text}");
         assert!(text.contains("\"gameDir\""), "{text}");
         assert!(text.contains("\"syncReagents\": \"on\""), "{text}");
+        assert!(text.contains("\"bulkDuplicates\": \"skip\""), "{text}");
         assert!(text.ends_with('\n'));
         assert!(!text.contains("campaign"), "{text}");
         assert_eq!(Settings::parse(&bytes).unwrap(), sample());
@@ -383,6 +411,7 @@ mod tests {
         settings.nominate(StandingOrder::AutoMove, mod_tab());
         settings.nominate(StandingOrder::PurgeDuplicates, own_tab());
         settings.sync_reagents = ReagentSync::Off;
+        settings.bulk_duplicates = BulkDuplicates::Allow;
         assert_eq!(settings.auto_move, vec![mod_tab(), own_tab()]);
         assert_eq!(settings.purge_duplicates, vec![own_tab()]);
         assert_eq!(
@@ -406,6 +435,7 @@ mod tests {
         );
         assert!(text.contains("\"purgeDuplicates\": ["), "{text}");
         assert!(text.contains("\"syncReagents\": \"off\""), "{text}");
+        assert!(text.contains("\"bulkDuplicates\": \"allow\""), "{text}");
         assert_eq!(Settings::parse(&bytes).unwrap(), settings);
         settings.withdraw(StandingOrder::AutoMove, &mod_tab());
         assert_eq!(settings.auto_move, vec![own_tab()]);
@@ -422,6 +452,7 @@ mod tests {
         assert_eq!(moved.purge_duplicates, vec![mod_tab()]);
         assert_eq!(moved.campaign, Some(loot_ascension()));
         assert_eq!(moved.sync_reagents, ReagentSync::Off);
+        assert_eq!(moved.bulk_duplicates, BulkDuplicates::Allow);
     }
 
     #[test]
@@ -433,6 +464,7 @@ mod tests {
         assert!(settings.auto_move.is_empty());
         assert!(settings.purge_duplicates.is_empty());
         assert_eq!(settings.sync_reagents, ReagentSync::On);
+        assert_eq!(settings.bulk_duplicates, BulkDuplicates::Skip);
         let named = Settings::parse(
             br#"{"format":"grimvault-settings","version":1,"gameDir":"/g","saveDir":"/s","purgeDuplicates":[{"kind":"transferStash","campaign":"main","tab":2}]}"#,
         )

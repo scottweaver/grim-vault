@@ -80,6 +80,7 @@ use grimvault_core::item::Item;
 use grimvault_core::loaded::Loaded;
 use grimvault_core::reagents::{ReagentKind, ReagentKinds};
 use grimvault_core::respec::{Reset, RespecRules};
+use grimvault_core::settings::BulkDuplicates;
 use grimvault_core::socket::{self, Part, Socket};
 use grimvault_core::store::{ItemOrigin, StoredItem, StoredItemId, Timestamp, VaultStore};
 use grimvault_core::transfer::{self, ItemIndex, ReagentIndex, SackIndex, TabIndex};
@@ -346,9 +347,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 tab,
                 &mut store,
                 &game_data,
+                BulkDuplicates::Skip,
                 now()?,
             )?;
-            println!("auto-move of tab {tab}: {summary}");
+            println!("auto-move of tab {tab}, duplicates skipped: {summary}");
             if summary.is_noop() {
                 println!("nothing to write");
             } else {
@@ -785,9 +787,10 @@ fn run_character(
                 tab,
                 store,
                 game_data,
+                BulkDuplicates::Skip,
                 now()?,
             )?;
-            println!("auto-move of {character}'s stash tab {tab}: {summary}");
+            println!("auto-move of {character}'s stash tab {tab}, duplicates skipped: {summary}");
             if summary.is_noop() {
                 println!("nothing to write");
             } else {
