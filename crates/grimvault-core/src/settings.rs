@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::campaign::Campaign;
 use crate::platform::app_config_dir;
 
 /// Environment variable that replaces the platform config directory.
@@ -76,14 +77,19 @@ impl ConfigDir {
     }
 }
 
-/// What setup decided. Raw paths: the directories are re-validated
-/// against the platform markers every time they are used, because a
-/// mount can vanish between sessions.
+/// What setup decided, and the campaign the user selected last. Raw
+/// paths: the directories are re-validated against the platform
+/// markers every time they are used, because a mount can vanish
+/// between sessions. The campaign is a preference, not a fact about
+/// the saves: a shell re-checks that it still exists before opening
+/// it, and a file written before the field existed simply has none.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub game_dir: PathBuf,
     pub save_dir: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub campaign: Option<Campaign>,
 }
 
 /// Why a settings document was refused.
@@ -148,12 +154,18 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::campaign::ModName;
 
     fn sample() -> Settings {
         Settings {
             game_dir: PathBuf::from("/games/Grim Dawn"),
             save_dir: PathBuf::from("/saves/save"),
+            campaign: None,
         }
+    }
+
+    fn loot_ascension() -> Campaign {
+        Campaign::Mod(ModName::parse("LootAscension").unwrap())
     }
 
     #[test]
@@ -167,7 +179,42 @@ mod tests {
         assert!(text.contains("\"version\": 1"), "{text}");
         assert!(text.contains("\"gameDir\""), "{text}");
         assert!(text.ends_with('\n'));
+        assert!(!text.contains("campaign"), "{text}");
         assert_eq!(Settings::parse(&bytes).unwrap(), sample());
+    }
+
+    #[test]
+    fn the_remembered_campaign_round_trips_and_an_older_file_has_none() {
+        let remembered = Settings {
+            campaign: Some(loot_ascension()),
+            ..sample()
+        };
+        let bytes = remembered.to_json();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert!(text.contains("\"campaign\": \"LootAscension\""), "{text}");
+        assert_eq!(Settings::parse(&bytes).unwrap(), remembered);
+        assert_eq!(
+            Settings::parse(
+                br#"{"format":"grimvault-settings","version":1,"gameDir":"a","saveDir":"b","campaign":"main"}"#
+            )
+            .unwrap()
+            .campaign,
+            Some(Campaign::Main)
+        );
+        assert_eq!(
+            Settings::parse(
+                br#"{"format":"grimvault-settings","version":1,"gameDir":"a","saveDir":"b"}"#
+            )
+            .unwrap()
+            .campaign,
+            None
+        );
+        assert!(matches!(
+            Settings::parse(
+                br#"{"format":"grimvault-settings","version":1,"gameDir":"a","saveDir":"b","campaign":"user"}"#
+            ),
+            Err(SettingsProblem::Json(_))
+        ));
     }
 
     #[test]
