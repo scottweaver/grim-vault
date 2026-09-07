@@ -5,12 +5,12 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-07 (FEATURES.md 31 reworked on `main` at
-`35301b0` — the learned-blueprint sync now records knowledge in the
-store's `blueprints` list instead of making items, after the user
-narrowed it to "just detect and store"; 506 tests; fast-forwarded and
-pushed; the first cut at `6d51441`, 30 at `0d4efe2`, 28–29 at
-`f400222`, 25–27 at `a22ac10` earlier the same evening)
+Last updated: 2026-09-07 (wrap-up after FEATURES.md 25–31 landed
+through the evening — 31 reworked at `35301b0` so the
+learned-blueprint sync records knowledge in the store's `blueprints`
+list instead of making items; 506 tests; every landing fast-forwarded
+and pushed; the ten merged branches deleted by `/wrap-up`, `main`
+the only branch anywhere)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
@@ -62,10 +62,11 @@ now on (`git push`, never force). PROJECT.md still binds
 switching to `tracker: github` (`/bootstrap-project` edit mode, the
 commented block is pre-filled) and to PR-based landing per
 METHODOLOGIES is the user's call (Blocked / waiting). No track is in
-flight, and `main` is the only branch: the three landed branches,
-their `worktree-agent-*` refs, and the `.claude/worktrees/agent-*`
-checkouts were deleted on the user's say-so once everything was
-fast-forwarded. **The acceptance run is under way, results unknown
+flight, and `main` is the only branch, locally and on the remote:
+the evening's five feature branches and their five `docs/state-post-*`
+branches were deleted by the user's `/wrap-up` on 2026-09-07 once
+everything was fast-forwarded, as the three earlier track branches
+and their worktrees had been. **The acceptance run is under way, results unknown
 here:** the user relaunched the `f6bd3d0` build at 14:49 (pid 26200
 at checkpoint) and at 14:50 nominated LootAscension stash tabs 2 and
 3 for *purge* as well as auto-move under `bulkDuplicates: skip`; the
@@ -243,12 +244,8 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at the `docs/state-post-blueprint-knowledge` fast-forward — every FEATURES.md item through 31; 506 tests green; pushed, `origin/main` in sync |
-| `feat/blueprint-sync`, `docs/state-post-features-31` | FEATURES.md 31, first cut | landed by fast-forward at `6d51441`; fully merged, awaiting the user's say-so to delete (no worktrees) |
-| `feat/blueprint-knowledge`, `docs/state-post-blueprint-knowledge` | FEATURES.md 31, narrowed | landed by fast-forward at `35301b0`; fully merged, awaiting the user's say-so to delete (no worktrees) |
-| `feat/store-groups`, `docs/state-post-features-30` | FEATURES.md 30 | landed by fast-forward at `0d4efe2`; fully merged, awaiting the user's say-so to delete (no worktrees) |
-| `feat/store-location-and-settings`, `docs/state-post-features-25-27` | FEATURES.md 25–27 | landed by fast-forward at `a22ac10`; fully merged, awaiting the user's say-so to delete (no worktrees) |
-| `feat/material-bucket-and-stacks`, `docs/state-post-features-28-29` | FEATURES.md 28–29 | landed by fast-forward at `f400222`; fully merged, awaiting the user's say-so to delete (no worktrees) |
+| `main` | trunk | at the `docs/state-post-wrap-up-2026-09-07` fast-forward — every FEATURES.md item through 31; 506 tests green; pushed, `origin/main` in sync |
+| *(none)* | — | the five feature branches of 2026-09-07 evening (25–27, 28–29, 30, 31 twice) and their five `docs/state-post-*` branches were deleted by `/wrap-up` on 2026-09-07 after fast-forwarding; no worktrees, nothing on the remote but `main` |
 
 ## Next up
 
