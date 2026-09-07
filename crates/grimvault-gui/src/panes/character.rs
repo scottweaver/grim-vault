@@ -117,6 +117,14 @@ pub fn show(
         if view.selected != before {
             view.tab = CharacterTab::Sack(0);
             view.confirm = None;
+            if let Some(CharacterEntry::Loaded(doc)) = characters.get(view.selected)
+                && doc.writable() == Writable::Yes
+            {
+                frame.touched = Some(Container::Sack {
+                    character: CharacterSlot::new(view.selected),
+                    sack: SackIndex::MAIN,
+                });
+            }
         }
         if let Some(CharacterEntry::Loaded(doc)) = characters.get(view.selected) {
             access_badge(ui, doc, cx);

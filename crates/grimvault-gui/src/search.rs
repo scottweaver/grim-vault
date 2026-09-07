@@ -738,7 +738,8 @@ fn table(
 
 /// One row: the tile, the coloured name, rarity, requirements, type,
 /// and the stat lines — plus the gestures: click selects, drag lifts
-/// the item like a tile, double-click asks to reveal it in its bucket.
+/// the item like a tile, double-click asks to reveal it in its bucket,
+/// right-click moves it back into the game as a tile's would.
 fn row(
     table_row: &mut TableRow<'_, '_>,
     indexed: &Indexed,
@@ -819,6 +820,9 @@ fn row(
             footprint,
             grab: ghost / 2.0,
         });
+    }
+    if response.secondary_clicked() && cx.drag.is_none() {
+        frame.right_click = Some(source);
     }
     if response.double_clicked() && cx.drag.is_none() {
         return Some(stored.id());

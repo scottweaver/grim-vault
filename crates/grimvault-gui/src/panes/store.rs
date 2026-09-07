@@ -401,6 +401,9 @@ fn store_tile(
     if response.double_clicked() && cx.drag.is_none() {
         frame.double_click = Some(source);
     }
+    if response.secondary_clicked() && cx.drag.is_none() {
+        frame.right_click = Some(source);
+    }
 }
 
 /// The item tooltip plus the store's own line: the stored id and

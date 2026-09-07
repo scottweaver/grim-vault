@@ -260,6 +260,9 @@ fn reagent_row(
     if response.double_clicked() && cx.drag.is_none() {
         frame.double_click = Some(source);
     }
+    if response.secondary_clicked() && cx.drag.is_none() {
+        frame.right_click = Some(source);
+    }
 }
 
 /// The resolved name after the icon and the count badge at the right

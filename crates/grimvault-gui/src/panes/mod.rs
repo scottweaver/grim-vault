@@ -63,6 +63,12 @@ pub struct DragFrame {
     pub begin: Option<DragState>,
     pub candidate: Option<DropCandidate>,
     pub double_click: Option<DragSource>,
+    /// An item right-clicked: a quick move between the game and the
+    /// vault, a copy with Shift held.
+    pub right_click: Option<DragSource>,
+    /// A game-side container the user selected this frame — its tab,
+    /// or the character whose sack now shows.
+    pub touched: Option<Container>,
     /// A character's iron bits, as the user set them.
     pub set_money: Option<(CharacterSlot, u32)>,
     /// A GD Stash export the user picked to import into the store.
@@ -294,6 +300,9 @@ pub fn container_tab(
     frame: &mut DragFrame,
 ) -> Response {
     let response = ui.selectable_label(selected, label);
+    if response.clicked() {
+        frame.touched = Some(container);
+    }
     if cx.drag.is_some() && response.contains_pointer() {
         outline(ui, response.rect, Fit::Fits);
         frame.candidate = Some(DropCandidate {
@@ -357,14 +366,25 @@ fn report_gestures(
             grab: origin - geometry.cell_rect(entry.cells).min,
         });
     }
-    if response.double_clicked()
-        && cx.drag.is_none()
-        && let Some(slot) = response
-            .hover_pos()
+    let occupant_under = |pointer: Option<Pos2>| {
+        pointer
             .and_then(|pointer| geometry.cell_at(pointer))
             .and_then(|cell| occupant_at(rects, cell))
+    };
+    if response.double_clicked()
+        && cx.drag.is_none()
+        && let Some(slot) = occupant_under(response.hover_pos())
     {
         frame.double_click = Some(DragSource::Grid {
+            container,
+            index: entries[slot].index,
+        });
+    }
+    if response.secondary_clicked()
+        && cx.drag.is_none()
+        && let Some(slot) = occupant_under(response.interact_pointer_pos())
+    {
+        frame.right_click = Some(DragSource::Grid {
             container,
             index: entries[slot].index,
         });

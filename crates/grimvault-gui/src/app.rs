@@ -14,6 +14,7 @@ use egui::{
 };
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gds;
+use grimvault_core::reagents::ReagentKind;
 use grimvault_core::respec::{Reset, RespecRules};
 use grimvault_core::store::Timestamp;
 use univault_io::read_verified;
@@ -27,8 +28,8 @@ use crate::documents::{
     StoreDoc, StoreOpenError,
 };
 use crate::drag::{
-    self, Applied, Containers, DragSource, DragState, DropTarget, Fit, Landing, Mode, Move,
-    OpenCharacter,
+    self, Applied, Container, Containers, DragSource, DragState, DropTarget, Fit, Landing,
+    LastActive, Mode, Move, OpenCharacter,
 };
 use crate::facts::FactsCache;
 use crate::grid::CELL_PX;
@@ -404,6 +405,16 @@ fn mode_of(modifiers: egui::Modifiers) -> Mode {
     }
 }
 
+/// Whether a right-click copies: Shift, the gesture's own modifier,
+/// or either key that copies on a drop.
+fn right_click_mode(modifiers: egui::Modifiers) -> Mode {
+    if modifiers.shift {
+        Mode::Copy
+    } else {
+        mode_of(modifiers)
+    }
+}
+
 /// Everything the Ready phase holds.
 pub struct World {
     paths: WorldPaths,
@@ -424,6 +435,7 @@ pub struct World {
     search_cache: SearchCache,
     ui_state: PersistedUiState,
     character_view: CharacterView,
+    last_active: LastActive,
     drag: Option<DragState>,
     autosave: Autosave,
     watcher: Result<Watcher, std::io::Error>,
@@ -478,6 +490,7 @@ impl World {
             search_cache: SearchCache::default(),
             ui_state,
             character_view: CharacterView::opening_on(loaded.newest_character),
+            last_active: LastActive::default(),
             drag: None,
             autosave: Autosave::default(),
             watcher,
@@ -540,6 +553,7 @@ impl World {
         self.illusions = shared.illusions;
         self.campaign = next;
         self.stash_view = StashView::default();
+        self.last_active.forget();
         for warning in shared.warnings {
             toasts.error(warning);
         }
@@ -563,7 +577,8 @@ impl World {
 
     fn show(&mut self, ui: &mut Ui, theme: &Theme, config: &ConfigDir, toasts: &mut Toasts) {
         let mut frame = DragFrame::default();
-        let mode = mode_of(ui.input(|input| input.modifiers));
+        let modifiers = ui.input(|input| input.modifiers);
+        let mode = mode_of(modifiers);
         self.search_shortcuts(ui.ctx());
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui, theme, toasts));
         egui::Panel::bottom("characters")
@@ -639,7 +654,7 @@ impl World {
             })
             .inner;
         self.show_conflict_modal(ui.ctx(), theme, toasts);
-        self.finish_frame(ui.ctx(), frame, mode, &theme.palette, toasts);
+        self.finish_frame(ui.ctx(), frame, modifiers, &theme.palette, toasts);
         if let Some(next) = switch {
             self.switch_campaign(next, config, toasts);
         }
@@ -707,6 +722,8 @@ impl World {
             ui.separator();
             ui.weak("hold Alt or ⌘/Ctrl while dropping to copy");
             ui.separator();
+            ui.weak("right-click an item to move it between the game and the vault; hold Shift to copy");
+            ui.separator();
             ui.weak(format!(
                 "game data: {} layers, {} item archives, {} mods, {} of {} tile symbols",
                 self.report.databases,
@@ -724,16 +741,17 @@ impl World {
 
     /// Adopts a drag the panes began, paints the lifted item at the
     /// pointer, and commits or snaps back on release. Double-clicks
-    /// are moves too, and an iron-bits edit or a confirmed reset is
-    /// applied here.
+    /// and right-clicks are moves too, and an iron-bits edit or a
+    /// confirmed reset is applied here.
     fn finish_frame(
         &mut self,
         ctx: &egui::Context,
         frame: DragFrame,
-        mode: Mode,
+        modifiers: egui::Modifiers,
         palette: &Palette,
         toasts: &mut Toasts,
     ) {
+        let mode = mode_of(modifiers);
         if let Some((slot, money)) = frame.set_money {
             self.set_money(slot, money, toasts);
         }
@@ -746,13 +764,27 @@ impl World {
         if let Some(request) = frame.crafting {
             self.perform_crafting(request, toasts);
         }
+        if let Some(container) = frame.touched {
+            self.last_active.touch(container);
+        }
         if self.drag.is_none()
             && let Some(source) = frame.double_click
         {
-            let mv = drag::double_click(source, mode, self.stash_view.tab);
-            self.perform(mv, toasts);
+            let home = Container::TransferStash(self.stash_view.tab);
+            self.perform(drag::quick_move(source, mode, home, None), toasts);
+        }
+        if self.drag.is_none()
+            && let Some(source) = frame.right_click
+        {
+            let mode = right_click_mode(modifiers);
+            let home = self.last_active.container_or(self.stash_view.tab);
+            let storage = self.storage_kind(source);
+            self.perform(drag::quick_move(source, mode, home, storage), toasts);
         }
         if self.drag.is_none() {
+            if let Some(begin) = &frame.begin {
+                self.last_active.touch_source(begin.source);
+            }
             self.drag = frame.begin;
         }
         let Some(state) = self.drag.clone() else {
@@ -845,6 +877,7 @@ impl World {
     /// `grimvault_core::transfer`; the shell only marks what changed
     /// and remembers which document is the move's destination.
     fn perform(&mut self, mv: Move, toasts: &mut Toasts) {
+        self.last_active.touch_move(mv);
         self.warm_for(mv);
         let now = now();
         let World {
@@ -915,6 +948,18 @@ impl World {
             }
             Ok(Applied::Unmoved) => {}
             Err(error) => toasts.error(error.to_string()),
+        }
+    }
+
+    /// The storage tab a right-clicked store item belongs in, `None`
+    /// for anything that is not a component or crafting material.
+    fn storage_kind(&mut self, source: DragSource) -> Option<ReagentKind> {
+        match source {
+            DragSource::Store(id) => {
+                let item = self.store.store().get(id)?.item();
+                self.facts.base(&self.game, item).reagent
+            }
+            DragSource::Grid { .. } | DragSource::Reagent { .. } => None,
         }
     }
 
@@ -1519,6 +1564,14 @@ mod tests {
         assert_eq!(mode_of(egui::Modifiers::ALT), Mode::Copy);
         assert_eq!(mode_of(egui::Modifiers::COMMAND), Mode::Copy);
         assert_eq!(mode_of(egui::Modifiers::SHIFT), Mode::Move);
+    }
+
+    #[test]
+    fn shift_or_either_copy_key_makes_a_right_click_copy() {
+        assert_eq!(right_click_mode(egui::Modifiers::NONE), Mode::Move);
+        assert_eq!(right_click_mode(egui::Modifiers::SHIFT), Mode::Copy);
+        assert_eq!(right_click_mode(egui::Modifiers::ALT), Mode::Copy);
+        assert_eq!(right_click_mode(egui::Modifiers::COMMAND), Mode::Copy);
     }
 }
 

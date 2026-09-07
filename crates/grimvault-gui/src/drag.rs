@@ -173,19 +173,73 @@ impl Move {
     }
 }
 
-/// What a double-click asks for: a grid item or a storage row goes to
-/// the store, a stored item takes the first fit in the current
-/// transfer-stash tab.
+/// What a double-click or a right-click asks for: a grid item or a
+/// storage row goes to the store; a stored item takes the first fit
+/// in `home` — or, when it is a component or crafting material
+/// (`storage` names its tab), merges into the storage.
 #[must_use]
-pub fn double_click(source: DragSource, mode: Mode, current_tab: TabIndex) -> Move {
-    let target = match source {
-        DragSource::Grid { .. } | DragSource::Reagent { .. } => DropTarget::Store,
-        DragSource::Store(_) => DropTarget::Container(Container::TransferStash(current_tab)),
+pub fn quick_move(
+    source: DragSource,
+    mode: Mode,
+    home: Container,
+    storage: Option<ReagentKind>,
+) -> Move {
+    let target = match (source, storage) {
+        (DragSource::Grid { .. } | DragSource::Reagent { .. }, Some(_) | None) => DropTarget::Store,
+        (DragSource::Store(_), Some(kind)) => DropTarget::Reagents(kind),
+        (DragSource::Store(_), None) => DropTarget::Container(home),
     };
     Move {
         source,
         target,
         mode,
+    }
+}
+
+/// The game-side grid the user touched last — selected its tab or the
+/// character showing it, lifted from it, dropped onto it, or
+/// right-clicked in it — which is where a right-clicked store item
+/// goes back to. Nothing touched yet means the transfer-stash tab
+/// showing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LastActive(Option<Container>);
+
+impl LastActive {
+    pub fn touch(&mut self, container: Container) {
+        self.0 = Some(container);
+    }
+
+    /// Records the grid an item was lifted from or right-clicked in;
+    /// the store and the storage are not grids.
+    pub fn touch_source(&mut self, source: DragSource) {
+        match source {
+            DragSource::Grid { container, .. } => self.touch(container),
+            DragSource::Store(_) | DragSource::Reagent { .. } => {}
+        }
+    }
+
+    /// Records the grid ends of a move, the target last so a drop's
+    /// destination is the latest touch.
+    pub fn touch_move(&mut self, mv: Move) {
+        self.touch_source(mv.source);
+        match mv.target {
+            DropTarget::Cell { container, .. } | DropTarget::Container(container) => {
+                self.touch(container);
+            }
+            DropTarget::Store | DropTarget::Reagents(_) => {}
+        }
+    }
+
+    /// Forgets the touch: the campaign changed under the containers.
+    pub fn forget(&mut self) {
+        self.0 = None;
+    }
+
+    /// Where a store item goes back to: the last touch, else the
+    /// transfer-stash tab `showing`.
+    #[must_use]
+    pub fn container_or(self, showing: TabIndex) -> Container {
+        self.0.unwrap_or(Container::TransferStash(showing))
     }
 }
 
@@ -950,25 +1004,68 @@ mod tests {
     }
 
     #[test]
-    fn double_clicks_go_to_the_store_or_the_current_tab() {
+    fn quick_moves_go_to_the_store_the_home_grid_or_the_storage() {
         let from_grid = grid(MAIN_BAG, 0);
         let from_store = DragSource::Store(StoredItemId::new(4));
         let from_row = DragSource::Reagent {
             index: ROW0,
             count: 5,
         };
+        let component = Some(ReagentKind::Component);
         assert_eq!(
-            double_click(from_grid, Mode::Move, TAB1),
+            quick_move(from_grid, Mode::Move, STASH1, None),
             mv(from_grid, DropTarget::Store)
         );
         assert_eq!(
-            double_click(from_row, Mode::Copy, TAB1),
+            quick_move(from_grid, Mode::Move, STASH1, component),
+            mv(from_grid, DropTarget::Store)
+        );
+        assert_eq!(
+            quick_move(from_row, Mode::Copy, STASH1, component),
             copy(from_row, DropTarget::Store)
         );
         assert_eq!(
-            double_click(from_store, Mode::Move, TAB1),
+            quick_move(from_store, Mode::Move, STASH1, None),
             mv(from_store, DropTarget::Container(STASH1))
         );
+        assert_eq!(
+            quick_move(from_store, Mode::Copy, OWN0, None),
+            copy(from_store, DropTarget::Container(OWN0))
+        );
+        assert_eq!(
+            quick_move(from_store, Mode::Move, STASH1, component),
+            mv(from_store, DropTarget::Reagents(ReagentKind::Component))
+        );
+    }
+
+    #[test]
+    fn the_last_active_grid_is_the_latest_touch_and_falls_back_to_the_stash_tab() {
+        let from_store = DragSource::Store(StoredItemId::new(4));
+        let from_row = DragSource::Reagent {
+            index: ROW0,
+            count: 1,
+        };
+        let mut last = LastActive::default();
+        assert_eq!(last.container_or(TAB1), STASH1);
+        last.touch(MAIN_BAG);
+        assert_eq!(last.container_or(TAB1), MAIN_BAG);
+        last.touch_source(grid(OWN0, 0));
+        assert_eq!(last.container_or(TAB1), OWN0);
+        last.touch_source(from_store);
+        last.touch_source(from_row);
+        assert_eq!(last.container_or(TAB1), OWN0);
+        last.touch_move(mv(grid(OWN0, 0), cell(STASH0, 1, 1)));
+        assert_eq!(last.container_or(TAB1), STASH0);
+        last.touch_move(mv(from_store, DropTarget::Container(MAIN_BAG)));
+        assert_eq!(last.container_or(TAB1), MAIN_BAG);
+        last.touch_move(mv(from_row, DropTarget::Store));
+        last.touch_move(copy(
+            from_store,
+            DropTarget::Reagents(ReagentKind::Component),
+        ));
+        assert_eq!(last.container_or(TAB1), MAIN_BAG);
+        last.forget();
+        assert_eq!(last.container_or(TAB0), STASH0);
     }
 
     #[test]
