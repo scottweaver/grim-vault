@@ -9,13 +9,14 @@ use egui::{Ui, Vec2};
 use grimvault_core::block::StashTab;
 use grimvault_core::campaign::Campaign;
 use grimvault_core::reagents::ReagentKind;
+use grimvault_core::settings::AutoMoveTab;
 use grimvault_core::transfer::TabIndex;
 use univault_ui::theme::Theme;
 
 use super::crafting::{self, CraftingView};
 use super::{
-    DragFrame, DropCandidate, GridSpec, Interaction, PaneCtx, container_tab, grid_surface, outline,
-    reagents, stash_entries,
+    DragFrame, DropCandidate, GridSpec, Interaction, PaneCtx, auto_move_toggle, container_tab,
+    grid_surface, outline, reagents, stash_entries,
 };
 use crate::crafting::{Blueprints, Crafting, IllusionCollection};
 use crate::documents::{Reagents, StashDoc};
@@ -167,7 +168,14 @@ pub fn show(
         crafting_tabs(ui, blueprints, illusions, view);
     });
     match view.showing {
-        Showing::Stash => show_tab(ui, stash.tabs.as_slice(), view, cx, frame),
+        Showing::Stash => show_tab(
+            ui,
+            selection.campaign,
+            stash.tabs.as_slice(),
+            view,
+            cx,
+            frame,
+        ),
         Showing::Reagents(kind) => {
             reagents::show(ui, storage, kind, &mut view.reagent_amount, cx, frame);
         }
@@ -183,6 +191,7 @@ pub fn show(
 
 fn show_tab(
     ui: &mut Ui,
+    campaign: &Campaign,
     tabs: &[StashTab],
     view: &StashView,
     cx: &mut PaneCtx<'_>,
@@ -195,12 +204,24 @@ fn show_tab(
         ui.label("The stash has no tabs.");
         return;
     };
-    ui.label(format!(
-        "{}×{} cells · {} items",
-        tab.width,
-        tab.height,
-        tab.items.len()
-    ));
+    ui.horizontal_wrapped(|ui| {
+        ui.label(format!(
+            "{}×{} cells · {} items",
+            tab.width,
+            tab.height,
+            tab.items.len()
+        ));
+        ui.separator();
+        auto_move_toggle(
+            ui,
+            AutoMoveTab::TransferStash {
+                campaign: campaign.clone(),
+                tab: view.tab,
+            },
+            cx,
+            frame,
+        );
+    });
     let entries = stash_entries(tab, cx);
     let unresolved = entries
         .iter()

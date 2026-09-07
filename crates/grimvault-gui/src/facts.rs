@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use grimvault_core::bucket::Bucket;
+use grimvault_core::bulk::{Identities, Identity};
 use grimvault_core::facets::{AffixEvidence, AscensionTable, BaseEvidence, Facets};
 use grimvault_core::gamedata::{AffixInfo, BitmapPath, Footprint, GameData, ItemClass, Rarity};
 use grimvault_core::item::Item;
@@ -38,6 +39,7 @@ pub struct BaseFacts {
     pub bucket: Bucket,
     pub reagent: Option<ReagentKind>,
     pub evidence: BaseEvidence,
+    pub identity: Option<Identity>,
 }
 
 /// One item's facts: its base record's, the affix names the database
@@ -203,6 +205,12 @@ impl ReagentKinds for FactsCache {
     }
 }
 
+impl Identities for FactsCache {
+    fn identity(&self, item: &Item) -> Option<Identity> {
+        self.bases.get(&item.base_name)?.identity
+    }
+}
+
 fn resolve_base(game: &GameData, base_name: &str) -> BaseFacts {
     let Some(id) = RecordId::parse(base_name.to_string()) else {
         return unknown("<empty record>".to_string());
@@ -228,6 +236,7 @@ fn resolve_base(game: &GameData, base_name: &str) -> BaseFacts {
         bucket,
         reagent: info.reagent,
         evidence,
+        identity: Some(Identity::of(bucket, info.max_stack_size)),
     }
 }
 
@@ -243,6 +252,7 @@ fn unknown(name: String) -> BaseFacts {
         bucket: Bucket::Misc,
         reagent: None,
         evidence: BaseEvidence::Unresolved,
+        identity: None,
     }
 }
 

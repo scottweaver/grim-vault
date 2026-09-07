@@ -23,12 +23,14 @@ use grimvault_core::gamedata::{GameData, Rarity};
 use grimvault_core::gdc::Sack;
 use grimvault_core::item::Item;
 use grimvault_core::respec::Reset;
+use grimvault_core::settings::{AutoMoveTab, ReagentSync, Settings};
 use grimvault_core::socket::Socket;
 use grimvault_core::transfer::{Footprints, ItemIndex};
 use univault_engine::grid::CellRect;
 use univault_engine::ids::GridPos;
 use univault_ui::theme::Palette;
 
+use crate::automove::AutoMoveRequest;
 use crate::badges::{Badge, paint_badge};
 use crate::documents::CharacterSlot;
 use crate::drag::{self, Container, DragSource, DragState, DropTarget, Fit, Mode};
@@ -45,6 +47,8 @@ pub struct PaneCtx<'a> {
     pub facts: &'a mut FactsCache,
     pub icons: &'a mut IconCache,
     pub palette: &'a Palette,
+    /// The standing orders, for the toggles that show them.
+    pub settings: &'a Settings,
     pub drag: Option<&'a DragState>,
     /// Whether a drop this frame would move or copy, from the
     /// modifier keys held.
@@ -84,6 +88,32 @@ pub struct DragFrame {
     pub respec: Option<(CharacterSlot, Reset)>,
     /// An add, export, or import on a crafting list.
     pub crafting: Option<crate::crafting::Request>,
+    /// A tab nominated for auto-move, or withdrawn.
+    pub auto_move: Option<AutoMoveRequest>,
+    /// The component-storage sync switched on or off.
+    pub reagent_sync: Option<ReagentSync>,
+}
+
+const AUTO_MOVE_WHY: &str = "Every item in this tab is moved into the vault store whenever the app loads or \
+     reloads the file — after the game writes it, too — leaving the tab empty. An item the store \
+     already holds under the same record and roll seed is left in place; stacks are never \
+     treated as duplicates.";
+
+/// The auto-move toggle on a tab's header, reporting a change through
+/// the frame.
+pub fn auto_move_toggle(ui: &mut Ui, tab: AutoMoveTab, cx: &PaneCtx<'_>, frame: &mut DragFrame) {
+    let mut nominated = cx.settings.is_nominated(&tab);
+    if ui
+        .checkbox(&mut nominated, "Auto-move to vault")
+        .on_hover_text(AUTO_MOVE_WHY)
+        .changed()
+    {
+        frame.auto_move = Some(if nominated {
+            AutoMoveRequest::Nominate(tab)
+        } else {
+            AutoMoveRequest::Withdraw(tab)
+        });
+    }
 }
 
 /// How a grid takes part in drag-and-drop.

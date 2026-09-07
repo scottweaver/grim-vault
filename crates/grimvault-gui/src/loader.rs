@@ -36,6 +36,7 @@ use grimvault_core::facets::Symbol;
 use grimvault_core::gamedata::{
     GameData, LayerFiles, LayerSet, ModListing, mod_layers, shipped_layers,
 };
+use grimvault_core::settings::Settings;
 use thiserror::Error;
 use univault_engine::arc::{ArcError, ArcFile, ArcHeader, ArcIndex, Located};
 use univault_engine::arz::{ArzDialect, ArzError, ArzFile};
@@ -735,12 +736,13 @@ pub enum LoadEvent {
     Failed(LoadFailure),
 }
 
-/// A load in flight: the steps reported so far and the channel the
-/// outcome arrives on. `remembered` rides along so a load that fails
-/// hands the selection back to setup instead of forgetting it.
+/// A load in flight: the settings it was started from (whose
+/// remembered campaign it opens, and which ride along so a load that
+/// fails hands them back to setup), the steps reported so far, and
+/// the channel the outcome arrives on.
 pub struct LoadJob {
     pub paths: WorldPaths,
-    pub remembered: Option<Campaign>,
+    pub settings: Settings,
     pub steps: Vec<LoadStep>,
     events: Receiver<LoadEvent>,
 }
@@ -768,10 +770,10 @@ impl LoadJob {
 /// Runs [`load_world`] on a thread; every event asks `wake` to
 /// repaint so the progress panel advances without pointer motion.
 #[must_use]
-pub fn start(paths: WorldPaths, remembered: Option<Campaign>, wake: egui::Context) -> LoadJob {
+pub fn start(paths: WorldPaths, settings: Settings, wake: egui::Context) -> LoadJob {
     let (sender, events) = channel::<LoadEvent>();
     let job_paths = paths.clone();
-    let job_remembered = remembered.clone();
+    let job_remembered = settings.campaign.clone();
     let spawned = std::thread::Builder::new()
         .name("grimvault-load".into())
         .spawn(move || run(&job_paths, job_remembered.as_ref(), &sender, &wake));
@@ -783,14 +785,14 @@ pub fn start(paths: WorldPaths, remembered: Option<Campaign>, wake: egui::Contex
         }));
         return LoadJob {
             paths,
-            remembered,
+            settings,
             steps: Vec::new(),
             events,
         };
     }
     LoadJob {
         paths,
-        remembered,
+        settings,
         steps: Vec::new(),
         events,
     }

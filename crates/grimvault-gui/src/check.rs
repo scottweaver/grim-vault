@@ -2,24 +2,29 @@
 //! without a window. Runs the same [`load_world`] the app does and
 //! prints what the Ready phase would hold — layers and archives, every
 //! stash tab with its items named, the component / crafting-material
-//! storage by tab, the store, and every character — exiting non-zero
-//! on any error, a character that failed to open included.
+//! storage by tab, the store, every character, and — when run from
+//! the saved settings — what the standing orders (auto-move tabs, the
+//! component sync) would do on this load, as a dry run — exiting
+//! non-zero on any error, a character that failed to open included.
+//! Nothing is written.
 
 use std::error::Error;
 use std::path::Path;
 use std::process::ExitCode;
 
 use grimvault_core::blueprint::check_blueprint;
-use grimvault_core::campaign::Campaign;
+use grimvault_core::bulk;
 use grimvault_core::formulas::FormulaRead;
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::InventoryState;
 use grimvault_core::illusion::{IllusionCategory, audit};
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
+use grimvault_core::settings::{ReagentSync, Settings};
 use grimvault_core::transfer::SackIndex;
 use univault_engine::ids::RecordId;
 
+use crate::automove::{self, AutoMoveTarget};
 use crate::crafting::{Blueprints, IllusionCollection};
 use crate::documents::{CharacterDoc, CharacterEntry, Optional, Reagents, StoreDoc, Writable};
 use crate::facts::FactsCache;
@@ -29,8 +34,8 @@ use crate::settings::ConfigDir;
 use crate::setup::{GameDir, SaveDir};
 use grimvault_core::gdc::Realm;
 
-pub fn run(game: &Path, save: &Path, remembered: Option<&Campaign>) -> ExitCode {
-    match check(game, save, remembered) {
+pub fn run(game: &Path, save: &Path, settings: Option<&Settings>) -> ExitCode {
+    match check(game, save, settings) {
         Ok(0) => ExitCode::SUCCESS,
         Ok(problems) => {
             eprintln!("{problems} problem(s) found");
@@ -43,7 +48,8 @@ pub fn run(game: &Path, save: &Path, remembered: Option<&Campaign>) -> ExitCode 
     }
 }
 
-fn check(game: &Path, save: &Path, remembered: Option<&Campaign>) -> Result<usize, Box<dyn Error>> {
+fn check(game: &Path, save: &Path, settings: Option<&Settings>) -> Result<usize, Box<dyn Error>> {
+    let remembered = settings.and_then(|settings| settings.campaign.as_ref());
     let config = ConfigDir::resolve()?;
     println!("config dir: {}", config.path().display());
     let paths = WorldPaths {
@@ -118,7 +124,66 @@ fn check(game: &Path, save: &Path, remembered: Option<&Campaign>) -> Result<usiz
     print_store(&world.store, &mut facts, &world.game);
 
     problems += print_characters(&world, &paths.save, &mut facts);
+    if let Some(settings) = settings {
+        print_orders(settings, &world);
+    }
     Ok(problems)
+}
+
+/// The standing orders and what carrying them out would do to this
+/// load — the plan only; nothing moves.
+fn print_orders(settings: &Settings, world: &LoadedWorld) {
+    let sync = match settings.sync_reagents {
+        ReagentSync::On => "on",
+        ReagentSync::Off => "off",
+    };
+    println!(
+        "\nstanding orders: {} tab(s) nominated for auto-move; component sync {sync}",
+        settings.auto_move.len()
+    );
+    let names = automove::open_names(&world.characters);
+    let store = world.store.store();
+    for nomination in &settings.auto_move {
+        let plan = match automove::resolve(nomination, &world.campaign, &names) {
+            None => {
+                println!("  {nomination}: not open on this load");
+                continue;
+            }
+            Some(AutoMoveTarget::TransferStash(tab)) => {
+                bulk::plan_for(&world.stash.stash().tabs, tab, store, &world.game)
+            }
+            Some(AutoMoveTarget::CharacterStash { character, tab }) => {
+                let Some(stash) = world
+                    .characters
+                    .get(character.value())
+                    .and_then(CharacterEntry::doc)
+                    .and_then(|doc| doc.file().stash())
+                else {
+                    println!("  {nomination}: the character's stash is not typed");
+                    continue;
+                };
+                bulk::plan_for(&stash.tabs, tab, store, &world.game)
+            }
+        };
+        match plan {
+            Ok(plan) => println!(
+                "  {nomination}: would move {} item(s), leaving {} duplicate(s)",
+                plan.moving.len(),
+                plan.duplicates
+            ),
+            Err(error) => println!("  {nomination}: {error}"),
+        }
+    }
+    if settings.sync_reagents == ReagentSync::On
+        && let Reagents::Open(doc) = &world.reagents
+    {
+        let shortfall = bulk::reagent_shortfall(doc.storage(), store);
+        let units: u64 = shortfall.iter().map(|short| u64::from(short.units)).sum();
+        println!(
+            "  component sync would raise {} record(s) by {units} unit(s)",
+            shortfall.len()
+        );
+    }
 }
 
 /// Every character, the one the picker opens on first; the count of

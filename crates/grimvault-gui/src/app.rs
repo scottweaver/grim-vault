@@ -13,16 +13,19 @@ use egui::{
     Align2, Color32, CornerRadius, FontId, Id, LayerId, Order, Rect, RichText, Stroke, StrokeKind,
     Ui, pos2, vec2,
 };
+use grimvault_core::bulk;
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gds;
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
 use grimvault_core::respec::{Reset, RespecRules};
+use grimvault_core::settings::ReagentSync;
 use grimvault_core::store::Timestamp;
 use univault_engine::ids::RecordId;
 use univault_io::read_verified;
 use univault_ui::theme::{Palette, Theme};
 
+use crate::automove::{self, AutoMoveRequest, AutoMoveTarget};
 use crate::autosave::{Activity, Autosave, AutosaveState, Gate, Pending, Verdict};
 use crate::crafting::{self, Blueprints, CraftingFiles, FormulasOpenError, IllusionCollection};
 use crate::documents::{
@@ -99,7 +102,7 @@ impl App {
 fn initial_phase(config: &ConfigDir, ctx: &egui::Context) -> Phase {
     match settings::load(config) {
         Ok(Some(saved)) => match world_paths(&saved, config) {
-            Ok(paths) => Phase::Loading(loader::start(paths, saved.campaign, ctx.clone())),
+            Ok(paths) => Phase::Loading(loader::start(paths, saved, ctx.clone())),
             Err(problem) => Phase::Setup(SetupState::discover(
                 Some(&saved),
                 Some(problem.to_string()),
@@ -117,14 +120,6 @@ fn world_paths(saved: &Settings, config: &ConfigDir) -> Result<WorldPaths, DirPr
         store: config.store_file(),
         ui_state: config.ui_state_file(),
     })
-}
-
-fn settings_of(paths: &WorldPaths, campaign: Option<Campaign>) -> Settings {
-    Settings {
-        game_dir: paths.game.path().to_path_buf(),
-        save_dir: paths.save.path().to_path_buf(),
-        campaign,
-    }
 }
 
 impl eframe::App for App {
@@ -209,7 +204,8 @@ fn show_setup(
         if ui.add_enabled(ready, egui::Button::new("Load")).clicked()
             && let (Ok(game), Ok(save)) = (game, save)
         {
-            if let Err(error) = settings::save(config, &state.settings()) {
+            let settings = state.settings();
+            if let Err(error) = settings::save(config, &settings) {
                 toasts.error(format!("settings were not saved: {error}"));
             }
             let paths = WorldPaths {
@@ -220,7 +216,7 @@ fn show_setup(
             };
             next = Some(Phase::Loading(loader::start(
                 paths,
-                state.campaign.clone(),
+                settings,
                 ui.ctx().clone(),
             )));
         }
@@ -280,6 +276,7 @@ fn show_loading(
             return Some(Phase::Ready(Box::new(World::new(
                 *world,
                 job.paths.clone(),
+                job.settings.clone(),
                 ui.ctx(),
                 toasts,
             ))));
@@ -287,7 +284,7 @@ fn show_loading(
         Some(LoadOutcome::Failed(failure)) => {
             return Some(Phase::Failed(LoadFailed {
                 failure,
-                settings: settings_of(&job.paths, job.remembered.clone()),
+                settings: job.settings.clone(),
             }));
         }
         None => {}
@@ -314,12 +311,7 @@ fn show_loading(
         ui.add_space(8.0);
         back = ui.button("Back to setup").clicked();
     });
-    back.then(|| {
-        Phase::Setup(SetupState::discover(
-            Some(&settings_of(&job.paths, job.remembered.clone())),
-            None,
-        ))
-    })
+    back.then(|| Phase::Setup(SetupState::discover(Some(&job.settings), None)))
 }
 
 fn show_failed(ui: &mut Ui, failed: &LoadFailed, theme: &Theme) -> Option<Phase> {
@@ -435,9 +427,29 @@ fn right_click_mode(modifiers: egui::Modifiers) -> Mode {
     }
 }
 
+/// Which standing orders a (re)load carries out: every one, the
+/// open campaign's shared files', or one document's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scope {
+    Everything,
+    Campaign,
+    Doc(Doc),
+}
+
+impl Scope {
+    fn covers(self, doc: Doc) -> bool {
+        match self {
+            Self::Everything => true,
+            Self::Campaign => CAMPAIGN_DOCS.contains(&doc),
+            Self::Doc(scoped) => scoped == doc,
+        }
+    }
+}
+
 /// Everything the Ready phase holds.
 pub struct World {
     paths: WorldPaths,
+    settings: Settings,
     game: GameData,
     report: LoadReport,
     campaigns: Vec<Campaign>,
@@ -469,6 +481,7 @@ impl World {
     fn new(
         loaded: LoadedWorld,
         paths: WorldPaths,
+        settings: Settings,
         ctx: &egui::Context,
         toasts: &mut Toasts,
     ) -> Self {
@@ -492,8 +505,9 @@ impl World {
         ));
         let ui_state = PersistedUiState::load(paths.ui_state.clone());
         let store_view = ui_state.on_disk().store.clone();
-        let world = Self {
+        let mut world = Self {
             paths,
+            settings,
             game: loaded.game,
             report: loaded.report,
             campaigns: loaded.campaigns,
@@ -521,6 +535,7 @@ impl World {
             write_order,
         };
         world.rewatch();
+        world.carry_out_orders(Scope::Everything, toasts);
         world
     }
 
@@ -582,11 +597,168 @@ impl World {
         }
         self.rewatch();
         toasts.info(format!("showing the {} files", self.campaign));
-        let remembered = settings_of(&self.paths, Some(self.campaign.clone()));
-        if let Err(error) = settings::save(config, &remembered) {
-            toasts.error(format!(
-                "the campaign selection was not remembered: {error}"
-            ));
+        self.settings.campaign = Some(self.campaign.clone());
+        self.save_settings(config, toasts);
+        self.carry_out_orders(Scope::Campaign, toasts);
+    }
+
+    fn save_settings(&self, config: &ConfigDir, toasts: &mut Toasts) {
+        if let Err(error) = settings::save(config, &self.settings) {
+            toasts.error(format!("settings were not saved: {error}"));
+        }
+    }
+
+    /// The open characters as a nomination names them.
+    fn open_names(&self) -> Vec<automove::OpenName<'_>> {
+        automove::open_names(&self.characters)
+    }
+
+    /// Carries out the standing orders `scope` covers: every
+    /// nominated tab among the open documents is emptied into the
+    /// store, and the component storage synced. Nothing runs while
+    /// an external change awaits the user's decision.
+    fn carry_out_orders(&mut self, scope: Scope, toasts: &mut Toasts) {
+        if self.gate() == Gate::Suspended {
+            return;
+        }
+        let targets: Vec<AutoMoveTarget> =
+            automove::targets(&self.settings.auto_move, &self.campaign, &self.open_names())
+                .into_iter()
+                .filter(|target| scope.covers(target.doc()))
+                .collect();
+        for target in targets {
+            self.auto_move(target, toasts);
+        }
+        if scope.covers(Doc::Reagents) {
+            self.sync_reagents(toasts);
+        }
+    }
+
+    fn target_label(&self, target: AutoMoveTarget) -> String {
+        match target {
+            AutoMoveTarget::TransferStash(tab) => {
+                format!("transfer stash tab {}", tab.value() + 1)
+            }
+            AutoMoveTarget::CharacterStash { character, tab } => format!(
+                "{} stash tab {}",
+                self.doc_label(Doc::Character(character)),
+                tab.value() + 1
+            ),
+        }
+    }
+
+    /// Empties one nominated tab into the store through the same
+    /// moves a drag makes; duplicates stay, and both documents join
+    /// autosave with the store written first.
+    fn auto_move(&mut self, target: AutoMoveTarget, toasts: &mut Toasts) {
+        let doc = target.doc();
+        self.warm_doc(doc);
+        self.warm_doc(Doc::Store);
+        let label = self.target_label(target);
+        let at = now();
+        let outcome = match target {
+            AutoMoveTarget::TransferStash(tab) => bulk::vault_tab(
+                self.stash.stash_mut(),
+                &self.campaign,
+                tab,
+                self.store.store_mut(),
+                &self.facts,
+                at,
+            ),
+            AutoMoveTarget::CharacterStash { character, tab } => {
+                let Some(character_doc) = self
+                    .characters
+                    .get_mut(character.value())
+                    .and_then(CharacterEntry::doc_mut)
+                else {
+                    return;
+                };
+                let realm = character_doc.realm();
+                match character_doc.file_mut() {
+                    Ok(file) => bulk::vault_player_tab(
+                        file,
+                        realm,
+                        tab,
+                        self.store.store_mut(),
+                        &self.facts,
+                        at,
+                    ),
+                    Err(error) => {
+                        toasts.error(format!("auto-move from the {label} skipped: {error}"));
+                        return;
+                    }
+                }
+            }
+        };
+        match outcome {
+            Ok(summary) if summary.is_noop() => {
+                if summary.duplicates > 0 {
+                    toasts.info(format!(
+                        "nothing to auto-move from the {label}: {} duplicate(s) left in place",
+                        summary.duplicates
+                    ));
+                }
+            }
+            Ok(summary) => {
+                self.mark_edited(Doc::Store);
+                self.mark_edited(doc);
+                self.write_order.prioritize(Doc::Store);
+                toasts.info(format!(
+                    "auto-moved the {label} into the vault store: {summary}"
+                ));
+            }
+            Err(error) => toasts.error(format!("auto-move from the {label} failed: {error}")),
+        }
+    }
+
+    /// Raises the store's reagent counts to the open storage's;
+    /// only the store changes.
+    fn sync_reagents(&mut self, toasts: &mut Toasts) {
+        if self.settings.sync_reagents == ReagentSync::Off {
+            return;
+        }
+        let Some(doc) = self.reagents.doc() else {
+            return;
+        };
+        let summary =
+            bulk::sync_reagents(doc.storage(), &self.campaign, self.store.store_mut(), now());
+        if summary.is_noop() {
+            return;
+        }
+        self.mark_edited(Doc::Store);
+        self.write_order.prioritize(Doc::Store);
+        toasts.info(format!(
+            "synced the component storage into the vault store: {summary}"
+        ));
+    }
+
+    /// A tab nominated or withdrawn from the auto-move list; a
+    /// nomination is carried out at once when its tab is open.
+    fn set_auto_move(&mut self, request: AutoMoveRequest, config: &ConfigDir, toasts: &mut Toasts) {
+        let target = match request {
+            AutoMoveRequest::Nominate(tab) => {
+                let target = automove::resolve(&tab, &self.campaign, &self.open_names());
+                self.settings.nominate(tab);
+                target
+            }
+            AutoMoveRequest::Withdraw(tab) => {
+                self.settings.withdraw(&tab);
+                None
+            }
+        };
+        self.save_settings(config, toasts);
+        if let Some(target) = target
+            && self.gate() == Gate::Open
+        {
+            self.auto_move(target, toasts);
+        }
+    }
+
+    fn set_reagent_sync(&mut self, sync: ReagentSync, config: &ConfigDir, toasts: &mut Toasts) {
+        self.settings.sync_reagents = sync;
+        self.save_settings(config, toasts);
+        if sync == ReagentSync::On && self.gate() == Gate::Open {
+            self.sync_reagents(toasts);
         }
     }
 
@@ -613,6 +785,7 @@ impl World {
                     facts: &mut self.facts,
                     icons: &mut self.icons,
                     palette: &theme.palette,
+                    settings: &self.settings,
                     drag: self.drag.as_ref(),
                     mode,
                 };
@@ -634,6 +807,7 @@ impl World {
                     facts: &mut self.facts,
                     icons: &mut self.icons,
                     palette: &theme.palette,
+                    settings: &self.settings,
                     drag: self.drag.as_ref(),
                     mode,
                 };
@@ -654,6 +828,7 @@ impl World {
                     facts: &mut self.facts,
                     icons: &mut self.icons,
                     palette: &theme.palette,
+                    settings: &self.settings,
                     drag: self.drag.as_ref(),
                     mode,
                 };
@@ -678,7 +853,7 @@ impl World {
             .inner;
         self.show_inspector(ui.ctx(), theme, mode, &mut frame);
         self.show_conflict_modal(ui.ctx(), theme, toasts);
-        self.finish_frame(ui.ctx(), frame, modifiers, &theme.palette, toasts);
+        self.finish_frame(ui.ctx(), frame, modifiers, &theme.palette, config, toasts);
         if let Some(next) = switch {
             self.switch_campaign(next, config, toasts);
         }
@@ -718,6 +893,7 @@ impl World {
             facts: &mut self.facts,
             icons: &mut self.icons,
             palette: &theme.palette,
+            settings: &self.settings,
             drag: self.drag.as_ref(),
             mode,
         };
@@ -884,9 +1060,16 @@ impl World {
         frame: DragFrame,
         modifiers: egui::Modifiers,
         palette: &Palette,
+        config: &ConfigDir,
         toasts: &mut Toasts,
     ) {
         let mode = mode_of(modifiers);
+        if let Some(request) = frame.auto_move {
+            self.set_auto_move(request, config, toasts);
+        }
+        if let Some(sync) = frame.reagent_sync {
+            self.set_reagent_sync(sync, config, toasts);
+        }
         if let Some((slot, money)) = frame.set_money {
             self.set_money(slot, money, toasts);
         }
@@ -1632,7 +1815,10 @@ impl World {
                     self.forget_refresh(doc);
                     let label = self.doc_label(doc);
                     match outcome {
-                        Ok(()) => toasts.info(format!("reloaded the {label}: it changed on disk")),
+                        Ok(()) => {
+                            toasts.info(format!("reloaded the {label}: it changed on disk"));
+                            self.carry_out_orders(Scope::Doc(doc), toasts);
+                        }
                         Err(error) => toasts.error(format!(
                             "the {label} changed on disk but could not be reloaded: {error}"
                         )),
@@ -1676,18 +1862,23 @@ impl World {
             });
         });
         if reload {
+            let mut reloaded = Vec::new();
             for doc in std::mem::take(&mut self.conflicts) {
                 let label = self.doc_label(doc);
                 match self.reload(doc) {
                     Ok(()) => {
                         self.forget_refresh(doc);
                         toasts.info(format!("reloaded the {label} from disk"));
+                        reloaded.push(doc);
                     }
                     Err(error) => {
                         self.push_conflict(doc);
                         toasts.error(format!("could not reload the {label}: {error}"));
                     }
                 }
+            }
+            for doc in reloaded {
+                self.carry_out_orders(Scope::Doc(doc), toasts);
             }
         } else if keep {
             for doc in std::mem::take(&mut self.conflicts) {

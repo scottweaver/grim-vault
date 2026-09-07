@@ -236,6 +236,26 @@ Q&A). Items marked TBD are open questions, not decisions.
   retryable error rather than a silently wrong pane. The user's
   install and saves live on a NAS written by a separate machine;
   tq-univault paid for this rule on 2026-08-31. (2026-09-03)
+- **Standing orders write on the app's own initiative (2026-09-07,
+  FEATURES.md 14–15).** A transfer-stash or character-stash tab the
+  user has nominated in `settings.json` (`autoMove`, each entry
+  carrying the tab's whole identity — campaign, or realm and
+  character name — plus the index) is emptied into the store whenever
+  the app loads it, the user nominates it, the campaign selector
+  opens it, or the guard reloads it after a *believed* external
+  change (the two-poll rule above). That is a write to `transfer.gst`
+  or `player.gdc` that no drag caused: it still rides the ordinary
+  autosave path — backup-first once per load, the stamp re-check, the
+  external-change guard — and never runs on a dirty pane (a reload
+  only ever replaces a clean one) or while the conflict modal is up.
+  An item the store already holds under the same record and roll
+  seed is left in the tab, never destroyed (`grimvault-core::bulk`;
+  the identity rule is in `docs/format-references.md`). The
+  component-storage sync (`syncReagents`, default on) runs at the
+  same moments but writes only the store: it adds one stack of the
+  shortfall per record and never removes, reduces, or touches
+  `reagents.gst`. A headless `--check` run from the saved settings
+  prints what both orders would do without writing.
 
 ## External boundaries
 

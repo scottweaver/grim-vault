@@ -10,7 +10,7 @@ use grimvault_core::gdc::Realm;
 use grimvault_core::settings::AutoMoveTab;
 use grimvault_core::transfer::TabIndex;
 
-use crate::documents::{CharacterSlot, Doc};
+use crate::documents::{CharacterEntry, CharacterSlot, Doc};
 
 /// What a toggle on a tab's header asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,6 +46,23 @@ pub struct OpenName<'a> {
     pub slot: CharacterSlot,
     pub realm: Realm,
     pub name: &'a str,
+}
+
+/// The readable characters as a nomination names them, with the
+/// slot each occupies.
+#[must_use]
+pub fn open_names(characters: &[CharacterEntry]) -> Vec<OpenName<'_>> {
+    characters
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, entry)| {
+            entry.doc().map(|doc| OpenName {
+                slot: CharacterSlot::new(slot),
+                realm: doc.realm(),
+                name: doc.name(),
+            })
+        })
+        .collect()
 }
 
 /// The target a nomination names among the open documents: a

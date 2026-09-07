@@ -7,6 +7,7 @@ use egui::{CornerRadius, Rect, RichText, Sense, Stroke, StrokeKind, Ui, vec2};
 use grimvault_core::gst::{ReagentEntry, ReagentStorage};
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
+use grimvault_core::settings::ReagentSync;
 use grimvault_core::transfer::ReagentIndex;
 
 use super::{DragFrame, DropCandidate, PaneCtx, TileLook, item_tooltip, paint_tile};
@@ -17,6 +18,9 @@ use crate::theme::FITS;
 
 const ROW_HEIGHT: f32 = 36.0;
 const ICON: f32 = 30.0;
+const SYNC_WHY: &str = "Whenever the app loads or reloads this storage — after the game writes it, too — \
+     every record the game holds more of than the vault store gets one stack of the difference \
+     added to the store. Counts only ever rise; the storage itself is never changed by the sync.";
 
 /// One entry as the pane lists it.
 pub struct Row<'a> {
@@ -126,6 +130,19 @@ pub fn show(
         .on_hover_text(
             "How many a drag or double-click takes from a row: the whole stack, or this many.",
         );
+        ui.separator();
+        let mut syncing = cx.settings.sync_reagents == ReagentSync::On;
+        if ui
+            .checkbox(&mut syncing, "Sync to vault")
+            .on_hover_text(SYNC_WHY)
+            .changed()
+        {
+            frame.reagent_sync = Some(if syncing {
+                ReagentSync::On
+            } else {
+                ReagentSync::Off
+            });
+        }
     });
 
     let zone = ui.available_rect_before_wrap();

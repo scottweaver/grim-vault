@@ -11,12 +11,13 @@
 use egui::{Id, RichText, Ui, Vec2};
 use grimvault_core::gdc::{EquippedItem, InventoryState, PlayerFile};
 use grimvault_core::respec::Reset;
+use grimvault_core::settings::AutoMoveTab;
 use grimvault_core::transfer::{SackIndex, TabIndex};
 use univault_ui::theme::Theme;
 
 use super::{
-    DragFrame, GridEntry, GridSpec, Interaction, PaneCtx, container_tab, extent, grid_surface,
-    item_tooltip, sack_entries, stash_entries,
+    DragFrame, GridEntry, GridSpec, Interaction, PaneCtx, auto_move_toggle, container_tab, extent,
+    grid_surface, item_tooltip, sack_entries, stash_entries,
 };
 use crate::documents::{Backup, CharacterDoc, CharacterEntry, CharacterSlot, Edits, Writable};
 use crate::drag::Container;
@@ -261,7 +262,7 @@ fn body(
             );
         }
     });
-    show_container(ui, slot, file, editable, view.tab, cx, frame);
+    show_container(ui, slot, doc, view.tab, cx, frame);
 }
 
 /// The selected container: a sack or own-stash tab as a grid, editable
@@ -269,12 +270,13 @@ fn body(
 fn show_container(
     ui: &mut Ui,
     slot: CharacterSlot,
-    file: &PlayerFile,
-    editable: bool,
+    doc: &CharacterDoc,
     tab: CharacterTab,
     cx: &mut PaneCtx<'_>,
     frame: &mut DragFrame,
 ) {
+    let file = doc.file();
+    let editable = doc.writable() == Writable::Yes;
     let sacks = file
         .inventory()
         .map_or(&[][..], |inventory| inventory.sacks());
@@ -309,6 +311,18 @@ fn show_container(
             CharacterTab::Equipped => equipped(ui, file, cx),
             CharacterTab::Stash(index) => match (stash_tabs.get(index), tab_index(index)) {
                 (Some(stash_tab), Some(tab_index)) => {
+                    if editable {
+                        auto_move_toggle(
+                            ui,
+                            AutoMoveTab::CharacterStash {
+                                realm: doc.realm(),
+                                name: doc.name().to_owned(),
+                                tab: tab_index,
+                            },
+                            cx,
+                            frame,
+                        );
+                    }
                     let entries = stash_entries(stash_tab, cx);
                     let cols = i32::try_from(stash_tab.width).unwrap_or(0);
                     let rows = i32::try_from(stash_tab.height).unwrap_or(0);

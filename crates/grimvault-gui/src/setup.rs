@@ -180,9 +180,9 @@ pub struct SetupState {
     pub save_candidates: Vec<PathBuf>,
     /// Why the app is on this screen when it is not the first run.
     pub note: Option<String>,
-    /// The campaign the earlier settings remembered, carried through
-    /// so coming back to this screen does not forget it.
-    pub campaign: Option<Campaign>,
+    /// The settings this screen was reached from, whose remembered
+    /// campaign and standing orders survive a change of directories.
+    seed: Option<Settings>,
 }
 
 impl SetupState {
@@ -208,7 +208,7 @@ impl SetupState {
             game_candidates,
             save_candidates,
             note,
-            campaign: seed.and_then(|settings| settings.campaign.clone()),
+            seed: seed.cloned(),
         }
     }
 
@@ -220,14 +220,16 @@ impl SetupState {
         SaveDir::parse(Path::new(&self.save_field))
     }
 
-    /// The raw settings to persist once both directories validate.
+    /// The raw settings to persist once both directories validate:
+    /// the fields' directories under the seed's standing orders.
     #[must_use]
     pub fn settings(&self) -> Settings {
-        Settings {
-            game_dir: PathBuf::from(&self.game_field),
-            save_dir: PathBuf::from(&self.save_field),
-            campaign: self.campaign.clone(),
-        }
+        let game_dir = PathBuf::from(&self.game_field);
+        let save_dir = PathBuf::from(&self.save_field);
+        self.seed.as_ref().map_or_else(
+            || Settings::for_dirs(game_dir.clone(), save_dir.clone()),
+            |seed| seed.with_dirs(game_dir.clone(), save_dir.clone()),
+        )
     }
 }
 
@@ -383,15 +385,23 @@ mod tests {
 
     #[test]
     fn setup_state_seeds_from_settings_and_reports_problems() {
-        let settings = Settings {
-            game_dir: PathBuf::from("/nowhere/game"),
-            save_dir: PathBuf::from("/nowhere/save"),
-            campaign: Some(Campaign::Mod(ModName::parse("LootAscension").unwrap())),
-        };
-        let state = SetupState::discover(Some(&settings), Some("note".into()));
+        let mut settings = Settings::for_dirs(
+            PathBuf::from("/nowhere/game"),
+            PathBuf::from("/nowhere/save"),
+        );
+        settings.sync_reagents = grimvault_core::settings::ReagentSync::Off;
+        settings.campaign = Some(Campaign::Mod(ModName::parse("LootAscension").unwrap()));
+        let mut state = SetupState::discover(Some(&settings), Some("note".into()));
         assert_eq!(state.game_field, "/nowhere/game");
         assert_eq!(state.settings(), settings);
-        assert_eq!(SetupState::discover(None, None).campaign, None);
+        state.save_field = "/elsewhere/save".into();
+        assert_eq!(
+            state.settings(),
+            settings.with_dirs(
+                PathBuf::from("/nowhere/game"),
+                PathBuf::from("/elsewhere/save")
+            )
+        );
         assert!(matches!(state.game_dir(), Err(DirProblem::Missing(_))));
         assert!(matches!(state.save_dir(), Err(DirProblem::Missing(_))));
     }

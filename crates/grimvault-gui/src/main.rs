@@ -7,6 +7,7 @@
 //! directories it uses the saved settings, like the window does.
 
 mod app;
+mod automove;
 mod autosave;
 mod badges;
 mod check;
@@ -74,20 +75,25 @@ fn main() -> ExitCode {
     }
 }
 
-/// Explicit directories carry no remembered campaign: only the saved
-/// settings do, so only a check run from them opens on it.
+/// Explicit directories carry no remembered campaign and no standing
+/// orders: only the saved settings do, so only a check run from them
+/// opens on the campaign and shows what the orders would do.
 fn run_check(paths: CheckPaths) -> ExitCode {
-    let (game, save, remembered) = match paths {
+    let (game, save, settings) = match paths {
         CheckPaths::Explicit { game, save } => (game, save, None),
         CheckPaths::Saved => match saved_settings() {
-            Ok(settings) => (settings.game_dir, settings.save_dir, settings.campaign),
+            Ok(settings) => (
+                settings.game_dir.clone(),
+                settings.save_dir.clone(),
+                Some(settings),
+            ),
             Err(error) => {
                 eprintln!("grim-vault: {error}");
                 return ExitCode::FAILURE;
             }
         },
     };
-    check::run(&game, &save, remembered.as_ref())
+    check::run(&game, &save, settings.as_ref())
 }
 
 /// The saved settings, or why a check cannot run without directories.

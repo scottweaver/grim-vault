@@ -1011,6 +1011,10 @@ fn print_character(game_data: &GameData, realm: Realm, player: &PlayerFile) {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per command word; the table reads top to bottom like the usage line"
+)]
 fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
     let paths = cli_paths(args)?;
     let [command, rest @ ..] = paths.rest.as_slice() else {
