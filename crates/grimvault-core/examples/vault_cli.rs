@@ -18,6 +18,8 @@
 //! vault_cli <game dir> <save dir> <store.json> vault-stash-tab <character> <tab>
 //! vault_cli <game dir> <save dir> <store.json> money <character> [<iron bits>]
 //! vault_cli <game dir> <save dir> <store.json> import-gds <file.gds>
+//! vault_cli <game dir> <save dir> <store.json> export-store <copy.json>
+//! vault_cli <game dir> <save dir> <store.json> import-store <other.json>
 //! vault_cli <game dir> <save dir> <store.json> respec-attributes <character>
 //! vault_cli <game dir> <save dir> <store.json> respec-masteries <character>
 //! vault_cli <game dir> <save dir> <store.json> detach <location> (component | augment)
@@ -41,7 +43,10 @@
 //! commands are the plain full refunds of `grimvault_core::respec`,
 //! under the rules read from the game's own records. `import-gds`
 //! adds a GD Stash export's items to the store, skipping entries
-//! already imported, and opens no game file.
+//! already imported, and opens no game file; neither do
+//! `export-store`, a copy of the store to a new file, and
+//! `import-store`, which adds what another store file holds and this
+//! one lacks (`VaultStore::merge`).
 //!
 //! `vault-tab`, `vault-stash-tab`, and `sync-reagents` are the
 //! standing orders of `grimvault_core::bulk` run once: a whole tab
@@ -85,7 +90,7 @@ use grimvault_core::socket::{self, Part, Socket};
 use grimvault_core::store::{ItemOrigin, StoredItem, StoredItemId, Timestamp, VaultStore};
 use grimvault_core::transfer::{self, ItemIndex, ReagentIndex, SackIndex, TabIndex};
 use univault_engine::ids::{GridPos, RecordId};
-use univault_io::{BackupPolicy, backup_first_write, read_verified};
+use univault_io::{BackupPolicy, backup_first_write, read_verified, write_synced};
 
 use support::{cli_paths, describe, load_game_data};
 
@@ -96,7 +101,8 @@ const USAGE: &str = "usage: vault_cli [--game DIR] [--save DIR] [--store FILE] [
                      | sync-reagents | characters | vault-sack <character> <sack> <index> \
                      | vault-stash-tab <character> <tab> \
                      | place-sack <id> <character> <sack> [x y] | money <character> [<iron bits>] \
-                     | import-gds <file.gds> \
+                     | import-gds <file.gds> | export-store <copy.json> \
+                     | import-store <other.json> \
                      | respec-attributes <character> | respec-masteries <character> \
                      | detach <location> (component | augment) | attach <location> <id> [seed]) \
                      — <character> is Name, main/Name or user/Name; <location> is \
@@ -128,10 +134,15 @@ enum Command {
     },
     SyncReagents,
     Character(CharacterCommand),
-    ImportGds {
-        file: PathBuf,
-    },
+    Store(StoreCommand),
     Socket(SocketCommand),
+}
+
+/// The commands that touch the store alone — no game file is opened.
+enum StoreCommand {
+    ImportGds { file: PathBuf },
+    Export { file: PathBuf },
+    Import { file: PathBuf },
 }
 
 /// The commands that fill or free an item's sockets.
@@ -304,8 +315,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         command,
     } = parse_args(&args)?;
     let game_data = load_game_data(&game_dir)?;
-    if let Command::ImportGds { file } = &command {
-        return run_import_gds(file, &store_path, &game_data);
+    if let Command::Store(store_command) = &command {
+        return match store_command {
+            StoreCommand::ImportGds { file } => run_import_gds(file, &store_path, &game_data),
+            StoreCommand::Export { file } => run_export_store(file, &store_path),
+            StoreCommand::Import { file } => run_import_store(file, &store_path),
+        };
     }
     let shared_dir = campaign.shared_dir(&save_dir);
     let stash_path = shared_dir.join("transfer.gst");
@@ -441,7 +456,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             };
             run_socket(&command, &ctx, &mut stash, &mut store)?;
         }
-        Command::ImportGds { .. } => unreachable!("peeled off before the shared files are opened"),
+        Command::Store(_) => unreachable!("peeled off before the shared files are opened"),
     }
     Ok(())
 }
@@ -708,6 +723,44 @@ fn run_import_gds(
         write_store(store_path, &store)?;
     }
     print_bucket_counts(game_data, &store);
+    Ok(())
+}
+
+/// A copy of the store to a file that does not exist yet: an export
+/// never overwrites, so a slip cannot clobber the file another
+/// machine's settings point at.
+fn run_export_store(file: &Path, store_path: &Path) -> Result<(), Box<dyn Error>> {
+    if file.exists() {
+        return Err(format!(
+            "{} exists; remove it or choose another name",
+            file.display()
+        )
+        .into());
+    }
+    let store = load_store(store_path)?;
+    let bytes = store.to_json();
+    write_synced(file, &bytes)?;
+    println!(
+        "exported a copy of {} ({} items, {} bytes) to {}",
+        store_path.display(),
+        store.len(),
+        bytes.len(),
+        file.display()
+    );
+    Ok(())
+}
+
+fn run_import_store(file: &Path, store_path: &Path) -> Result<(), Box<dyn Error>> {
+    let mut store = load_store(store_path)?;
+    let other = VaultStore::from_json(&read_verified(file)?)?;
+    println!("parsed {} ({} items)", file.display(), other.len());
+    let merged = store.merge(&other);
+    println!("import: {merged}");
+    if merged.added == 0 {
+        println!("nothing new; {} left untouched", store_path.display());
+    } else {
+        write_store(store_path, &store)?;
+    }
     Ok(())
 }
 
@@ -1093,9 +1146,15 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
             character: CharacterArg::parse(character),
             amount: Some(amount.parse()?),
         }),
-        ("import-gds", [file]) => Command::ImportGds {
+        ("import-gds", [file]) => Command::Store(StoreCommand::ImportGds {
             file: PathBuf::from(file),
-        },
+        }),
+        ("export-store", [file]) => Command::Store(StoreCommand::Export {
+            file: PathBuf::from(file),
+        }),
+        ("import-store", [file]) => Command::Store(StoreCommand::Import {
+            file: PathBuf::from(file),
+        }),
         ("respec-attributes", [character]) => Command::Character(CharacterCommand::Respec {
             character: CharacterArg::parse(character),
             reset: Reset::Attributes,

@@ -99,7 +99,7 @@ impl Timestamp {
 }
 
 /// Where a stored item was taken from.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ItemOrigin {
     /// A tab of a campaign's `transfer.gst`.
@@ -221,6 +221,44 @@ impl StoredItem {
     #[must_use]
     pub fn into_parts(self) -> (Item, ItemOrigin) {
         (self.item, self.origin)
+    }
+
+    /// The vaulting event this entry records — everything but the id,
+    /// which is the store's own — so the same entry read from two
+    /// copies of a store is recognised as one.
+    fn fact(&self) -> Fact<'_> {
+        Fact {
+            origin: &self.origin,
+            stored_at: self.stored_at,
+            item: &self.item,
+        }
+    }
+}
+
+/// See [`StoredItem::fact`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Fact<'a> {
+    origin: &'a ItemOrigin,
+    stored_at: Timestamp,
+    item: &'a Item,
+}
+
+/// What [`VaultStore::merge`] did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Merged {
+    /// Entries added under fresh ids.
+    pub added: usize,
+    /// Entries the store already held, left as they were.
+    pub already_held: usize,
+}
+
+impl fmt::Display for Merged {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} added, {} already held",
+            self.added, self.already_held
+        )
     }
 }
 
@@ -369,6 +407,33 @@ impl VaultStore {
             item,
         });
         id
+    }
+
+    /// Adds every entry of `other` this store does not already hold,
+    /// each under a fresh id of this store's own; `other`'s ids are
+    /// not carried over, since two stores' allocators know nothing of
+    /// each other. An entry is already held when this store has one
+    /// recording the same vaulting event — the same origin, moment,
+    /// and item, stack count included — so merging a copy of this
+    /// store, or the same export twice, adds nothing. Nothing is ever
+    /// removed or changed.
+    pub fn merge(&mut self, other: &VaultStore) -> Merged {
+        let mut held: HashSet<Fact<'_>> = self.items.iter().map(StoredItem::fact).collect();
+        let fresh: Vec<StoredItem> = other
+            .items
+            .iter()
+            .filter(|stored| held.insert(stored.fact()))
+            .cloned()
+            .collect();
+        let already_held = other.items.len() - fresh.len();
+        let added = fresh.len();
+        for stored in fresh {
+            self.add(stored.item, stored.origin, stored.stored_at);
+        }
+        Merged {
+            added,
+            already_held,
+        }
     }
 
     /// Removes and returns an entry; its id is retired, never reissued.
@@ -547,6 +612,76 @@ mod tests {
 
         let reloaded = VaultStore::from_json(&store.to_json()).unwrap();
         assert_eq!(reloaded, store);
+    }
+
+    #[test]
+    fn merging_adds_only_the_vaulting_events_the_store_lacks_under_fresh_ids() {
+        let tab = |tab: u32| ItemOrigin::TransferStash {
+            campaign: Campaign::Main,
+            tab: TabIndex::new(tab),
+        };
+        let mut mine = VaultStore::new();
+        mine.add(cluster(), tab(0), at(10));
+        let retired = mine.add(cluster(), tab(1), at(11));
+        mine.take(retired);
+
+        let mut theirs = VaultStore::new();
+        theirs.add(cluster(), tab(0), at(10));
+        theirs.add(cluster(), tab(0), at(12));
+        theirs.add(
+            Item {
+                stack_count: 3,
+                ..cluster()
+            },
+            tab(0),
+            at(10),
+        );
+        theirs.add(cluster(), tab(0), at(12));
+
+        let merged = mine.merge(&theirs);
+        assert_eq!(
+            merged,
+            Merged {
+                added: 2,
+                already_held: 2
+            }
+        );
+        assert_eq!(merged.to_string(), "2 added, 2 already held");
+        let ids: Vec<StoredItemId> = mine.items().iter().map(StoredItem::id).collect();
+        assert_eq!(
+            ids,
+            vec![
+                StoredItemId::new(1),
+                StoredItemId::new(3),
+                StoredItemId::new(4)
+            ]
+        );
+        assert_eq!(mine.get(StoredItemId::new(3)).unwrap().stored_at(), at(12));
+        assert_eq!(
+            mine.get(StoredItemId::new(4)).unwrap().item().stack_count,
+            3
+        );
+
+        assert_eq!(
+            mine.merge(&theirs),
+            Merged {
+                added: 0,
+                already_held: 4
+            }
+        );
+        let copy = VaultStore::from_json(&mine.to_json()).unwrap();
+        assert_eq!(
+            mine.merge(&copy),
+            Merged {
+                added: 0,
+                already_held: 3
+            }
+        );
+        assert_eq!(mine.len(), 3);
+        assert_eq!(
+            VaultStore::new().merge(&VaultStore::new()),
+            Merged::default()
+        );
     }
 
     #[test]

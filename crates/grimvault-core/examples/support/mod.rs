@@ -129,9 +129,10 @@ pub fn describe(game_data: &GameData, item: &Item) -> String {
 /// Where an example reads from: explicit `--game DIR`, `--save DIR`,
 /// and `--store FILE` flags win, and anything not given comes from the
 /// app's saved settings (`settings.json` in the config directory, the
-/// store beside it) so the paths need typing only once, in the app.
-/// `--mod NAME` selects a mod's shared files under `save/<NAME>/`;
-/// the main campaign's are the default.
+/// store where its `storeFile` says, beside it by default) so the
+/// paths need typing only once, in the app. `--mod NAME` selects a
+/// mod's shared files under `save/<NAME>/`; the main campaign's are
+/// the default.
 pub struct CliPaths {
     pub game_dir: PathBuf,
     #[allow(
@@ -173,7 +174,7 @@ pub fn cli_paths(args: &[String]) -> Result<CliPaths, Box<dyn Error>> {
         ModName::parse(&name).map(Campaign::Mod)
     })?;
     let config = ConfigDir::resolve()?;
-    let settings = if game.is_none() || save.is_none() {
+    let settings = if game.is_none() || save.is_none() || store.is_none() {
         Some(load_settings(&config)?)
     } else {
         None
@@ -188,7 +189,14 @@ pub fn cli_paths(args: &[String]) -> Result<CliPaths, Box<dyn Error>> {
             .map(PathBuf::from)
             .or_else(|| from_settings(|s| &s.save_dir))
             .ok_or("no save dir: pass --save DIR or run the app once")?,
-        store_path: store.map_or_else(|| config.store_file(), PathBuf::from),
+        store_path: store.map_or_else(
+            || {
+                settings
+                    .as_ref()
+                    .map_or_else(|| config.store_file(), |s| s.store_file(&config))
+            },
+            PathBuf::from,
+        ),
         campaign,
         rest,
     })

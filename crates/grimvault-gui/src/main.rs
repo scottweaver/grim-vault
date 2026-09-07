@@ -21,6 +21,7 @@ mod loader;
 mod panes;
 mod search;
 mod settings;
+mod settings_dialog;
 mod setup;
 mod sockets;
 mod stat_lines;

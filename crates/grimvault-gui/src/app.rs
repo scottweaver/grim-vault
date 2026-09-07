@@ -5,7 +5,7 @@
 //! game's writes (a stall tq-univault paid for in its paint-driven
 //! refresh).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -21,10 +21,10 @@ use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
 use grimvault_core::respec::{Reset, RespecRules};
 use grimvault_core::settings::{BulkDuplicates, ReagentSync, StandingOrder};
-use grimvault_core::store::Timestamp;
+use grimvault_core::store::{Timestamp, VaultStore};
 use grimvault_core::transfer::TransferError;
 use univault_engine::ids::RecordId;
-use univault_io::read_verified;
+use univault_io::{read_verified, write_synced};
 use univault_ui::theme::{Palette, Theme};
 
 use crate::automove::{self, AutoMoveTarget, OrderRequest};
@@ -53,6 +53,9 @@ use crate::panes::store::{SEARCH_SHORTCUT, StoreMode, StoreView};
 use crate::panes::{self, BulkOp, BulkRequest, DragFrame, PaneCtx};
 use crate::search::SearchCache;
 use crate::settings::{self, ConfigDir, Settings};
+use crate::settings_dialog::{
+    Action as SettingsAction, Change, SettingsDialog, dir_field, verdict_line,
+};
 use crate::setup::{DirProblem, GameDir, SaveDir, SetupState};
 use crate::sockets;
 use crate::theme::FITS;
@@ -119,7 +122,7 @@ fn world_paths(saved: &Settings, config: &ConfigDir) -> Result<WorldPaths, DirPr
     Ok(WorldPaths {
         game: GameDir::parse(&saved.game_dir)?,
         save: SaveDir::parse(&saved.save_dir)?,
-        store: config.store_file(),
+        store: saved.store_file(config),
         ui_state: config.ui_state_file(),
     })
 }
@@ -139,10 +142,7 @@ impl eframe::App for App {
             }
             Phase::Loading(job) => show_loading(ui, job, &self.theme, &mut self.toasts),
             Phase::Failed(failed) => show_failed(ui, failed, &self.theme),
-            Phase::Ready(world) => {
-                world.show(ui, &self.theme, &self.config, &mut self.toasts);
-                None
-            }
+            Phase::Ready(world) => world.show(ui, &self.theme, &self.config, &mut self.toasts),
         };
         if let Some(next) = next {
             self.phase = next;
@@ -213,7 +213,7 @@ fn show_setup(
             let paths = WorldPaths {
                 game,
                 save,
-                store: config.store_file(),
+                store: settings.store_file(config),
                 ui_state: config.ui_state_file(),
             };
             next = Some(Phase::Loading(loader::start(
@@ -224,47 +224,11 @@ fn show_setup(
         }
         ui.add_space(8.0);
         ui.label(theme.path_text(format!(
-            "settings and the vault store live in {}",
+            "settings live in {}; the vault store beside them unless Settings (⚙) points elsewhere",
             config.path().display()
         )));
     });
     next
-}
-
-fn dir_field(ui: &mut Ui, label: &str, field: &mut String, candidates: &[PathBuf], theme: &Theme) {
-    ui.label(theme.section(label));
-    ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(field).desired_width(560.0));
-        if ui.button("Browse…").clicked() {
-            let start = PathBuf::from(field.as_str());
-            let dialog = if start.is_dir() {
-                rfd::FileDialog::new().set_directory(&start)
-            } else {
-                rfd::FileDialog::new()
-            };
-            if let Some(picked) = dialog.pick_folder() {
-                *field = picked.display().to_string();
-            }
-        }
-    });
-    if !candidates.is_empty() {
-        ui.horizontal_wrapped(|ui| {
-            ui.weak("found here:");
-            for candidate in candidates {
-                let text = candidate.display().to_string();
-                if ui.small_button(&text).clicked() {
-                    *field = text;
-                }
-            }
-        });
-    }
-}
-
-fn verdict_line(ui: &mut Ui, problem: Option<&DirProblem>, ok: &str, theme: &Theme) {
-    match problem {
-        None => ui.colored_label(FITS, ok),
-        Some(problem) => ui.colored_label(theme.palette.error, problem.to_string()),
-    };
 }
 
 fn show_loading(
@@ -499,6 +463,7 @@ pub struct World {
     refresh: RefreshTracker,
     conflicts: Vec<Doc>,
     write_order: WriteOrder,
+    settings_dialog: Option<SettingsDialog>,
 }
 
 impl World {
@@ -557,6 +522,7 @@ impl World {
             refresh: RefreshTracker::default(),
             conflicts: Vec::new(),
             write_order,
+            settings_dialog: None,
         };
         world.rewatch();
         world.carry_out_orders(Scope::Everything, toasts);
@@ -1034,12 +1000,25 @@ impl World {
             .collect()
     }
 
-    fn show(&mut self, ui: &mut Ui, theme: &Theme, config: &ConfigDir, toasts: &mut Toasts) {
+    /// One frame of the Ready phase; `Some` when the settings applied
+    /// call for a full reload.
+    fn show(
+        &mut self,
+        ui: &mut Ui,
+        theme: &Theme,
+        config: &ConfigDir,
+        toasts: &mut Toasts,
+    ) -> Option<Phase> {
         let mut frame = DragFrame::default();
         let modifiers = ui.input(|input| input.modifiers);
         let mode = mode_of(modifiers);
         self.search_shortcuts(ui.ctx());
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui, theme, toasts));
+        let gear = egui::Panel::bottom("status")
+            .show(ui, |ui| self.status_bar(ui, theme, toasts))
+            .inner;
+        if gear && self.settings_dialog.is_none() && self.gate() == Gate::Open {
+            self.settings_dialog = Some(SettingsDialog::open(&self.settings, config));
+        }
         egui::Panel::bottom("characters")
             .resizable(true)
             .default_size(300.0)
@@ -1117,11 +1096,206 @@ impl World {
             .inner;
         self.show_inspector(ui.ctx(), theme, mode, &mut frame);
         self.show_conflict_modal(ui.ctx(), theme, toasts);
+        let reload = self.show_settings_dialog(ui.ctx(), theme, config, toasts);
         self.finish_frame(ui.ctx(), frame, modifiers, &theme.palette, config, toasts);
         if let Some(next) = switch {
             self.switch_campaign(next, config, toasts);
         }
         self.persist_ui_state(ui.ctx());
+        reload
+    }
+
+    /// The gear's modal, while open: export and import act at once;
+    /// Apply saves the draft and pays what it costs.
+    fn show_settings_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        config: &ConfigDir,
+        toasts: &mut Toasts,
+    ) -> Option<Phase> {
+        let vault_items = self.store.store().len();
+        let action = self
+            .settings_dialog
+            .as_mut()?
+            .show(ctx, theme, config, vault_items)?;
+        match action {
+            SettingsAction::Export => {
+                self.export_store(toasts);
+                None
+            }
+            SettingsAction::Import => {
+                self.import_store(toasts);
+                None
+            }
+            SettingsAction::Cancel => {
+                self.settings_dialog = None;
+                None
+            }
+            SettingsAction::Apply(next) => {
+                self.settings_dialog = None;
+                self.apply_settings(next, ctx, config, toasts)
+            }
+        }
+    }
+
+    /// Puts `next` in force: the rules at once; a moved store by
+    /// swapping the store document; changed directories by writing
+    /// everything and starting over from the loader. A pending
+    /// external change, or a save that fails, leaves the old settings
+    /// in force.
+    fn apply_settings(
+        &mut self,
+        next: Settings,
+        ctx: &egui::Context,
+        config: &ConfigDir,
+        toasts: &mut Toasts,
+    ) -> Option<Phase> {
+        match Change::between(&self.settings, &next, config) {
+            Change::Nothing => None,
+            Change::Rules => {
+                let sync_turned_on = next.sync_reagents == ReagentSync::On
+                    && self.settings.sync_reagents == ReagentSync::Off;
+                self.settings = next;
+                self.save_settings(config, toasts);
+                if sync_turned_on && self.gate() == Gate::Open {
+                    self.sync_reagents(toasts);
+                }
+                None
+            }
+            Change::Store => {
+                if self.settle_before_switching("switching the vault store", toasts) {
+                    self.switch_store(next, config, toasts);
+                }
+                None
+            }
+            Change::World => {
+                if !self.settle_before_switching("reloading", toasts) {
+                    return None;
+                }
+                let paths = match world_paths(&next, config) {
+                    Ok(paths) => paths,
+                    Err(problem) => {
+                        toasts.error(format!("settings not applied: {problem}"));
+                        return None;
+                    }
+                };
+                self.settings = next;
+                self.save_settings(config, toasts);
+                let current = self.ui_snapshot();
+                self.ui_state.flush(current);
+                Some(Phase::Loading(loader::start(
+                    paths,
+                    self.settings.clone(),
+                    ctx.clone(),
+                )))
+            }
+        }
+    }
+
+    /// Writes every unsaved edit before a switch; `false` when an
+    /// external change awaits a decision or the write failed, either
+    /// of which means the switch must not happen.
+    fn settle_before_switching(&mut self, what: &str, toasts: &mut Toasts) -> bool {
+        if self.gate() == Gate::Suspended {
+            toasts.error(format!("decide the pending external change before {what}"));
+            return false;
+        }
+        if let Err(error) = self.flush(toasts) {
+            toasts.error(format!("could not save before {what}: {error}"));
+            return false;
+        }
+        self.gate() == Gate::Open
+    }
+
+    /// Swaps the store document for the one `next` names — an absent
+    /// file starts empty and is created by the first save — and runs
+    /// the standing orders as any load of the store does. The old
+    /// store stays open when the new one cannot be read.
+    fn switch_store(&mut self, next: Settings, config: &ConfigDir, toasts: &mut Toasts) {
+        let path = next.store_file(config);
+        let store = match StoreDoc::open(path.clone()) {
+            Ok(store) => store,
+            Err(error) => {
+                toasts.error(format!("the vault store was not switched: {error}"));
+                return;
+            }
+        };
+        self.forget_refresh(Doc::Store);
+        self.store = store;
+        self.paths.store = path;
+        self.search_cache = SearchCache::default();
+        self.selected = None;
+        self.rewatch();
+        self.settings = next;
+        self.save_settings(config, toasts);
+        toasts.info(format!(
+            "opened the vault store at {}: {} items",
+            self.store.path().display(),
+            self.store.store().len()
+        ));
+        self.carry_out_orders(Scope::Everything, toasts);
+    }
+
+    /// A copy of the store as it is now, to a file the user picks.
+    /// The open store's own path is refused: a write there would slip
+    /// past the stamp the guard compares against.
+    fn export_store(&self, toasts: &mut Toasts) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Grim Vault store", &["json"])
+            .set_file_name(grimvault_core::settings::STORE_FILE)
+            .save_file()
+        else {
+            return;
+        };
+        if path == self.store.path() {
+            toasts.error("that is the open vault store itself; choose another file");
+            return;
+        }
+        match write_synced(&path, &self.store.store().to_json()) {
+            Ok(()) => toasts.info(format!(
+                "exported a copy of the vault ({} items) to {}",
+                self.store.store().len(),
+                path.display()
+            )),
+            Err(error) => toasts.error(format!("could not write {}: {error}", path.display())),
+        }
+    }
+
+    /// Merges another store file into the open one: what this vault
+    /// does not hold is added under fresh ids, nothing is removed.
+    fn import_store(&mut self, toasts: &mut Toasts) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Grim Vault store", &["json"])
+            .pick_file()
+        else {
+            return;
+        };
+        let bytes = match read_verified(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                toasts.error(format!("could not read {}: {error}", path.display()));
+                return;
+            }
+        };
+        let other = match VaultStore::from_json(&bytes) {
+            Ok(other) => other,
+            Err(error) => {
+                toasts.error(format!(
+                    "{} is not a vault store this app reads: {error}",
+                    path.display()
+                ));
+                return;
+            }
+        };
+        let merged = self.store.store_mut().merge(&other);
+        if merged.added == 0 {
+            toasts.info(format!("nothing new in {}: {merged}", path.display()));
+            return;
+        }
+        self.store.tracking_mut().mark_edited();
+        self.write_order.prioritize(Doc::Store);
+        toasts.info(format!("imported {}: {merged}", path.display()));
     }
 
     /// ⌘F / Ctrl+F opens the search view with its name field focused;
@@ -1263,8 +1437,14 @@ impl World {
         }
     }
 
-    fn status_bar(&self, ui: &mut Ui, theme: &Theme, toasts: &Toasts) {
+    /// The bottom strip; `true` when the gear was clicked.
+    fn status_bar(&self, ui: &mut Ui, theme: &Theme, toasts: &Toasts) -> bool {
         ui.horizontal_wrapped(|ui| {
+            let gear = ui
+                .button("⚙")
+                .on_hover_text("Settings: directories, the vault store file, rules, export and import")
+                .clicked();
+            ui.separator();
             ui.label(theme.path_text(format!("saves: {}", self.paths.save.path().display())));
             ui.separator();
             ui.label(format!("campaign: {}", self.campaign));
@@ -1311,7 +1491,9 @@ impl World {
                 ui.separator();
                 ui.colored_label(theme.palette.error, error);
             }
-        });
+            gear
+        })
+        .inner
     }
 
     /// Adopts a drag the panes began, paints the lifted item at the

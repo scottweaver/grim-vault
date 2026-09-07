@@ -57,7 +57,7 @@ fn check(game: &Path, save: &Path, settings: Option<&Settings>) -> Result<usize,
     let paths = WorldPaths {
         game: GameDir::parse(game)?,
         save: SaveDir::parse(save)?,
-        store: config.store_file(),
+        store: settings.map_or_else(|| config.store_file(), |saved| saved.store_file(&config)),
         ui_state: config.ui_state_file(),
     };
     let mut progress = |step: LoadStep| println!("… {step}");

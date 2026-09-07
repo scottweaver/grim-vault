@@ -1,13 +1,19 @@
-//! The persisted setup — where the game and the saves live, which
-//! tabs empty themselves into the vault, whether the component
-//! storage syncs, and whether bulk moves admit seed duplicates — as
-//! one self-describing JSON file (`settings.json`,
+//! The persisted setup — where the game, the saves, and the vault
+//! store live, which tabs empty themselves into the vault, whether the
+//! component storage syncs, and whether bulk moves admit seed
+//! duplicates — as one self-describing JSON file (`settings.json`,
 //! format tag [`FORMAT_TAG`]) under the app's config directory, shared
 //! by the desktop app and the command-line examples so a path given
 //! once serves every tool. Pure: parsing and serializing only; reading
 //! and writing the file is the shell's job. The config directory is
 //! the platform's unless [`CONFIG_DIR_ENV`] overrides it, which is how
 //! a headless run avoids creating the real one.
+//!
+//! The settings are machine-local (mount points differ between
+//! machines); the vault store need not be. `storeFile` points the
+//! store anywhere — a shared drive, say — so two machines each keep
+//! their own settings over one vault; absent, the store sits beside
+//! the settings as [`STORE_FILE`].
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -174,19 +180,23 @@ impl fmt::Display for BulkDuplicates {
     }
 }
 
-/// What setup decided, the campaign the user selected last, and the
-/// vault's standing orders. Raw paths: the directories are
-/// re-validated against the platform markers every time they are
-/// used, because a mount can vanish between sessions. The campaign is
-/// a preference, not a fact about the saves: a shell re-checks that it
-/// still exists before opening it. A file written before a field
-/// existed simply has none: no campaign, no tab nominated for either
-/// order, the sync on, bulk duplicates skipped.
+/// What setup decided, where the vault store lives when not beside the
+/// settings, the campaign the user selected last, and the vault's
+/// standing orders. Raw paths: the directories are re-validated
+/// against the platform markers every time they are used, because a
+/// mount can vanish between sessions, and the store path is resolved
+/// by [`Settings::store_file`]. The campaign is a preference, not a
+/// fact about the saves: a shell re-checks that it still exists before
+/// opening it. A file written before a field existed simply has none:
+/// the store beside the settings, no campaign, no tab nominated for
+/// either order, the sync on, bulk duplicates skipped.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub game_dir: PathBuf,
     pub save_dir: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_file: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub campaign: Option<Campaign>,
     #[serde(default)]
@@ -220,13 +230,15 @@ struct SettingsFile {
 }
 
 impl Settings {
-    /// The settings for two directories: no campaign remembered, no
-    /// tab nominated, the sync on, bulk duplicates skipped.
+    /// The settings for two directories: the store beside the
+    /// settings, no campaign remembered, no tab nominated, the sync
+    /// on, bulk duplicates skipped.
     #[must_use]
     pub fn for_dirs(game_dir: PathBuf, save_dir: PathBuf) -> Self {
         Self {
             game_dir,
             save_dir,
+            store_file: None,
             campaign: None,
             auto_move: Vec::new(),
             purge_duplicates: Vec::new(),
@@ -235,19 +247,25 @@ impl Settings {
         }
     }
 
-    /// The same remembered campaign and standing orders over other
-    /// directories.
+    /// The same store, remembered campaign, and standing orders over
+    /// other directories.
     #[must_use]
     pub fn with_dirs(&self, game_dir: PathBuf, save_dir: PathBuf) -> Self {
         Self {
             game_dir,
             save_dir,
-            campaign: self.campaign.clone(),
-            auto_move: self.auto_move.clone(),
-            purge_duplicates: self.purge_duplicates.clone(),
-            sync_reagents: self.sync_reagents,
-            bulk_duplicates: self.bulk_duplicates,
+            ..self.clone()
         }
+    }
+
+    /// Where the vault store lives: `storeFile` when set — an absolute
+    /// path as given, a relative one under the config directory — else
+    /// [`STORE_FILE`] beside the settings.
+    #[must_use]
+    pub fn store_file(&self, config: &ConfigDir) -> PathBuf {
+        self.store_file
+            .as_deref()
+            .map_or_else(|| config.store_file(), |file| config.path().join(file))
     }
 
     /// The tabs nominated for `order`, in nomination order.
@@ -501,6 +519,52 @@ mod tests {
             Settings::parse(b"{"),
             Err(SettingsProblem::Json(_))
         ));
+    }
+
+    #[test]
+    fn the_store_sits_beside_the_settings_unless_a_store_file_says_otherwise() {
+        let config = ConfigDir::new(PathBuf::from("/cfg/grim-vault"));
+        let beside = sample();
+        assert_eq!(beside.store_file(&config), config.store_file());
+        let text = String::from_utf8(beside.to_json()).unwrap();
+        assert!(!text.contains("storeFile"), "{text}");
+
+        let shared = Settings {
+            store_file: Some(PathBuf::from("/nas/grim-vault/vault-store.json")),
+            ..sample()
+        };
+        assert_eq!(
+            shared.store_file(&config),
+            PathBuf::from("/nas/grim-vault/vault-store.json")
+        );
+        let bytes = shared.to_json();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert!(
+            text.contains("\"storeFile\": \"/nas/grim-vault/vault-store.json\""),
+            "{text}"
+        );
+        assert_eq!(Settings::parse(&bytes).unwrap(), shared);
+        assert_eq!(
+            shared.with_dirs("/g".into(), "/s".into()).store_file,
+            shared.store_file
+        );
+
+        let relative = Settings {
+            store_file: Some(PathBuf::from("vaults/mine.json")),
+            ..sample()
+        };
+        assert_eq!(
+            relative.store_file(&config),
+            PathBuf::from("/cfg/grim-vault/vaults/mine.json")
+        );
+        assert_eq!(
+            Settings::parse(
+                br#"{"format":"grimvault-settings","version":1,"gameDir":"a","saveDir":"b"}"#
+            )
+            .unwrap()
+            .store_file,
+            None
+        );
     }
 
     #[test]

@@ -90,7 +90,15 @@ Q&A). Items marked TBD are open questions, not decisions.
   authoritative store for vaulted items: a flat, normalized set of
   items, each carrying a stable id and its full identity, in one
   versioned self-describing JSON file (`vault-store.json`, format
-  tag `grimvault-store`) under the platform config directory. Type
+  tag `grimvault-store`) under the platform config directory by
+  default — **or wherever `settings.json`'s `storeFile` points**
+  (2026-09-07, user request: one vault shared by the Mac and a Linux
+  machine over the NAS). The settings are machine-local, the store is
+  portable: nothing in it is a path or a platform fact, so each
+  machine's settings name the same file under its own mount point.
+  One app on a store at a time is the user's job; the store rides the
+  same polling guard as the game files (below), so another machine's
+  write between two saves is noticed, not clobbered. Type
   buckets are **computed views** derived from each item's own base
   record, never stored membership — so an item cannot be misfiled,
   and moving or copying its bytes cannot change what it is. Buckets
@@ -313,7 +321,15 @@ Q&A). Items marked TBD are open questions, not decisions.
   and written only by `grimvault-core::{blueprint, illusion}`; a
   document of any other tag is refused by name, and an import adds
   what the record database vouches for and reports the rest — never
-  removes. (2026-09-06)
+  removes. (2026-09-06) **A vault export is the store format itself**
+  (2026-09-07): "Export a copy…" writes the open store as it is to a
+  file of the user's choosing, and "Import from a copy…" is
+  `VaultStore::merge` — every entry of another store file whose
+  vaulting event (origin, moment, item) this store lacks is added
+  under a fresh id of this store's own; nothing is removed, changed,
+  or re-identified, so importing a store into itself or the same copy
+  twice adds nothing. No new format, no new boundary: both files are
+  `grimvault-store` documents.
 - No network services, no telemetry, no online features. stdio IPC
   for the planned MCP surface is not a network service.
   (2026-09-03)
