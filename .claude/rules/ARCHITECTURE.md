@@ -287,9 +287,15 @@ Q&A). Items marked TBD are open questions, not decisions.
   component-storage sync (`syncReagents`, default on) runs at the
   same moments but writes only the store: it adds one stack of the
   shortfall per record and never removes, reduces, or touches
-  `reagents.gst`. A headless `--check` run from the saved settings
-  prints the rule and what all three orders would do without
-  writing.
+  `reagents.gst`. **The learned-blueprint sync** (`syncBlueprints`,
+  default on; 2026-09-07, user request) is its twin over
+  `formulas.gst`: every blueprint learned in the open campaign that
+  the store holds no item of — any origin counts — becomes a blueprint
+  item in the store under `ItemOrigin::LearnedBlueprint { campaign }`,
+  at the same moments and also after an in-app add or import to the
+  list; store only, nothing removed, the list untouched. A headless
+  `--check` run from the saved settings prints the rule and what all
+  four orders would do without writing.
 
 ## External boundaries
 

@@ -20,7 +20,7 @@ use grimvault_core::gds;
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
 use grimvault_core::respec::{Reset, RespecRules};
-use grimvault_core::settings::{BulkDuplicates, ReagentSync, StandingOrder};
+use grimvault_core::settings::{BlueprintSync, BulkDuplicates, ReagentSync, StandingOrder};
 use grimvault_core::store::{Timestamp, VaultStore};
 use grimvault_core::transfer::TransferError;
 use univault_engine::ids::RecordId;
@@ -624,6 +624,9 @@ impl World {
         if scope.covers(Doc::Reagents) {
             self.sync_reagents(toasts);
         }
+        if scope.covers(Doc::Blueprints) {
+            self.sync_blueprints(toasts);
+        }
     }
 
     /// The open tabs nominated for `order` that `scope` covers.
@@ -790,6 +793,32 @@ impl World {
         ));
     }
 
+    /// The learned-blueprint sync: every blueprint the campaign's
+    /// list holds and the store has no item of becomes a blueprint
+    /// item in the store; store only, nothing removed.
+    fn sync_blueprints(&mut self, toasts: &mut Toasts) {
+        if self.settings.sync_blueprints == BlueprintSync::Off {
+            return;
+        }
+        let Some(doc) = self.blueprints.doc() else {
+            return;
+        };
+        let summary = bulk::sync_blueprints(
+            &doc.formulas().entries,
+            &self.campaign,
+            self.store.store_mut(),
+            now(),
+        );
+        if summary.is_noop() {
+            return;
+        }
+        self.mark_edited(Doc::Store);
+        self.write_order.prioritize(Doc::Store);
+        toasts.info(format!(
+            "synced the learned blueprints into the vault store: {summary}"
+        ));
+    }
+
     /// A tab nominated for a standing order or withdrawn from it; a
     /// nomination is carried out at once when its tab is open.
     fn set_order(&mut self, request: OrderRequest, config: &ConfigDir, toasts: &mut Toasts) {
@@ -817,6 +846,14 @@ impl World {
         self.save_settings(config, toasts);
         if sync == ReagentSync::On && self.gate() == Gate::Open {
             self.sync_reagents(toasts);
+        }
+    }
+
+    fn set_blueprint_sync(&mut self, sync: BlueprintSync, config: &ConfigDir, toasts: &mut Toasts) {
+        self.settings.sync_blueprints = sync;
+        self.save_settings(config, toasts);
+        if sync == BlueprintSync::On && self.gate() == Gate::Open {
+            self.sync_blueprints(toasts);
         }
     }
 
@@ -1181,12 +1218,19 @@ impl World {
         match Change::between(&self.settings, &next, config) {
             Change::Nothing => None,
             Change::Rules => {
-                let sync_turned_on = next.sync_reagents == ReagentSync::On
+                let reagents_turned_on = next.sync_reagents == ReagentSync::On
                     && self.settings.sync_reagents == ReagentSync::Off;
+                let blueprints_turned_on = next.sync_blueprints == BlueprintSync::On
+                    && self.settings.sync_blueprints == BlueprintSync::Off;
                 self.settings = next;
                 self.save_settings(config, toasts);
-                if sync_turned_on && self.gate() == Gate::Open {
-                    self.sync_reagents(toasts);
+                if self.gate() == Gate::Open {
+                    if reagents_turned_on {
+                        self.sync_reagents(toasts);
+                    }
+                    if blueprints_turned_on {
+                        self.sync_blueprints(toasts);
+                    }
                 }
                 None
             }
@@ -1545,6 +1589,9 @@ impl World {
         }
         if let Some(sync) = frame.reagent_sync {
             self.set_reagent_sync(sync, config, toasts);
+        }
+        if let Some(sync) = frame.blueprint_sync {
+            self.set_blueprint_sync(sync, config, toasts);
         }
         if let Some(rule) = frame.bulk_duplicates {
             self.set_bulk_duplicates(rule, config, toasts);
@@ -1905,6 +1952,9 @@ impl World {
             toasts,
         ) {
             self.write_order.prioritize(doc);
+            if doc == Doc::Blueprints {
+                self.sync_blueprints(toasts);
+            }
         }
     }
 

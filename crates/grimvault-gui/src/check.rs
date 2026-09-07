@@ -22,7 +22,7 @@ use grimvault_core::gdc::InventoryState;
 use grimvault_core::illusion::{IllusionCategory, audit};
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
-use grimvault_core::settings::{AutoMoveTab, ReagentSync, Settings, StandingOrder};
+use grimvault_core::settings::{AutoMoveTab, BlueprintSync, ReagentSync, Settings, StandingOrder};
 use grimvault_core::transfer::{SackIndex, TabIndex};
 use univault_engine::ids::RecordId;
 
@@ -139,10 +139,14 @@ fn print_orders(settings: &Settings, world: &LoadedWorld) {
         ReagentSync::On => "on",
         ReagentSync::Off => "off",
     };
+    let blueprint_sync = match settings.sync_blueprints {
+        BlueprintSync::On => "on",
+        BlueprintSync::Off => "off",
+    };
     let rule = settings.bulk_duplicates;
     println!(
         "\nstanding orders: {} tab(s) nominated for auto-move, {} for purge; component sync \
-         {sync}; bulk duplicates {rule}",
+         {sync}; blueprint sync {blueprint_sync}; bulk duplicates {rule}",
         settings.auto_move.len(),
         settings.purge_duplicates.len()
     );
@@ -182,6 +186,15 @@ fn print_orders(settings: &Settings, world: &LoadedWorld) {
         println!(
             "  component sync would raise {} record(s) by {units} unit(s)",
             shortfall.len()
+        );
+    }
+    if settings.sync_blueprints == BlueprintSync::On
+        && let Some(doc) = world.blueprints.doc()
+    {
+        let missing = bulk::blueprint_shortfall(&doc.formulas().entries, store);
+        println!(
+            "  blueprint sync would add {} blueprint item(s) to the vault",
+            missing.len()
         );
     }
 }

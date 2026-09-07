@@ -17,11 +17,12 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
-use univault_engine::ids::RecordId;
+use univault_engine::ids::{RecordId, normalize};
 
 use crate::block::StashTab;
 use crate::bucket::Bucket;
 use crate::campaign::Campaign;
+use crate::formulas::BlueprintEntry;
 use crate::gamedata::GameData;
 use crate::gdc::{PlayerFile, Realm};
 use crate::gst::{ReagentStorage, TransferStash};
@@ -647,6 +648,76 @@ pub fn reagent_shortfall(storage: &ReagentStorage, store: &VaultStore) -> Vec<Sh
 
 fn is_bare(item: &Item) -> bool {
     item.prefix_name.is_empty() && item.suffix_name.is_empty()
+}
+
+/// What the blueprint sync did: one new blueprint item per learned
+/// record the vault held no item of.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BlueprintSyncSummary {
+    pub added: Vec<StoredItemId>,
+}
+
+impl BlueprintSyncSummary {
+    #[must_use]
+    pub fn is_noop(&self) -> bool {
+        self.added.is_empty()
+    }
+}
+
+impl fmt::Display for BlueprintSyncSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} blueprint(s) added", self.added.len())
+    }
+}
+
+/// The learned blueprints (`formulas.gst` entries) the store holds no
+/// item of, in file order, each once — the pure half of
+/// [`sync_blueprints`]. Any item of the record counts, whatever its
+/// origin: a blueprint vaulted out of a stash is the blueprint.
+#[must_use]
+pub fn blueprint_shortfall<'a>(learned: &'a [BlueprintEntry], store: &VaultStore) -> Vec<&'a str> {
+    let mut held: HashSet<String> = store
+        .items()
+        .iter()
+        .map(|stored| normalize(&stored.item().base_name))
+        .collect();
+    learned
+        .iter()
+        .filter(|entry| held.insert(normalize(&entry.record)))
+        .map(|entry| entry.record.as_str())
+        .collect()
+}
+
+/// Adds one blueprint item, with [`ItemOrigin::LearnedBlueprint`], for
+/// every learned blueprint the store holds no item of; never removes
+/// anything, and never touches the list.
+pub fn sync_blueprints(
+    learned: &[BlueprintEntry],
+    campaign: &Campaign,
+    store: &mut VaultStore,
+    at: Timestamp,
+) -> BlueprintSyncSummary {
+    let origin = ItemOrigin::LearnedBlueprint {
+        campaign: campaign.clone(),
+    };
+    let added = blueprint_shortfall(learned, store)
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<String>>()
+        .into_iter()
+        .map(|record| {
+            store.add(
+                Item {
+                    base_name: record,
+                    stack_count: 1,
+                    ..Item::default()
+                },
+                origin.clone(),
+                at,
+            )
+        })
+        .collect();
+    BlueprintSyncSummary { added }
 }
 
 /// Raises the store's count of every record in `storage` to the
@@ -1287,6 +1358,53 @@ mod tests {
         let lowered = storage(&[(COMPONENT, 10)]);
         assert!(sync_reagents(&lowered, &Campaign::Main, &mut store, NOW).is_noop());
         assert_eq!(store.len(), 4);
+    }
+
+    #[test]
+    fn the_blueprint_sync_adds_one_item_per_learned_record_the_store_lacks() {
+        use crate::formulas::FormulaRead;
+        const KNOWN: &str = "records/items/crafting/blueprints/craft_a.dbr";
+        const NEW: &str = "records/items/crafting/blueprints/craft_b.dbr";
+        let learned = vec![
+            BlueprintEntry {
+                record: KNOWN.into(),
+                read: FormulaRead::Read,
+            },
+            BlueprintEntry {
+                record: NEW.into(),
+                read: FormulaRead::Unread,
+            },
+            BlueprintEntry {
+                record: NEW.to_uppercase().replace('/', "\\"),
+                read: FormulaRead::Read,
+            },
+        ];
+        let mut store = VaultStore::new();
+        store.add(
+            Item {
+                base_name: KNOWN.into(),
+                stack_count: 2,
+                ..Item::default()
+            },
+            ItemOrigin::Unknown,
+            NOW,
+        );
+        assert_eq!(blueprint_shortfall(&learned, &store), vec![NEW]);
+
+        let summary = sync_blueprints(&learned, &Campaign::Main, &mut store, NOW);
+        assert_eq!(summary.added.len(), 1);
+        assert_eq!(summary.to_string(), "1 blueprint(s) added");
+        let added = store.get(summary.added[0]).unwrap();
+        assert_eq!(added.item().base_name, NEW);
+        assert_eq!(added.item().stack_count, 1);
+        assert_eq!(
+            added.origin(),
+            &ItemOrigin::LearnedBlueprint {
+                campaign: Campaign::Main
+            }
+        );
+        assert!(sync_blueprints(&learned, &Campaign::Main, &mut store, NOW).is_noop());
+        assert_eq!(store.len(), 2);
     }
 
     #[test]

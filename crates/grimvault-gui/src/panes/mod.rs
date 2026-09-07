@@ -23,7 +23,9 @@ use grimvault_core::gamedata::{GameData, Rarity};
 use grimvault_core::gdc::Sack;
 use grimvault_core::item::Item;
 use grimvault_core::respec::Reset;
-use grimvault_core::settings::{AutoMoveTab, BulkDuplicates, ReagentSync, Settings, StandingOrder};
+use grimvault_core::settings::{
+    AutoMoveTab, BlueprintSync, BulkDuplicates, ReagentSync, Settings, StandingOrder,
+};
 use grimvault_core::socket::Socket;
 use grimvault_core::transfer::{Footprints, ItemIndex};
 use univault_engine::grid::CellRect;
@@ -92,6 +94,8 @@ pub struct DragFrame {
     pub standing_order: Option<OrderRequest>,
     /// The component-storage sync switched on or off.
     pub reagent_sync: Option<ReagentSync>,
+    /// The learned-blueprint sync switched on or off.
+    pub blueprint_sync: Option<BlueprintSync>,
     /// A whole container moved or copied into the store, or emptied
     /// — the last only once confirmed.
     pub bulk: Option<BulkRequest>,

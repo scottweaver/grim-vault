@@ -9,7 +9,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use egui::{Id, Ui};
-use grimvault_core::settings::{BulkDuplicates, ConfigDir, ReagentSync, Settings};
+use grimvault_core::settings::{BlueprintSync, BulkDuplicates, ConfigDir, ReagentSync, Settings};
 use thiserror::Error;
 use univault_ui::theme::Theme;
 
@@ -25,6 +25,7 @@ pub struct SettingsDialog {
     save_field: String,
     store_field: String,
     sync: ReagentSync,
+    blueprints: BlueprintSync,
     duplicates: BulkDuplicates,
     seed: Settings,
 }
@@ -131,6 +132,9 @@ const SHARED_STORE_WHY: &str = "Point every machine's settings at one file on a 
 const SYNC_WHY: &str = "The open campaign's component and crafting-material storage raises the vault's counts to \
      its own whenever it loads; nothing is ever removed from the vault or the storage.";
 
+const BLUEPRINT_SYNC_WHY: &str = "Every blueprint learned in the open campaign that the vault holds no item of is added to \
+     the vault as a blueprint item whenever the list loads or changes; nothing is ever removed.";
+
 const SKIP_DUPLICATES_WHY: &str = "Bulk moves and copies into the vault — the buttons on a tab and the auto-move standing \
      order — pass over an item whose record and roll seed the store already holds. Drags, \
      double-clicks and right-clicks always land.";
@@ -152,6 +156,7 @@ impl SettingsDialog {
             save_field: current.save_dir.display().to_string(),
             store_field: current.store_file(config).display().to_string(),
             sync: current.sync_reagents,
+            blueprints: current.sync_blueprints,
             duplicates: current.bulk_duplicates,
             seed: current.clone(),
         }
@@ -166,6 +171,7 @@ impl SettingsDialog {
         Settings {
             store_file: (store != config.store_file()).then_some(store),
             sync_reagents: self.sync,
+            sync_blueprints: self.blueprints,
             bulk_duplicates: self.duplicates,
             ..self.seed.with_dirs(
                 PathBuf::from(self.game_field.trim()),
@@ -292,6 +298,18 @@ impl SettingsDialog {
                 ReagentSync::On
             } else {
                 ReagentSync::Off
+            };
+        }
+        let mut learning = self.blueprints == BlueprintSync::On;
+        if ui
+            .checkbox(&mut learning, "Sync learned blueprints into the vault")
+            .on_hover_text(BLUEPRINT_SYNC_WHY)
+            .changed()
+        {
+            self.blueprints = if learning {
+                BlueprintSync::On
+            } else {
+                BlueprintSync::Off
             };
         }
         let mut skipping = self.duplicates == BulkDuplicates::Skip;
@@ -454,9 +472,11 @@ mod tests {
 
         let mut rules = dialog.clone();
         rules.sync = ReagentSync::On;
+        rules.blueprints = BlueprintSync::Off;
         rules.duplicates = BulkDuplicates::Allow;
         let draft = rules.draft(&config());
         assert_eq!(draft.sync_reagents, ReagentSync::On);
+        assert_eq!(draft.sync_blueprints, BlueprintSync::Off);
         assert_eq!(draft.bulk_duplicates, BulkDuplicates::Allow);
         assert_eq!(
             Change::between(&current(), &draft, &config()),

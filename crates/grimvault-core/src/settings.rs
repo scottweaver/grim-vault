@@ -158,6 +158,17 @@ pub enum ReagentSync {
     Off,
 }
 
+/// Whether every blueprint learned in the open campaign
+/// (`formulas.gst`) the vault holds no item of is added to the vault
+/// as a blueprint item on every load and reload.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BlueprintSync {
+    #[default]
+    On,
+    Off,
+}
+
 /// Whether a bulk move or copy into the store — a tab's "Move all" /
 /// "Copy all" buttons and the auto-move standing order alike — admits
 /// an item the store already holds under the same record and roll
@@ -206,6 +217,8 @@ pub struct Settings {
     #[serde(default)]
     pub sync_reagents: ReagentSync,
     #[serde(default)]
+    pub sync_blueprints: BlueprintSync,
+    #[serde(default)]
     pub bulk_duplicates: BulkDuplicates,
 }
 
@@ -243,6 +256,7 @@ impl Settings {
             auto_move: Vec::new(),
             purge_duplicates: Vec::new(),
             sync_reagents: ReagentSync::default(),
+            sync_blueprints: BlueprintSync::default(),
             bulk_duplicates: BulkDuplicates::default(),
         }
     }
@@ -482,7 +496,18 @@ mod tests {
         assert!(settings.auto_move.is_empty());
         assert!(settings.purge_duplicates.is_empty());
         assert_eq!(settings.sync_reagents, ReagentSync::On);
+        assert_eq!(settings.sync_blueprints, BlueprintSync::On);
         assert_eq!(settings.bulk_duplicates, BulkDuplicates::Skip);
+        let off = Settings::parse(
+            br#"{"format":"grimvault-settings","version":1,"gameDir":"/g","saveDir":"/s","syncBlueprints":"off"}"#,
+        )
+        .unwrap();
+        assert_eq!(off.sync_blueprints, BlueprintSync::Off);
+        assert!(
+            String::from_utf8(off.to_json())
+                .unwrap()
+                .contains("\"syncBlueprints\": \"off\"")
+        );
         let named = Settings::parse(
             br#"{"format":"grimvault-settings","version":1,"gameDir":"/g","saveDir":"/s","purgeDuplicates":[{"kind":"transferStash","campaign":"main","tab":2}]}"#,
         )

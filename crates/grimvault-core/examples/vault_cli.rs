@@ -12,6 +12,7 @@
 //! vault_cli <game dir> <save dir> <store.json> vault-reagent <index> <count>
 //! vault_cli <game dir> <save dir> <store.json> place-reagent <id>
 //! vault_cli <game dir> <save dir> <store.json> sync-reagents
+//! vault_cli <game dir> <save dir> <store.json> sync-blueprints
 //! vault_cli <game dir> <save dir> <store.json> characters
 //! vault_cli <game dir> <save dir> <store.json> vault-sack <character> <sack> <index>
 //! vault_cli <game dir> <save dir> <store.json> place-sack <id> <character> <sack> [x y]
@@ -81,6 +82,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use grimvault_core::bucket::{Bucket, Group};
 use grimvault_core::bulk::{self, Identities};
 use grimvault_core::campaign::Campaign;
+use grimvault_core::formulas::Formulas;
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::{PlayerFile, Realm};
 use grimvault_core::gds;
@@ -102,7 +104,8 @@ const BACKUPS: BackupPolicy = BackupPolicy::new("grimvault-bak", 5);
 const USAGE: &str = "usage: vault_cli [--game DIR] [--save DIR] [--store FILE] [--mod NAME] \
                      (list | vault <tab> <index> | vault-tab <tab> | place <id> <tab> [x y] \
                      | reagents | vault-reagent <index> <count> | place-reagent <id> \
-                     | sync-reagents | characters | vault-sack <character> <sack> <index> \
+                     | sync-reagents | sync-blueprints | characters \
+                     | vault-sack <character> <sack> <index> \
                      | vault-stash-tab <character> <tab> \
                      | place-sack <id> <character> <sack> [x y] | money <character> [<iron bits>] \
                      | import-gds <file.gds> | export-store <copy.json> \
@@ -137,6 +140,7 @@ enum Command {
         id: StoredItemId,
     },
     SyncReagents,
+    SyncBlueprints,
     Character(CharacterCommand),
     Store(StoreCommand),
     Socket(SocketCommand),
@@ -442,6 +446,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 now()?,
             );
             println!("component sync: {summary}");
+            if summary.is_noop() {
+                println!("nothing to write");
+            } else {
+                write_store(&store_path, &store)?;
+            }
+            print_bucket_counts(&game_data, &store);
+        }
+        Command::SyncBlueprints => {
+            let formulas_path = shared_dir.join("formulas.gst");
+            let formulas = Loaded::<Formulas>::load(read_verified(&formulas_path)?)?;
+            println!(
+                "loaded {} ({} blueprints)",
+                formulas_path.display(),
+                formulas.model().entries.len()
+            );
+            let summary =
+                bulk::sync_blueprints(&formulas.model().entries, &campaign, &mut store, now()?);
+            println!("blueprint sync: {summary}");
             if summary.is_noop() {
                 println!("nothing to write");
             } else {
@@ -1110,6 +1132,7 @@ fn parse_args(args: &[String]) -> Result<Invocation, Box<dyn Error>> {
             tab: TabIndex::new(tab.parse()?),
         },
         ("sync-reagents", []) => Command::SyncReagents,
+        ("sync-blueprints", []) => Command::SyncBlueprints,
         ("vault", [tab, index]) => Command::Vault {
             tab: TabIndex::new(tab.parse()?),
             index: ItemIndex::new(index.parse()?),

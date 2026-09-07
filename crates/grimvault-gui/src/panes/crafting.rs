@@ -14,6 +14,7 @@ use grimvault_core::formulas::FormulaRead;
 use grimvault_core::gamedata::Rarity;
 use grimvault_core::illusion::{IllusionCategory, available_illusions, records_of};
 use grimvault_core::item::Item;
+use grimvault_core::settings::BlueprintSync;
 use univault_engine::ids::{RecordId, normalize};
 
 use super::{DragFrame, PaneCtx, TileLook, item_tooltip, paint_tile};
@@ -75,6 +76,7 @@ pub fn show_blueprints(
         ui,
         Crafting::Blueprints,
         format!("{} known · {unread} new", formulas.entries.len()),
+        Some(cx.settings.sync_blueprints),
         frame,
     );
     if opened {
@@ -126,6 +128,7 @@ pub fn show_illusions(
             collection.total_count(),
             collection.slots.len()
         ),
+        None,
         frame,
     );
     if opened {
@@ -203,8 +206,18 @@ fn editable<'d, D: crate::documents::Document>(
     }
 }
 
-/// The count line and the three actions; `true` when Add… was clicked.
-fn toolbar(ui: &mut Ui, list: Crafting, summary: String, frame: &mut DragFrame) -> bool {
+const BLUEPRINT_SYNC_WHY: &str = "Every blueprint learned in this campaign that the vault holds no item of is added to the \
+     vault as a blueprint item whenever the list loads or changes; nothing is ever removed.";
+
+/// The count line, the three actions, and — for the list that has
+/// one — the vault sync toggle; `true` when Add… was clicked.
+fn toolbar(
+    ui: &mut Ui,
+    list: Crafting,
+    summary: String,
+    sync: Option<BlueprintSync>,
+    frame: &mut DragFrame,
+) -> bool {
     let mut opened = false;
     ui.horizontal_wrapped(|ui| {
         ui.label(summary);
@@ -215,6 +228,21 @@ fn toolbar(ui: &mut Ui, list: Crafting, summary: String, frame: &mut DragFrame) 
         }
         if ui.button("Import…").clicked() {
             frame.crafting = Some(Request::Import(list));
+        }
+        if let Some(sync) = sync {
+            ui.separator();
+            let mut syncing = sync == BlueprintSync::On;
+            if ui
+                .checkbox(&mut syncing, "Sync to vault")
+                .on_hover_text(BLUEPRINT_SYNC_WHY)
+                .changed()
+            {
+                frame.blueprint_sync = Some(if syncing {
+                    BlueprintSync::On
+                } else {
+                    BlueprintSync::Off
+                });
+            }
         }
     });
     opened

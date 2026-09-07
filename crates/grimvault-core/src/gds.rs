@@ -141,6 +141,7 @@ impl GdsEntry {
             | ItemOrigin::Character { .. }
             | ItemOrigin::CharacterStash { .. }
             | ItemOrigin::ReagentStorage { .. }
+            | ItemOrigin::LearnedBlueprint { .. }
             | ItemOrigin::Unknown => None,
         }
     }

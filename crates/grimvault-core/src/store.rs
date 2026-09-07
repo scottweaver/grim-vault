@@ -128,6 +128,9 @@ pub enum ItemOrigin {
         #[serde(default = "campaign_before_mods_were_recorded")]
         campaign: Campaign,
     },
+    /// A blueprint learned in a campaign (`formulas.gst`), added to the
+    /// vault as a blueprint item by the blueprint sync.
+    LearnedBlueprint { campaign: Campaign },
     /// An entry of a GD Stash export (`.gds`, [`crate::gds`]): the
     /// export's file name, and the two facts only that file records —
     /// the mode the item was played in and the character it is
@@ -155,6 +158,9 @@ impl fmt::Display for ItemOrigin {
             }
             Self::ReagentStorage { campaign } => {
                 write!(f, "{campaign} component / crafting-material storage")
+            }
+            Self::LearnedBlueprint { campaign } => {
+                write!(f, "{campaign} learned blueprint")
             }
             Self::GdStashExport { file, mode, owner } => match owner {
                 Some(owner) => write!(f, "GD Stash export {file} ({mode}, soulbound to {owner})"),
@@ -1020,6 +1026,23 @@ mod tests {
             ItemOrigin::ReagentStorage {
                 campaign: Campaign::Main
             }
+        );
+        let learned = ItemOrigin::LearnedBlueprint {
+            campaign: loot.clone(),
+        };
+        let learned_json = json!({ "kind": "learnedBlueprint", "campaign": "LootAscension" });
+        assert_eq!(serde_json::to_value(&learned).unwrap(), learned_json);
+        assert_eq!(
+            serde_json::from_value::<ItemOrigin>(learned_json).unwrap(),
+            learned
+        );
+        assert_eq!(learned.to_string(), "LootAscension learned blueprint");
+        assert_eq!(
+            ItemOrigin::LearnedBlueprint {
+                campaign: Campaign::Main
+            }
+            .to_string(),
+            "main campaign learned blueprint"
         );
         let bound = ItemOrigin::GdStashExport {
             file: "gd-stash-export.gds".into(),
