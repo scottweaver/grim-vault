@@ -32,7 +32,8 @@ use univault_engine::codec::Codec;
 use crate::badges::SymbolTextures;
 use crate::crafting::{Blueprints, IllusionCollection};
 use crate::documents::{
-    CharacterEntry, GstOpenError, Reagents, StashDoc, StoreDoc, StoreOpenError, open_characters,
+    CharacterEntry, CharacterSlot, FileStamp, GstOpenError, Reagents, StashDoc, StoreDoc,
+    StoreOpenError, open_characters,
 };
 use crate::icons::IconProblem;
 use crate::setup::{GameDir, SaveDir};
@@ -112,15 +113,48 @@ pub struct LoadedWorld {
     /// Whose shared files `stash`, `reagents`, `blueprints`, and
     /// `illusions` are.
     pub campaign: Campaign,
+    /// Why `campaign` is the one opened.
+    pub campaign_choice: CampaignChoice,
     pub stash: StashDoc,
     pub reagents: Reagents,
     pub blueprints: Blueprints,
     pub illusions: IllusionCollection,
     pub store: StoreDoc,
     pub characters: Vec<CharacterEntry>,
+    /// The character the game wrote last — the one being played — so
+    /// the picker opens on it; `None` only when there are none.
+    pub newest_character: Option<CharacterSlot>,
     /// Cross-checks that failed without stopping the load, for the
     /// shell to show.
     pub warnings: Vec<String>,
+}
+
+/// Why the campaign opened first is the one it is: the user's last
+/// selection when it is still there, else the newest stash — the best
+/// witness of what is being played, since neither a character file nor
+/// the game names a character's mod.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CampaignChoice {
+    /// The campaign selected last time, still in the save directory.
+    Remembered,
+    /// Nothing was remembered.
+    Newest,
+    /// The remembered campaign has no folder in the save directory
+    /// any more.
+    Missing(Campaign),
+}
+
+impl fmt::Display for CampaignChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Remembered => f.write_str("selected last time"),
+            Self::Newest => f.write_str("nothing remembered: its transfer.gst was written last"),
+            Self::Missing(gone) => write!(
+                f,
+                "the remembered {gone} is not in the save directory: its transfer.gst was written last"
+            ),
+        }
+    }
 }
 
 /// One campaign's shared files as opened.
@@ -192,23 +226,45 @@ fn misfiled(path: &Path, mod_name: &str, campaign: &Campaign) -> String {
     )
 }
 
-/// The campaign the game wrote most recently, by its stash's
-/// modification time: the best witness of what is being played, since
-/// neither a character file nor the game names a character's mod. The
-/// first candidate (the main campaign) when nothing has a time or on a
-/// tie.
-fn newest_campaign(stamped: impl IntoIterator<Item = (Campaign, Option<SystemTime>)>) -> Campaign {
+/// The campaign to open: `remembered` when the save directory still
+/// holds it, else the one the game wrote most recently by its stash's
+/// modification time (the main campaign when nothing has a time or on
+/// a tie).
+fn default_campaign(
+    remembered: Option<&Campaign>,
+    stamped: impl IntoIterator<Item = (Campaign, Option<SystemTime>)>,
+) -> (Campaign, CampaignChoice) {
+    let stamped: Vec<(Campaign, Option<SystemTime>)> = stamped.into_iter().collect();
+    match remembered {
+        Some(wanted) if stamped.iter().any(|(campaign, _)| campaign == wanted) => {
+            (wanted.clone(), CampaignChoice::Remembered)
+        }
+        Some(wanted) => (
+            newest(stamped).unwrap_or(Campaign::Main),
+            CampaignChoice::Missing(wanted.clone()),
+        ),
+        None => (
+            newest(stamped).unwrap_or(Campaign::Main),
+            CampaignChoice::Newest,
+        ),
+    }
+}
+
+/// The candidate with the latest modification time; the first one on
+/// a tie or when nothing has a time, `None` only when there are no
+/// candidates.
+fn newest<T>(stamped: impl IntoIterator<Item = (T, Option<SystemTime>)>) -> Option<T> {
     stamped
         .into_iter()
-        .fold(
-            (Campaign::Main, None::<SystemTime>),
-            |best, (campaign, time)| match (best.1, time) {
-                (None, Some(_)) => (campaign, time),
-                (Some(held), Some(seen)) if seen > held => (campaign, time),
-                _ => best,
-            },
-        )
-        .0
+        .fold(None, |best, (candidate, time)| match best {
+            None => Some((candidate, time)),
+            Some((_, None)) if time.is_some() => Some((candidate, time)),
+            Some((_, Some(held))) if time.is_some_and(|seen| seen > held) => {
+                Some((candidate, time))
+            }
+            Some(kept) => Some(kept),
+        })
+        .map(|(candidate, _)| candidate)
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
@@ -234,7 +290,8 @@ pub enum LoadFailure {
     Store(#[from] StoreOpenError),
 }
 
-/// The whole load, reporting each step to `progress` as it begins.
+/// The whole load, reporting each step to `progress` as it begins;
+/// `remembered` is the campaign the user selected last, if any.
 ///
 /// # Errors
 /// [`LoadFailure`] for the first fatal step; a character that fails
@@ -242,6 +299,7 @@ pub enum LoadFailure {
 /// not fatal and is reported inside the world instead.
 pub fn load_world(
     paths: &WorldPaths,
+    remembered: Option<&Campaign>,
     progress: &mut dyn FnMut(LoadStep),
 ) -> Result<LoadedWorld, LoadFailure> {
     let started = Instant::now();
@@ -274,12 +332,15 @@ pub fn load_world(
     };
 
     let campaigns = paths.save.campaigns();
-    let campaign = newest_campaign(campaigns.iter().map(|campaign| {
-        (
-            campaign.clone(),
-            modified(&paths.save.transfer_stash(campaign)),
-        )
-    }));
+    let (campaign, campaign_choice) = default_campaign(
+        remembered,
+        campaigns.iter().map(|campaign| {
+            (
+                campaign.clone(),
+                modified(&paths.save.transfer_stash(campaign)),
+            )
+        }),
+    );
     let SharedDocs {
         stash,
         reagents,
@@ -292,18 +353,26 @@ pub fn load_world(
     let store = StoreDoc::open(paths.store.clone())?;
     progress(LoadStep::Characters);
     let characters = open_characters(&paths.save);
+    let newest_character = newest(characters.iter().enumerate().map(|(slot, entry)| {
+        (
+            CharacterSlot::new(slot),
+            entry.stamp().map(FileStamp::modified),
+        )
+    }));
     Ok(LoadedWorld {
         game,
         report,
         symbols,
         campaigns,
         campaign,
+        campaign_choice,
         stash,
         reagents,
         blueprints,
         illusions,
         store,
         characters,
+        newest_character,
         warnings,
     })
 }
@@ -519,9 +588,11 @@ pub enum LoadEvent {
 }
 
 /// A load in flight: the steps reported so far and the channel the
-/// outcome arrives on.
+/// outcome arrives on. `remembered` rides along so a load that fails
+/// hands the selection back to setup instead of forgetting it.
 pub struct LoadJob {
     pub paths: WorldPaths,
+    pub remembered: Option<Campaign>,
     pub steps: Vec<LoadStep>,
     events: Receiver<LoadEvent>,
 }
@@ -549,12 +620,13 @@ impl LoadJob {
 /// Runs [`load_world`] on a thread; every event asks `wake` to
 /// repaint so the progress panel advances without pointer motion.
 #[must_use]
-pub fn start(paths: WorldPaths, wake: egui::Context) -> LoadJob {
+pub fn start(paths: WorldPaths, remembered: Option<Campaign>, wake: egui::Context) -> LoadJob {
     let (sender, events) = channel::<LoadEvent>();
     let job_paths = paths.clone();
+    let job_remembered = remembered.clone();
     let spawned = std::thread::Builder::new()
         .name("grimvault-load".into())
-        .spawn(move || run(&job_paths, &sender, &wake));
+        .spawn(move || run(&job_paths, job_remembered.as_ref(), &sender, &wake));
     if let Err(error) = spawned {
         let (fallback, events) = channel::<LoadEvent>();
         let _ = fallback.send(LoadEvent::Failed(LoadFailure::Read {
@@ -563,23 +635,30 @@ pub fn start(paths: WorldPaths, wake: egui::Context) -> LoadJob {
         }));
         return LoadJob {
             paths,
+            remembered,
             steps: Vec::new(),
             events,
         };
     }
     LoadJob {
         paths,
+        remembered,
         steps: Vec::new(),
         events,
     }
 }
 
-fn run(paths: &WorldPaths, sender: &Sender<LoadEvent>, wake: &egui::Context) {
+fn run(
+    paths: &WorldPaths,
+    remembered: Option<&Campaign>,
+    sender: &Sender<LoadEvent>,
+    wake: &egui::Context,
+) {
     let mut report = |step: LoadStep| {
         let _ = sender.send(LoadEvent::Step(step));
         wake.request_repaint();
     };
-    let outcome = match load_world(paths, &mut report) {
+    let outcome = match load_world(paths, remembered, &mut report) {
         Ok(world) => LoadEvent::Done(Box::new(world)),
         Err(failure) => LoadEvent::Failed(failure),
     };
@@ -599,32 +678,90 @@ mod tests {
         UNIX_EPOCH + Duration::from_secs(seconds)
     }
 
+    fn loot() -> Campaign {
+        Campaign::Mod(ModName::parse("LootAscension").unwrap())
+    }
+
+    fn zeta() -> Campaign {
+        Campaign::Mod(ModName::parse("Zeta").unwrap())
+    }
+
     #[test]
-    fn the_default_campaign_is_the_one_written_most_recently() {
-        let loot = Campaign::Mod(ModName::parse("LootAscension").unwrap());
-        let zeta = Campaign::Mod(ModName::parse("Zeta").unwrap());
+    fn with_nothing_remembered_the_campaign_written_most_recently_opens() {
         assert_eq!(
-            newest_campaign([
-                (Campaign::Main, Some(at(100))),
-                (loot.clone(), Some(at(300))),
-                (zeta.clone(), Some(at(200))),
+            default_campaign(
+                None,
+                [
+                    (Campaign::Main, Some(at(100))),
+                    (loot(), Some(at(300))),
+                    (zeta(), Some(at(200))),
+                ]
+            ),
+            (loot(), CampaignChoice::Newest)
+        );
+        assert_eq!(
+            default_campaign(
+                None,
+                [(Campaign::Main, Some(at(300))), (loot(), Some(at(300)))]
+            ),
+            (Campaign::Main, CampaignChoice::Newest)
+        );
+        assert_eq!(
+            default_campaign(None, [(Campaign::Main, None), (zeta(), Some(at(5)))]),
+            (zeta(), CampaignChoice::Newest)
+        );
+        assert_eq!(
+            default_campaign(None, [(Campaign::Main, None), (loot(), None)]),
+            (Campaign::Main, CampaignChoice::Newest)
+        );
+        assert_eq!(
+            default_campaign(None, []),
+            (Campaign::Main, CampaignChoice::Newest)
+        );
+    }
+
+    #[test]
+    fn the_remembered_campaign_opens_while_it_exists_and_the_newest_when_it_is_gone() {
+        let stamped = [
+            (Campaign::Main, Some(at(100))),
+            (loot(), Some(at(300))),
+            (zeta(), Some(at(200))),
+        ];
+        assert_eq!(
+            default_campaign(Some(&zeta()), stamped.clone()),
+            (zeta(), CampaignChoice::Remembered)
+        );
+        assert_eq!(
+            default_campaign(Some(&Campaign::Main), stamped.clone()),
+            (Campaign::Main, CampaignChoice::Remembered)
+        );
+        let gone = Campaign::Mod(ModName::parse("Uninstalled").unwrap());
+        assert_eq!(
+            default_campaign(Some(&gone), stamped),
+            (loot(), CampaignChoice::Missing(gone))
+        );
+    }
+
+    #[test]
+    fn the_newest_character_is_the_one_written_last_and_the_first_on_a_tie() {
+        let slot = CharacterSlot::new;
+        assert_eq!(
+            newest([
+                (slot(0), Some(at(100))),
+                (slot(1), Some(at(900))),
+                (slot(2), Some(at(500))),
             ]),
-            loot
+            Some(slot(1))
         );
         assert_eq!(
-            newest_campaign([
-                (Campaign::Main, Some(at(300))),
-                (loot.clone(), Some(at(300)))
-            ]),
-            Campaign::Main
+            newest([(slot(0), Some(at(900))), (slot(1), Some(at(900)))]),
+            Some(slot(0))
         );
         assert_eq!(
-            newest_campaign([(Campaign::Main, None), (zeta.clone(), Some(at(5)))]),
-            zeta
+            newest([(slot(0), None), (slot(1), None), (slot(2), Some(at(1)))]),
+            Some(slot(2))
         );
-        assert_eq!(
-            newest_campaign([(Campaign::Main, None), (loot, None)]),
-            Campaign::Main
-        );
+        assert_eq!(newest([(slot(0), None), (slot(1), None)]), Some(slot(0)));
+        assert_eq!(newest::<CharacterSlot>([]), None);
     }
 }

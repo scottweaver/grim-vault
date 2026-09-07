@@ -31,7 +31,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use app::App;
-use settings::ConfigDir;
+use settings::{ConfigDir, Settings};
 
 const USAGE: &str = "usage: grimvault-gui [--check [<game dir> <save dir>]]";
 
@@ -73,25 +73,27 @@ fn main() -> ExitCode {
     }
 }
 
+/// Explicit directories carry no remembered campaign: only the saved
+/// settings do, so only a check run from them opens on it.
 fn run_check(paths: CheckPaths) -> ExitCode {
-    let (game, save) = match paths {
-        CheckPaths::Explicit { game, save } => (game, save),
-        CheckPaths::Saved => match saved_paths() {
-            Ok(paths) => paths,
+    let (game, save, remembered) = match paths {
+        CheckPaths::Explicit { game, save } => (game, save, None),
+        CheckPaths::Saved => match saved_settings() {
+            Ok(settings) => (settings.game_dir, settings.save_dir, settings.campaign),
             Err(error) => {
                 eprintln!("grim-vault: {error}");
                 return ExitCode::FAILURE;
             }
         },
     };
-    check::run(&game, &save)
+    check::run(&game, &save, remembered.as_ref())
 }
 
-/// The game and save directories from the saved settings.
-fn saved_paths() -> Result<(PathBuf, PathBuf), String> {
+/// The saved settings, or why a check cannot run without directories.
+fn saved_settings() -> Result<Settings, String> {
     let config = ConfigDir::resolve().map_err(|error| error.to_string())?;
     match settings::load(&config) {
-        Ok(Some(settings)) => Ok((settings.game_dir, settings.save_dir)),
+        Ok(Some(settings)) => Ok(settings),
         Ok(None) => Err(format!(
             "no settings at {}: run the app once, or pass --check <game dir> <save dir>",
             config.settings_file().display()

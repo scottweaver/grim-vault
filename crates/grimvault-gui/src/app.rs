@@ -34,7 +34,8 @@ use crate::facts::FactsCache;
 use crate::grid::CELL_PX;
 use crate::icons::{Icon, IconCache};
 use crate::loader::{
-    self, LoadFailure, LoadJob, LoadOutcome, LoadReport, LoadedWorld, WorldPaths, open_shared,
+    self, CampaignChoice, LoadFailure, LoadJob, LoadOutcome, LoadReport, LoadedWorld, WorldPaths,
+    open_shared,
 };
 use crate::panes::character::CharacterView;
 use crate::panes::stash::StashView;
@@ -92,7 +93,7 @@ impl App {
 fn initial_phase(config: &ConfigDir, ctx: &egui::Context) -> Phase {
     match settings::load(config) {
         Ok(Some(saved)) => match world_paths(&saved, config) {
-            Ok(paths) => Phase::Loading(loader::start(paths, ctx.clone())),
+            Ok(paths) => Phase::Loading(loader::start(paths, saved.campaign, ctx.clone())),
             Err(problem) => Phase::Setup(SetupState::discover(
                 Some(&saved),
                 Some(problem.to_string()),
@@ -112,10 +113,11 @@ fn world_paths(saved: &Settings, config: &ConfigDir) -> Result<WorldPaths, DirPr
     })
 }
 
-fn settings_of(paths: &WorldPaths) -> Settings {
+fn settings_of(paths: &WorldPaths, campaign: Option<Campaign>) -> Settings {
     Settings {
         game_dir: paths.game.path().to_path_buf(),
         save_dir: paths.save.path().to_path_buf(),
+        campaign,
     }
 }
 
@@ -135,7 +137,7 @@ impl eframe::App for App {
             Phase::Loading(job) => show_loading(ui, job, &self.theme, &mut self.toasts),
             Phase::Failed(failed) => show_failed(ui, failed, &self.theme),
             Phase::Ready(world) => {
-                world.show(ui, &self.theme, &mut self.toasts);
+                world.show(ui, &self.theme, &self.config, &mut self.toasts);
                 None
             }
         };
@@ -210,7 +212,11 @@ fn show_setup(
                 store: config.store_file(),
                 ui_state: config.ui_state_file(),
             };
-            next = Some(Phase::Loading(loader::start(paths, ui.ctx().clone())));
+            next = Some(Phase::Loading(loader::start(
+                paths,
+                state.campaign.clone(),
+                ui.ctx().clone(),
+            )));
         }
         ui.add_space(8.0);
         ui.label(theme.path_text(format!(
@@ -275,7 +281,7 @@ fn show_loading(
         Some(LoadOutcome::Failed(failure)) => {
             return Some(Phase::Failed(LoadFailed {
                 failure,
-                settings: settings_of(&job.paths),
+                settings: settings_of(&job.paths, job.remembered.clone()),
             }));
         }
         None => {}
@@ -302,7 +308,12 @@ fn show_loading(
         ui.add_space(8.0);
         back = ui.button("Back to setup").clicked();
     });
-    back.then(|| Phase::Setup(SetupState::discover(Some(&settings_of(&job.paths)), None)))
+    back.then(|| {
+        Phase::Setup(SetupState::discover(
+            Some(&settings_of(&job.paths, job.remembered.clone())),
+            None,
+        ))
+    })
 }
 
 fn show_failed(ui: &mut Ui, failed: &LoadFailed, theme: &Theme) -> Option<Phase> {
@@ -437,6 +448,12 @@ impl World {
         for warning in loaded.warnings {
             toasts.error(warning);
         }
+        if let CampaignChoice::Missing(gone) = &loaded.campaign_choice {
+            toasts.info(format!(
+                "the remembered {gone} is not in the save directory: showing the {} files",
+                loaded.campaign
+            ));
+        }
         let write_order = WriteOrder::new(SHARED_DOCS.into_iter().chain(
             (0..loaded.characters.len()).map(|slot| Doc::Character(CharacterSlot::new(slot))),
         ));
@@ -460,7 +477,7 @@ impl World {
             store_view,
             search_cache: SearchCache::default(),
             ui_state,
-            character_view: CharacterView::default(),
+            character_view: CharacterView::opening_on(loaded.newest_character),
             drag: None,
             autosave: Autosave::default(),
             watcher,
@@ -485,11 +502,12 @@ impl World {
         }
     }
 
-    /// Swaps the shared files for another campaign's. Unsaved edits
+    /// Swaps the shared files for another campaign's and remembers
+    /// the choice in the settings for the next launch. Unsaved edits
     /// are written first, backup-first as ever; nothing changes when
     /// that write, a pending external change, or the open stands in
     /// the way.
-    fn switch_campaign(&mut self, next: Campaign, toasts: &mut Toasts) {
+    fn switch_campaign(&mut self, next: Campaign, config: &ConfigDir, toasts: &mut Toasts) {
         if next == self.campaign {
             return;
         }
@@ -527,6 +545,12 @@ impl World {
         }
         self.rewatch();
         toasts.info(format!("showing the {} files", self.campaign));
+        let remembered = settings_of(&self.paths, Some(self.campaign.clone()));
+        if let Err(error) = settings::save(config, &remembered) {
+            toasts.error(format!(
+                "the campaign selection was not remembered: {error}"
+            ));
+        }
     }
 
     /// Every document, in default write order.
@@ -537,7 +561,7 @@ impl World {
             .collect()
     }
 
-    fn show(&mut self, ui: &mut Ui, theme: &Theme, toasts: &mut Toasts) {
+    fn show(&mut self, ui: &mut Ui, theme: &Theme, config: &ConfigDir, toasts: &mut Toasts) {
         let mut frame = DragFrame::default();
         let mode = mode_of(ui.input(|input| input.modifiers));
         self.search_shortcuts(ui.ctx());
@@ -617,7 +641,7 @@ impl World {
         self.show_conflict_modal(ui.ctx(), theme, toasts);
         self.finish_frame(ui.ctx(), frame, mode, &theme.palette, toasts);
         if let Some(next) = switch {
-            self.switch_campaign(next, toasts);
+            self.switch_campaign(next, config, toasts);
         }
         self.persist_ui_state(ui.ctx());
     }

@@ -180,6 +180,9 @@ pub struct SetupState {
     pub save_candidates: Vec<PathBuf>,
     /// Why the app is on this screen when it is not the first run.
     pub note: Option<String>,
+    /// The campaign the earlier settings remembered, carried through
+    /// so coming back to this screen does not forget it.
+    pub campaign: Option<Campaign>,
 }
 
 impl SetupState {
@@ -205,6 +208,7 @@ impl SetupState {
             game_candidates,
             save_candidates,
             note,
+            campaign: seed.and_then(|settings| settings.campaign.clone()),
         }
     }
 
@@ -222,6 +226,7 @@ impl SetupState {
         Settings {
             game_dir: PathBuf::from(&self.game_field),
             save_dir: PathBuf::from(&self.save_field),
+            campaign: self.campaign.clone(),
         }
     }
 }
@@ -381,10 +386,12 @@ mod tests {
         let settings = Settings {
             game_dir: PathBuf::from("/nowhere/game"),
             save_dir: PathBuf::from("/nowhere/save"),
+            campaign: Some(Campaign::Mod(ModName::parse("LootAscension").unwrap())),
         };
         let state = SetupState::discover(Some(&settings), Some("note".into()));
         assert_eq!(state.game_field, "/nowhere/game");
         assert_eq!(state.settings(), settings);
+        assert_eq!(SetupState::discover(None, None).campaign, None);
         assert!(matches!(state.game_dir(), Err(DirProblem::Missing(_))));
         assert!(matches!(state.save_dir(), Err(DirProblem::Missing(_))));
     }

@@ -42,8 +42,17 @@ pub struct CharacterView {
 
 impl Default for CharacterView {
     fn default() -> Self {
+        Self::opening_on(None)
+    }
+}
+
+impl CharacterView {
+    /// A fresh view with the picker on `slot` — the character the game
+    /// wrote last — or on the first entry when there is none.
+    #[must_use]
+    pub fn opening_on(slot: Option<CharacterSlot>) -> Self {
         Self {
-            selected: 0,
+            selected: slot.map_or(0, CharacterSlot::value),
             tab: CharacterTab::Sack(0),
             confirm: None,
         }

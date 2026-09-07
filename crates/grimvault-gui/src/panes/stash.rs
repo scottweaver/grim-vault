@@ -54,8 +54,9 @@ impl Default for StashView {
 
 const CAMPAIGN_WHY: &str = "Whose shared files show here: the main campaign keeps its stash and \
      component storage beside main/, and each mod keeps its own under save/<Mod>/. The app opens \
-     on whichever the game wrote last. Characters are not tied to a campaign — the game lists \
-     every custom-game character under every mod — so the character list never changes.";
+     on the campaign selected last time, or on whichever the game wrote last when nothing was \
+     selected yet. Characters are not tied to a campaign — the game lists every custom-game \
+     character under every mod — so the character list never changes.";
 
 /// The campaign whose files the pane shows, among those the save
 /// directory holds.

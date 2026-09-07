@@ -49,6 +49,11 @@ impl FileStamp {
     pub(crate) const fn synthetic(size: u64, modified: SystemTime) -> Self {
         Self { size, modified }
     }
+
+    #[must_use]
+    pub const fn modified(self) -> SystemTime {
+        self.modified
+    }
 }
 
 /// The stamp of `path` now; `None` when it cannot be stat'ed (absent,

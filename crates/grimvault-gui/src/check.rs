@@ -10,6 +10,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use grimvault_core::blueprint::check_blueprint;
+use grimvault_core::campaign::Campaign;
 use grimvault_core::formulas::FormulaRead;
 use grimvault_core::gamedata::GameData;
 use grimvault_core::gdc::InventoryState;
@@ -22,14 +23,14 @@ use univault_engine::ids::RecordId;
 use crate::crafting::{Blueprints, IllusionCollection};
 use crate::documents::{CharacterDoc, CharacterEntry, Optional, Reagents, StoreDoc, Writable};
 use crate::facts::FactsCache;
-use crate::loader::{LoadStep, WorldPaths, load_world};
+use crate::loader::{LoadStep, LoadedWorld, WorldPaths, load_world};
 use crate::panes::character::{EQUIPMENT_SLOTS, WEAPON_SLOTS};
 use crate::settings::ConfigDir;
 use crate::setup::{GameDir, SaveDir};
 use grimvault_core::gdc::Realm;
 
-pub fn run(game: &Path, save: &Path) -> ExitCode {
-    match check(game, save) {
+pub fn run(game: &Path, save: &Path, remembered: Option<&Campaign>) -> ExitCode {
+    match check(game, save, remembered) {
         Ok(0) => ExitCode::SUCCESS,
         Ok(problems) => {
             eprintln!("{problems} problem(s) found");
@@ -42,7 +43,7 @@ pub fn run(game: &Path, save: &Path) -> ExitCode {
     }
 }
 
-fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
+fn check(game: &Path, save: &Path, remembered: Option<&Campaign>) -> Result<usize, Box<dyn Error>> {
     let config = ConfigDir::resolve()?;
     println!("config dir: {}", config.path().display());
     let paths = WorldPaths {
@@ -52,7 +53,7 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
         ui_state: config.ui_state_file(),
     };
     let mut progress = |step: LoadStep| println!("… {step}");
-    let world = load_world(&paths, &mut progress)?;
+    let world = load_world(&paths, remembered, &mut progress)?;
     let mut facts = FactsCache::default();
     println!(
         "game data: {} database layers, {} text archives, {} item archives, {} mod layers, \
@@ -75,9 +76,10 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
 
     let campaigns: Vec<String> = world.campaigns.iter().map(ToString::to_string).collect();
     println!(
-        "campaigns: {} — showing the {} (its transfer.gst was written last)",
+        "campaigns: {} — showing the {} ({})",
         campaigns.join(", "),
-        world.campaign
+        world.campaign,
+        world.campaign_choice
     );
     for warning in &world.warnings {
         println!("  WARNING {warning}");
@@ -115,22 +117,41 @@ fn check(game: &Path, save: &Path) -> Result<usize, Box<dyn Error>> {
 
     print_store(&world.store, &mut facts, &world.game);
 
+    problems += print_characters(&world, &paths.save, &mut facts);
+    Ok(problems)
+}
+
+/// Every character, the one the picker opens on first; the count of
+/// those that failed to open.
+fn print_characters(world: &LoadedWorld, save: &SaveDir, facts: &mut FactsCache) -> usize {
     println!(
         "\ncharacters: {} found under {} and {}",
         world.characters.len(),
-        paths.save.characters_dir(Realm::Main).display(),
-        paths.save.characters_dir(Realm::Custom).display()
+        save.characters_dir(Realm::Main).display(),
+        save.characters_dir(Realm::Custom).display()
     );
+    match world
+        .newest_character
+        .and_then(|slot| world.characters.get(slot.value()))
+    {
+        Some(entry) => println!(
+            "  opening on {} ({}; its player.gdc was written last)",
+            entry.label(),
+            entry.path().display()
+        ),
+        None => println!("  opening on none"),
+    }
+    let mut failed = 0;
     for entry in &world.characters {
         match entry {
-            CharacterEntry::Loaded(doc) => print_character(doc, &mut facts, &world.game),
+            CharacterEntry::Loaded(doc) => print_character(doc, facts, &world.game),
             CharacterEntry::Failed { path, error, .. } => {
                 println!("  FAILED {}: {error}", path.display());
-                problems += 1;
+                failed += 1;
             }
         }
     }
-    Ok(problems)
+    failed
 }
 
 fn print_store(doc: &StoreDoc, facts: &mut FactsCache, game: &GameData) {

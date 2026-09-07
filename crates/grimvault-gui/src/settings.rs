@@ -56,6 +56,7 @@ mod tests {
         Settings {
             game_dir: PathBuf::from("/games/Grim Dawn"),
             save_dir: PathBuf::from("/saves/save"),
+            campaign: Some(grimvault_core::campaign::Campaign::Main),
         }
     }
 
