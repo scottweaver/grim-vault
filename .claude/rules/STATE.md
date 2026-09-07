@@ -9,7 +9,8 @@ Last updated: 2026-09-07 (six more tracks landed on `main` at
 `666f592` — the search view, startup selection, right-click moves,
 parallel archive loading, component / augment socketing, and
 auto-move tabs with the reagent sync; FEATURES.md 1–19 are all
-landed and tagged; the in-game acceptance run is still pending)
+landed and tagged; every landed branch and worktree deleted on the
+user's say-so; the in-game acceptance run is still pending)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
@@ -18,17 +19,14 @@ FEATURES.md item through 19 (there is no item 17) — 483 tests, clippy
 pedantic clean, headless `--check` clean on a scratch copy of the
 saves; there is no remote (the user declined creating the GitHub repo
 for now — do not push unprompted, next-up item 7). No track is in
-flight. Twelve landed branches (`feat/search-view`,
-`feat/startup-selection`, `feat/right-click-move`,
-`perf/parallel-load`, `feat/socketing`, `feat/auto-move-sync`, plus
-the six from 2026-09-06) and eleven worktrees under
-`.claude/worktrees/agent-*` are still present, as are five empty
-`worktree-agent-*` refs at `ac8a38a` from agents that never started —
-delete only with the user's say-so. Two of today's tracks were
-cherry-picked rather than fast-forwarded (their branches sit one base
-behind `main`; the commits are identical). Parallel tracks are
-integrated by rebasing each onto the moving `main` — ask the agent to
-do it, it knows its own conflicts — and fast-forwarding; conflicts sat
+flight, and `main` is the only branch: on the user's say-so
+(2026-09-07, after the refresh) every landed branch, every
+`worktree-agent-*` ref, and all eleven worktrees under
+`.claude/worktrees/` (37 GB of build caches) were deleted; the two
+cherry-picked branches were force-deleted after `git cherry` showed
+their patches already in `main`. Parallel tracks are integrated by
+rebasing each onto the moving `main` — ask the agent to do it, it
+knows its own conflicts — and fast-forwarding; conflicts sat
 in `lib.rs` module lists and crate docs, the `World` initialiser in
 `app.rs`, `panes/mod.rs`, `settings.rs`, and `vault_cli.rs`.
 **Worktree agents share one `git stash` list** — a bare `stash pop` /
@@ -207,10 +205,8 @@ PROJECT.md is bound with `tracker: none`.
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at `666f592` — every FEATURES.md item through 19; 483 tests green; no remote and no GitHub repo yet |
-| `docs/state-post-features-11-19` | this refresh | fast-forwarded into `main` |
-| `feat/search-view`, `feat/startup-selection`, `feat/right-click-move`, `perf/parallel-load`, `feat/socketing`, `feat/auto-move-sync`, `fix/eligible-ascension-badge` | 2026-09-07 tracks | landed (`feat/search-view`'s last fix and `perf/parallel-load` by cherry-pick, the rest fast-forwarded); safe to delete with the user's say-so, worktrees under `.claude/worktrees/agent-*` too |
-| `feat/gds-import`, `feat/respec`, `feat/blueprints-illusions`, `feat/item-facets`, `feat/item-stats`, `fix/tile-badges`, `docs/gdstash-reference`, `docs/state-post-tracks`, five `worktree-agent-*` refs at `ac8a38a` | 2026-09-06 tracks and dead worktree refs | fast-forwarded into `main` (the refs hold nothing); safe to delete with the user's say-so |
+| `main` | trunk | at the `docs/state-post-cleanup` fast-forward — every FEATURES.md item through 19; 483 tests green; no remote and no GitHub repo yet |
+| *(none)* | — | the twelve landed track branches of 2026-09-06 and 2026-09-07, their docs branches, and every `worktree-agent-*` ref were deleted on 2026-09-07 with the user's say-so; no worktrees remain |
 
 ## Next up
 
