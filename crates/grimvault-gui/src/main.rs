@@ -17,6 +17,7 @@ mod drag;
 mod facts;
 mod grid;
 mod icons;
+mod links;
 mod loader;
 mod panes;
 mod reference;

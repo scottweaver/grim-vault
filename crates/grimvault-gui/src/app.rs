@@ -43,6 +43,7 @@ use crate::drag::{
 use crate::facts::FactsCache;
 use crate::grid::CELL_PX;
 use crate::icons::{Icon, IconCache};
+use crate::links::Links;
 use crate::loader::{
     self, CampaignChoice, LoadFailure, LoadJob, LoadOutcome, LoadReport, LoadedWorld, WorldPaths,
     open_shared,
@@ -464,6 +465,7 @@ pub struct World {
     watcher: Result<Watcher, std::io::Error>,
     refresh: RefreshTracker,
     conflicts: Vec<Doc>,
+    links: Links,
     write_order: WriteOrder,
     settings_dialog: Option<SettingsDialog>,
     affixes: AffixTable,
@@ -529,6 +531,7 @@ impl World {
             watcher,
             refresh: RefreshTracker::default(),
             conflicts: Vec::new(),
+            links: Links::default(),
             write_order,
             settings_dialog: None,
             affixes: loaded.affixes,
@@ -726,8 +729,7 @@ impl World {
                 }
             }
             Ok(summary) => {
-                self.mark_edited(Doc::Store);
-                self.mark_edited(doc);
+                self.edited_together(Doc::Store, doc);
                 self.write_order.prioritize(Doc::Store);
                 toasts.info(format!(
                     "auto-moved the {label} into the vault store: {summary}"
@@ -918,9 +920,10 @@ impl World {
                 ));
             }
             Ok(BulkDone::Transferred(summary)) => {
-                self.mark_edited(Doc::Store);
                 if op == BulkOp::Transfer(Mode::Move) {
-                    self.mark_edited(doc);
+                    self.edited_together(Doc::Store, doc);
+                } else {
+                    self.mark_edited(Doc::Store);
                 }
                 self.write_order.prioritize(Doc::Store);
                 toasts.info(format!(
@@ -1786,13 +1789,15 @@ impl World {
                 to,
                 landing,
             }) => {
-                self.mark_edited(to);
                 let verb = match mode {
                     Mode::Move => {
-                        self.mark_edited(from);
+                        self.edited_together(to, from);
                         "moved"
                     }
-                    Mode::Copy => "copied",
+                    Mode::Copy => {
+                        self.mark_edited(to);
+                        "copied"
+                    }
                 };
                 self.write_order.prioritize(to);
                 let destination = self.doc_label(to);
@@ -1865,8 +1870,7 @@ impl World {
                 host,
                 from,
             }) => {
-                self.mark_edited(host);
-                self.mark_edited(from);
+                self.edited_together(host, from);
                 self.write_order.prioritize(host);
                 toasts.info(format!(
                     "put {} in as the {socket} of the item in the {}",
@@ -1880,8 +1884,7 @@ impl World {
                 host,
                 stored,
             }) => {
-                self.mark_edited(host);
-                self.mark_edited(Doc::Store);
+                self.edited_together(host, Doc::Store);
                 self.write_order.prioritize(Doc::Store);
                 toasts.info(format!(
                     "freed the {socket} {} into the vault store as stored item {stored}",
@@ -2054,6 +2057,15 @@ impl World {
         }
     }
 
+    /// One gesture edited two documents — an item left one and landed
+    /// in the other — so an external-change decision on either must
+    /// reach both ([`Links`]).
+    fn edited_together(&mut self, a: Doc, b: Doc) {
+        self.mark_edited(a);
+        self.mark_edited(b);
+        self.links.link(a, b);
+    }
+
     fn mark_edited(&mut self, doc: Doc) {
         match doc {
             Doc::Stash => self.stash.tracking_mut().mark_edited(),
@@ -2203,6 +2215,11 @@ impl World {
         }
     }
 
+    /// Writes the dirty documents destination-first and stops at the
+    /// first that changed on disk: nothing behind it is written, so the
+    /// user's decision in the modal covers every unsaved edit — the
+    /// partner half of a move included, which written here would
+    /// outlive a reload of the conflicting half.
     fn flush(&mut self, toasts: &mut Toasts) -> Result<(), SaveError> {
         for doc in self.write_order.docs() {
             if self.edits(doc) == Edits::Unsaved {
@@ -2210,14 +2227,18 @@ impl World {
                     SaveOutcome::Saved {
                         backup: Some(backup),
                     } => {
+                        self.links.settled(doc);
                         toasts.info(format!(
                             "saved the {}; backup at {}",
                             self.doc_label(doc),
                             backup.display()
                         ));
                     }
-                    SaveOutcome::Saved { backup: None } => {}
-                    SaveOutcome::Conflict => self.push_conflict(doc),
+                    SaveOutcome::Saved { backup: None } => self.links.settled(doc),
+                    SaveOutcome::Conflict => {
+                        self.push_conflict(doc);
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -2405,34 +2426,56 @@ impl World {
         if self.conflicts.is_empty() {
             return;
         }
-        let names: Vec<String> = self
-            .conflicts
-            .iter()
-            .map(|doc| self.doc_label(*doc))
-            .collect();
+        let names = |docs: &[Doc]| -> String {
+            docs.iter()
+                .map(|doc| self.doc_label(*doc))
+                .collect::<Vec<_>>()
+                .join(" and ")
+        };
+        let bound = self.links.bound_to(&self.conflicts);
+        let changed = names(&self.conflicts);
         let mut reload = false;
         let mut keep = false;
         egui::Modal::new(Id::new("external-change")).show(ctx, |ui| {
             ui.set_max_width(440.0);
             ui.label(theme.heading("Changed on disk"));
             ui.label(format!(
-                "The game (or another tool) changed the {} on disk while you have unsaved edits here. \
-                 Saving is paused until you choose.",
-                names.join(" and ")
+                "The game (or another tool) changed the {changed} on disk while you have unsaved \
+                 edits here. Saving is paused until you choose."
             ));
+            if !bound.is_empty() {
+                ui.add_space(4.0);
+                ui.label(format!(
+                    "Your unsaved edits moved items between the {changed} and the {}, so the \
+                     choice covers the {} too: reloading puts every item back where the files \
+                     have it.",
+                    names(&bound),
+                    names(&bound)
+                ));
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 reload = ui.button("Reload from disk (discard my edits)").clicked();
-                keep = ui.button("Keep mine (back up theirs, then overwrite)").clicked();
+                keep = ui
+                    .button("Keep mine (back up theirs, then overwrite)")
+                    .clicked();
             });
         });
+        if !reload && !keep {
+            return;
+        }
+        let decision: Vec<Doc> = std::mem::take(&mut self.conflicts)
+            .into_iter()
+            .chain(bound)
+            .collect();
         if reload {
             let mut reloaded = Vec::new();
-            for doc in std::mem::take(&mut self.conflicts) {
+            for doc in decision {
                 let label = self.doc_label(doc);
                 match self.reload(doc) {
                     Ok(()) => {
                         self.forget_refresh(doc);
+                        self.links.settled(doc);
                         toasts.info(format!("reloaded the {label} from disk"));
                         reloaded.push(doc);
                     }
@@ -2446,7 +2489,7 @@ impl World {
                 self.carry_out_orders(Scope::Doc(doc), toasts);
             }
         } else if keep {
-            for doc in std::mem::take(&mut self.conflicts) {
+            for doc in decision {
                 self.keep_mine(doc);
                 self.forget_refresh(doc);
             }

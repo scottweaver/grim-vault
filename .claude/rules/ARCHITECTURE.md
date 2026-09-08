@@ -251,7 +251,16 @@ Q&A). Items marked TBD are open questions, not decisions.
   against the stamp taken at load/last write, and a mismatch — or an
   external change to a dirty pane — suspends autosave and prompts.
   "Keep mine" re-arms backup-first so the external version is backed
-  up before being overwritten. (2026-09-03) TBD (2026-09-03): the
+  up before being overwritten. (2026-09-03) **A two-document edit is
+  one decision** (2026-09-08, after a component applied from the vault
+  was lost to a reload): a move, a socket fill or free, a bulk move or
+  an auto-move links the two documents it edited while either side is
+  unsaved; a flush writes nothing past the first document that changed
+  on disk, and Reload / Keep mine apply to the changed document and
+  every document linked to it, so a rolled-back half never leaves its
+  partner half standing. Where the partner was already written before
+  the conflict, the outcome is a duplicate, never a loss. TBD
+  (2026-09-03): the
   corroboration witness for an empty stash read — tq-univault uses
   the game's `.dxg` twin; GD's nearest analogue is the
   `transfer.t00` rotation slot, unverified.
