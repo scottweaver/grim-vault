@@ -6,17 +6,36 @@ are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
 Last updated: 2026-09-08 (after FEATURES.md 32 and 33 landed on `main` —
-the affix reference card at `cd4ed5b`, the gear tiles at `9802232` — both
-pushed; 529 tests; `fix/icons-outside-items-arc` still unlanded)
+the affix reference card at `cd4ed5b`, the gear tiles at `9802232` — and
+the lost-component fix at `42291a0`; all pushed; 532 tests;
+`fix/icons-outside-items-arc` still unlanded)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
-**Resume here:** `main` at `9802232` plus this refresh (pushed,
+**Resume here:** `main` at `42291a0` plus this refresh (pushed,
 `origin/main` in sync) holds everything landed — every FEATURES.md
-item through 33 (there is no item 17) — 529 tests, clippy pedantic clean, fmt clean, headless
+item through 33 (there is no item 17) and the lost-component fix
+below — 532 tests, clippy pedantic clean, fmt clean, headless
 `--check` clean from the release build on the real install with a
-scratch copy of the saves. **Landed 2026-09-08, both tracks:** the affix card (32, built in the
-main checkout) and the gear tab (33, `feat/equipment-tiles`, built by
+scratch copy of the saves. **Bug fixed 2026-09-08 (`42291a0`, `fix/linked-conflicts`, reported by
+the user in chat):** a Black Tallow applied from the vault to a worn
+medal was lost — the game file changed on disk, "Reload from disk"
+rolled back the game half, and the vault half (stack 3 → 2) stood.
+Cause: a two-document edit had no link between its halves, and
+`flush` kept writing past a conflicting document (the store was saved
+with the decrement before the modal), while the guard-first path left
+the store half to be autosaved once the gate reopened. Fix:
+`gui/src/links.rs` `Links`, bound by `World::edited_together` at every
+two-document site (moves, socket fill and free, bulk move, auto-move)
+and settled when a side is written or reloaded; `flush` stops at the
+first conflict; the modal names the bound documents and Reload / Keep
+mine apply to all of them (ARCHITECTURE "Data flow", 2026-09-08).
+Residual: a partner already written before the conflict leaves a
+duplicate, never a loss (next-up 5). Exercised by three `Links` tests
+and review only, not live. The user's store reads Black Tallow 1 (was
+3 at the 15:21 load): one unit re-applied to the medal, one lost; the
+user chose not to restore it. **Landed 2026-09-08, both tracks:** the
+affix card (32, built in the main checkout) and the gear tab (33, `feat/equipment-tiles`, built by
 a fork agent in its own worktree from the user's decision "gear tiles,
 first in the strip, unequip by drag": every slot an item tile with
 tooltip and inspector, gear dragged, right-clicked or double-clicked
@@ -241,6 +260,7 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
 | `main` | trunk | at `9802232` (FEATURES.md 33) plus this refresh — every item through 33; 529 tests green; pushed, `origin/main` in sync |
 | `feat/reference-cards` | FEATURES.md 32, the affix card | landed by fast-forward 2026-09-08; deletable (`git branch -d`) — the user confirms deletions |
 | `feat/equipment-tiles` | FEATURES.md 33, the gear tab as tiles with unequip-by-drag | landed by fast-forward 2026-09-08; still checked out in the agent worktree `.claude/worktrees/agent-aaed563a4259e1782` — remove the worktree, then `git branch -d`, on the user's word |
+| `fix/linked-conflicts` | the lost-component fix: linked documents share one external-change decision | landed by fast-forward 2026-09-08 (`42291a0`); deletable on the user's word |
 | `fix/icons-outside-items-arc` | read item icons from the archive their path names (`04e9914`) | unlanded, found 2026-09-08; one commit on the 2026-09-07 `main`; needs a rebase and the user's call |
 
 ## Next up
@@ -307,7 +327,11 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    2026-09-07 to keep three parallel tracks from colliding).
 4. **Stash file family:** decide how the `.dst` / `.gsh` twins are
    shown (further campaigns? a mode selector?) — design dialog first.
-5. **Follow-ups:** equipping by drop onto a gear tile (the `ItemSlots`
+5. **Follow-ups:** a journal-based undo of a two-document edit whose
+   partner half was already written when the other half was rolled
+   back (today's fix reloads or keeps linked documents together; a
+   written partner leaves a duplicate — `Applied` already names the
+   stored id and landing); equipping by drop onto a gear tile (the `ItemSlots`
    rule per record class in `docs/format-references.md`, two-handers
    clearing the off hand, the active-set rule); level / XP edits need
    an evaluator for `experienceLevelEquation` (its text is in
@@ -333,6 +357,20 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    Stash does not read it either).
 
 ## Most recent meaningful progress
+
+- **2026-09-08 (latest) — lost-component fix landed on `main`
+  (fast-forward to `42291a0`).** The user reported a Black Tallow lost
+  after applying it from the vault to a worn medal and choosing
+  "Reload from disk" on an external change: the game half was rolled
+  back, the vault half stood. `links::Links` binds the two documents
+  of every move, socket fill or free, bulk move and auto-move while
+  either side is unsaved (`World::edited_together`), settling on save
+  or reload; `flush` stops at the first document that changed on disk;
+  the conflict modal names the bound documents and Reload / Keep mine
+  apply to all of them. ARCHITECTURE "Data flow" records the rule. 532
+  tests. Why: a vault manager must never lose an item to its own
+  guard. Risk: not exercised live; a partner written before the
+  conflict (game → vault, store first) still leaves a duplicate.
 
 - **2026-09-08 (later) — FEATURES.md 33 landed on `main` (fast-forward
   to `9802232`, a fork agent in its own worktree).** The user said the
@@ -550,23 +588,6 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   write path is still unverified in-game (acceptance run pending);
   the respec, facet, and stat rules rest on record evidence, not on
   in-game comparison; and the six worktrees still hold build caches.
-
-- **2026-09-06 — GD Stash sanctioned as an eyes-only reference
-  (branch `docs/gdstash-reference`, docs only).** The user asked to
-  use `/Volumes/scott-games/GDStash_v190a` to accelerate the work;
-  the jar decompiles cleanly with CFR and ships its author's format
-  notes. ARCHITECTURE "Parser provenance" records the rule (facts
-  only, verified against real files, nothing transcribed, decompiled
-  output never in the repo) and `docs/format-references.md` the
-  findings: the `.gds` layout verified on the user's export, the
-  illusion slot ids corroborated, names for every `player.gdc` field
-  the typing pass left unnamed, the equipment slot order, the
-  `playerlevels.dbr` sources for level and respec math, and the
-  `.dst` / `.gsh` stash family the app does not open. Why: the
-  user's FEATURES.md queue is exactly what GD Stash implements.
-  Risk: a license-unknown reference — the eyes-only rule is what
-  keeps the codebase clean, and every fact still needs its real-file
-  check before code depends on it.
 
 
 ## Blocked / waiting
