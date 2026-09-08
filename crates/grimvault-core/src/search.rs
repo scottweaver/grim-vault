@@ -679,7 +679,8 @@ pub fn stat_template(text: &str) -> String {
 /// Every number in a display line as a byte span; a `-` is part of
 /// the span only when directly attached and not itself following a
 /// digit ("-15%" is one negative number; "9-67" is two).
-fn number_spans(text: &str) -> Vec<(usize, usize)> {
+#[must_use]
+pub fn number_spans(text: &str) -> Vec<(usize, usize)> {
     let bytes = text.as_bytes();
     let mut spans = Vec::new();
     let mut i = 0;

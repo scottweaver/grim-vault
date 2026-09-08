@@ -19,6 +19,7 @@ use grimvault_core::gdc::{PlayerFile, Realm};
 use grimvault_core::gds;
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
+use grimvault_core::reference::AffixTable;
 use grimvault_core::respec::{Reset, RespecRules};
 use grimvault_core::settings::{BlueprintSync, BulkDuplicates, ReagentSync, StandingOrder};
 use grimvault_core::store::{Timestamp, VaultStore};
@@ -51,6 +52,7 @@ use crate::panes::inspector::{self, Selected, Supplies};
 use crate::panes::stash::StashView;
 use crate::panes::store::{SEARCH_SHORTCUT, StoreMode, StoreView};
 use crate::panes::{self, BulkOp, BulkRequest, DragFrame, PaneCtx};
+use crate::reference::{self, ReferenceCache, ReferenceView};
 use crate::search::SearchCache;
 use crate::settings::{self, ConfigDir, Settings};
 use crate::settings_dialog::{
@@ -464,6 +466,9 @@ pub struct World {
     conflicts: Vec<Doc>,
     write_order: WriteOrder,
     settings_dialog: Option<SettingsDialog>,
+    affixes: AffixTable,
+    reference_view: ReferenceView,
+    reference_cache: ReferenceCache,
     /// The store revision the stacks were last consolidated at.
     settled_revision: Option<u64>,
 }
@@ -496,6 +501,7 @@ impl World {
         ));
         let ui_state = PersistedUiState::load(paths.ui_state.clone());
         let store_view = ui_state.on_disk().store.clone();
+        let reference_view = ui_state.on_disk().reference.clone();
         let mut world = Self {
             paths,
             settings,
@@ -525,6 +531,9 @@ impl World {
             conflicts: Vec::new(),
             write_order,
             settings_dialog: None,
+            affixes: loaded.affixes,
+            reference_view,
+            reference_cache: ReferenceCache::default(),
             settled_revision: None,
         };
         world.rewatch();
@@ -1133,6 +1142,7 @@ impl World {
             })
             .inner;
         self.show_inspector(ui.ctx(), theme, mode, &mut frame);
+        self.show_reference_cards(ui.ctx(), &theme.palette);
         self.show_conflict_modal(ui.ctx(), theme, toasts);
         let reload = self.show_settings_dialog(ui.ctx(), theme, config, toasts);
         self.finish_frame(ui.ctx(), frame, modifiers, &theme.palette, config, toasts);
@@ -1416,6 +1426,17 @@ impl World {
         }
     }
 
+    /// The reference cards the user has open.
+    fn show_reference_cards(&mut self, ctx: &egui::Context, palette: &Palette) {
+        reference::show(
+            ctx,
+            &self.affixes,
+            &mut self.reference_view,
+            &mut self.reference_cache,
+            palette,
+        );
+    }
+
     /// Where an item sits, for the inspector's subtitle.
     fn place_label(&self, source: DragSource) -> String {
         match source {
@@ -1497,7 +1518,11 @@ impl World {
 
     /// The live view state, as it would be written.
     fn ui_snapshot(&self) -> UiState {
-        UiState::of(&self.store_view, self.ui_state.on_disk())
+        UiState::of(
+            &self.store_view,
+            &self.reference_view,
+            self.ui_state.on_disk(),
+        )
     }
 
     /// Persists the view state once it has held still; called at the
@@ -1510,12 +1535,14 @@ impl World {
     }
 
     /// The bottom strip; `true` when the gear was clicked.
-    fn status_bar(&self, ui: &mut Ui, theme: &Theme, toasts: &Toasts) -> bool {
+    fn status_bar(&mut self, ui: &mut Ui, theme: &Theme, toasts: &Toasts) -> bool {
         ui.horizontal_wrapped(|ui| {
             let gear = ui
                 .button("⚙")
                 .on_hover_text("Settings: directories, the vault store file, rules, export and import")
                 .clicked();
+            ui.separator();
+            reference::menu(ui, &mut self.reference_view);
             ui.separator();
             ui.label(theme.path_text(format!("saves: {}", self.paths.save.path().display())));
             ui.separator();

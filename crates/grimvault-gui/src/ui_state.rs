@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::panes::store::StoreView;
+use crate::reference::ReferenceView;
 
 /// The `format` tag every view-state file carries.
 pub const FORMAT_TAG: &str = "grimvault-ui-state";
@@ -35,6 +36,7 @@ const QUIET: Duration = Duration::from_secs(1);
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
     pub store: StoreView,
+    pub reference: ReferenceView,
     #[serde(flatten)]
     extra: Map<String, Value>,
 }
@@ -43,9 +45,10 @@ impl UiState {
     /// The state a pane's view stands for, carrying forward whatever
     /// unknown fields the file on disk held.
     #[must_use]
-    pub fn of(store: &StoreView, on_disk: &Self) -> Self {
+    pub fn of(store: &StoreView, reference: &ReferenceView, on_disk: &Self) -> Self {
         Self {
             store: store.clone(),
+            reference: reference.clone(),
             extra: on_disk.extra.clone(),
         }
     }
@@ -151,8 +154,11 @@ mod tests {
     use grimvault_core::search::{Query, SortKey};
     use univault_ui::sort::SortDirection;
 
+    use grimvault_core::reference::AffixQuery;
+
     use super::*;
     use crate::panes::store::StoreMode;
+    use crate::reference::AffixCard;
     use crate::search::{SearchView, Sort};
 
     fn changed() -> UiState {
@@ -173,6 +179,15 @@ mod tests {
                     sort: Sort {
                         key: SortKey::Level,
                         direction: SortDirection::Descending,
+                    },
+                },
+            },
+            reference: ReferenceView {
+                affixes: AffixCard {
+                    open: true,
+                    query: AffixQuery {
+                        text: "cleric".into(),
+                        ..AffixQuery::default()
                     },
                 },
             },
@@ -219,10 +234,15 @@ mod tests {
         let state = UiState::from_json(partial).expect("parses");
         assert_eq!(state.store.mode, StoreMode::Search);
         assert_eq!(state.store.bucket, StoreView::default().bucket);
-        let carried = UiState::of(&changed().store, &state);
+        assert_eq!(state.reference, ReferenceView::default());
+        let carried = UiState::of(&changed().store, &changed().reference, &state);
         let value: Value = serde_json::from_slice(&carried.to_json()).unwrap();
         assert_eq!(value["later"], serde_json::json!({ "a": 1 }));
         assert_eq!(value["store"]["mode"], serde_json::json!("search"));
+        assert_eq!(
+            value["reference"]["affixes"]["open"],
+            serde_json::json!(true)
+        );
     }
 
     #[test]

@@ -36,6 +36,7 @@ use grimvault_core::facets::Symbol;
 use grimvault_core::gamedata::{
     GameData, LayerFiles, LayerSet, ModListing, mod_layers, shipped_layers,
 };
+use grimvault_core::reference::AffixTable;
 use grimvault_core::settings::Settings;
 use thiserror::Error;
 use univault_engine::arc::{ArcError, ArcFile, ArcHeader, ArcIndex, Located};
@@ -71,6 +72,7 @@ pub enum LoadStep {
     ItemArchive(PathBuf),
     Localization,
     UiArchive(PathBuf),
+    Reference,
     Stash,
     Reagents,
     Blueprints,
@@ -95,6 +97,7 @@ impl fmt::Display for LoadStep {
             Self::UiArchive(relative) => {
                 write!(f, "reading tile symbols from {}", relative.display())
             }
+            Self::Reference => f.write_str("building the affix reference"),
             Self::Stash => f.write_str("opening transfer.gst"),
             Self::Reagents => f.write_str("opening reagents.gst"),
             Self::Blueprints => f.write_str("opening formulas.gst"),
@@ -122,6 +125,7 @@ pub struct LoadReport {
 pub struct LoadedWorld {
     pub game: GameData,
     pub report: LoadReport,
+    pub affixes: AffixTable,
     pub symbols: SymbolTextures,
     /// Every campaign the save directory holds, main first.
     pub campaigns: Vec<Campaign>,
@@ -337,6 +341,8 @@ pub fn load_world(
         &game,
         progress,
     );
+    progress(LoadStep::Reference);
+    let affixes = AffixTable::build(&game);
     let report = LoadReport {
         databases: counts.0,
         text_archives: counts.1,
@@ -377,6 +383,7 @@ pub fn load_world(
     Ok(LoadedWorld {
         game,
         report,
+        affixes,
         symbols,
         campaigns,
         campaign,

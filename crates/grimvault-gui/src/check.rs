@@ -81,6 +81,16 @@ fn check(game: &Path, save: &Path, settings: Option<&Settings>) -> Result<usize,
     for (symbol, problem) in world.symbols.problems() {
         println!("  {}: {problem}", symbol.variable());
     }
+    println!(
+        "affix reference: {} names over {} records",
+        world.affixes.len(),
+        world
+            .affixes
+            .entries()
+            .iter()
+            .map(|entry| entry.tiers.len())
+            .sum::<usize>()
+    );
 
     let campaigns: Vec<String> = world.campaigns.iter().map(ToString::to_string).collect();
     println!(

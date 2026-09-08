@@ -19,6 +19,7 @@ mod grid;
 mod icons;
 mod loader;
 mod panes;
+mod reference;
 mod search;
 mod settings;
 mod settings_dialog;
