@@ -5,19 +5,33 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-08 (after FEATURES.md 32 and 33 landed on `main` —
-the affix reference card at `cd4ed5b`, the gear tiles at `9802232` — and
-the lost-component fix at `42291a0`; all pushed; 532 tests;
-`fix/icons-outside-items-arc` still unlanded)
+Last updated: 2026-09-08 evening (after the foreign-icon fix landed on
+`main` at `183dc22` — nothing left unlanded; all pushed; 534 tests)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
-**Resume here:** `main` at `42291a0` plus this refresh (pushed,
+**Resume here:** `main` at `183dc22` plus this refresh (pushed,
 `origin/main` in sync) holds everything landed — every FEATURES.md
-item through 33 (there is no item 17) and the lost-component fix
-below — 532 tests, clippy pedantic clean, fmt clean, headless
-`--check` clean from the release build on the real install with a
-scratch copy of the saves. **Bug fixed 2026-09-08 (`42291a0`, `fix/linked-conflicts`, reported by
+item through 33 (there is no item 17), the lost-component fix and
+the foreign-icon fix below — 534 tests, clippy pedantic clean, fmt
+clean, headless `--check` clean from the release build on the real
+install with a scratch copy of the saves. **Landed 2026-09-08
+evening (`183dc22`, `fix/icons-outside-items-arc`):** the user hit
+"item 21 (records/storyelements/signs/signh.dbr) has no known
+footprint" a second time, copying a relic from the vault into
+LootAscension transfer tab 0 — item 21 there is Lokarr's Gaze, whose
+icon sits in `gdx1`'s `Level Art.arc`, so the tab's occupancy could
+not be computed and every placement into it was refused. The fix
+was built and verified on 2026-09-07 evening (the first report, an
+amulet into the same tab) but never fast-forwarded into `main`, and
+the 2026-09-08 release rebuild from `main` dropped it from the
+user's binary. Rebased onto `main` (one conflict in
+`gui/src/loader.rs`, both sides kept — the icon step runs before the
+affix build), 534 tests, clippy and fmt clean, `--check` on the real
+install: 26 of 26 icons outside `Items.arc` found, Lokarr's Gaze
+listed at 2x2 in tab 0, no problems. `target/release/grimvault-gui`
+is built from `183dc22` (18:28); the user has to relaunch it.
+**Bug fixed 2026-09-08 (`42291a0`, `fix/linked-conflicts`, reported by
 the user in chat):** a Black Tallow applied from the vault to a worn
 medal was lost — the game file changed on disk, "Reload from disk"
 rolled back the game half, and the vault half (stack 3 → 2) stood.
@@ -47,12 +61,7 @@ empty base name, `stackCount 1`, everything else blank, probed on all
 five real characters; `ItemOrigin::Equipped { realm, name, slot }`;
 `vault_from_equipment`; the agent rebased onto the moved `main`
 itself and the integrator re-ran the gates in its worktree before the
-fast-forward). **One thing is open:** `fix/icons-outside-items-arc`
-(`04e9914`, one commit: read item icons from the archive their path
-names) was found checked out and unlanded at the start of 2026-09-08
-— absent from this file before — one commit on the 2026-09-07 `main`;
-it needs a rebase and the user's call to land (Lokarr's set items on
-Zark still show initials, its territory). The agent worktree
+fast-forward). **Nothing is left unlanded.** The agent worktree
 `.claude/worktrees/agent-aaed563a4259e1782` still has
 `feat/equipment-tiles` checked out with its build cache; removing it
 and the two landed feature branches is the user's call. **Why 32–33:** the user asked in
@@ -73,8 +82,9 @@ stacks (a completion-bonus `modifierName` on the GD Stash export's
 copy) pending the user's call (Blocked / waiting 7); PROJECT.md still
 binds `tracker: none` and the local fast-forward flow plus `git push`
 is what lands work. The user's own `grimvault-gui` was running during
-the 2026-09-08 session (its `vault-store.json` was written at 14:34) —
-never kill an instance you did not start.
+the 2026-09-08 session (its `vault-store.json` was written at 18:20;
+none was running when the binary was rebuilt at 18:28) — never kill
+an instance you did not start.
 Parallel tracks are integrated by rebasing each onto the moving
 `main` — ask the agent to do it, it knows its own conflicts — and
 fast-forwarding; past conflicts sat in `bulk.rs`, `settings.rs`,
@@ -83,8 +93,9 @@ fast-forwarding; past conflicts sat in `bulk.rs`, `settings.rs`,
 standing-orders paragraph. **Worktree agents share one `git stash`
 list** — brief them never to bare-stash. The user runs
 `target/release/grimvault-gui` and rebuilds with `cargo run --release
--p grimvault-gui`; `target/release/grimvault-gui` and the
-`grimvault-core` examples are built from `cd4ed5b` (2026-09-08). The
+-p grimvault-gui`; `target/release/grimvault-gui` is built from
+`183dc22` (2026-09-08 18:28), the release `grimvault-core` examples
+still from `cd4ed5b`. The
 real `settings.json` nominates LootAscension stash tabs 1–6 for both
 auto-move and purge under `bulkDuplicates: skip`, with the reagent
 and blueprint syncs on — every launch on the real files runs all
@@ -244,8 +255,11 @@ and — landed 2026-09-08 — the affix reference card behind a Reference
 menu in the status bar, `grimvault-core::reference` building one
 entry per named prefix and suffix with value ranges across its tiers,
 and the gear tab as tiles first in the character strip with worn gear
-taken off by drag, right-click or double-click) — 529 tests, clippy
-pedantic clean. Verified on
+taken off by drag, right-click or double-click; and — landed
+2026-09-08 evening — item icons read by entry from the archive their
+bitmap path names, so Lokarr's set, the `gdx2` potion formulas and
+Iron Bits have footprints and a tab holding one accepts placements)
+— 534 tests, clippy pedantic clean. Verified on
 scratch copies of the user's install and saves. **Not yet verified:
 the game reading any file this app wrote** — the next step is the
 user's acceptance run on the real install with the game closed, and
@@ -257,11 +271,11 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at `9802232` (FEATURES.md 33) plus this refresh — every item through 33; 529 tests green; pushed, `origin/main` in sync |
+| `main` | trunk | at `183dc22` (the foreign-icon fix) plus this refresh — every FEATURES.md item through 33, both 2026-09-08 fixes; 534 tests green; pushed, `origin/main` in sync |
 | `feat/reference-cards` | FEATURES.md 32, the affix card | landed by fast-forward 2026-09-08; deletable (`git branch -d`) — the user confirms deletions |
 | `feat/equipment-tiles` | FEATURES.md 33, the gear tab as tiles with unequip-by-drag | landed by fast-forward 2026-09-08; still checked out in the agent worktree `.claude/worktrees/agent-aaed563a4259e1782` — remove the worktree, then `git branch -d`, on the user's word |
 | `fix/linked-conflicts` | the lost-component fix: linked documents share one external-change decision | landed by fast-forward 2026-09-08 (`42291a0`); deletable on the user's word |
-| `fix/icons-outside-items-arc` | read item icons from the archive their path names (`04e9914`) | unlanded, found 2026-09-08; one commit on the 2026-09-07 `main`; needs a rebase and the user's call |
+| `fix/icons-outside-items-arc` | read item icons from the archive their path names | rebased and landed by fast-forward 2026-09-08 evening (`183dc22`) after the user's second footprint report; deletable on the user's word |
 
 ## Next up
 
@@ -358,7 +372,26 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
 
 ## Most recent meaningful progress
 
-- **2026-09-08 (latest) — lost-component fix landed on `main`
+- **2026-09-08 (evening) — foreign-icon fix landed on `main`
+  (fast-forward to `183dc22`).** The user hit "item 21
+  (`records/storyelements/signs/signh.dbr`) has no known footprint"
+  again, copying a relic into LootAscension transfer tab 0; item 21
+  is Lokarr's Gaze, whose icon lives in `gdx1`'s `Level Art.arc`, and
+  a tab with one unknown footprint refuses every placement. The fix
+  (`fix/icons-outside-items-arc`, built 2026-09-07 evening for the
+  same tab: `GameData::foreign_bitmaps` surveys the item tables for
+  bitmaps outside `Items.arc`, the loader reads each by entry from
+  the archive its path names, mods first so a shipped layer wins)
+  had never been fast-forwarded, and the 2026-09-08 release rebuild
+  dropped it from the binary. Rebased (one additive conflict in
+  `loader.rs`), gates green, `--check` on the real install shows 26
+  of 26 icons and Lokarr's Gaze at 2x2. 534 tests. Why: a whole
+  stash tab was unusable from the app. Risk: none to data (reads
+  only); ~0.45 s more per launch for the survey; the lesson is
+  procedural — a fix verified but not fast-forwarded is lost on the
+  next rebuild.
+
+- **2026-09-08 (afternoon) — lost-component fix landed on `main`
   (fast-forward to `42291a0`).** The user reported a Black Tallow lost
   after applying it from the vault to a worn medal and choosing
   "Reload from disk" on an external change: the game half was rolled
@@ -568,27 +601,6 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   shared-stash collision between two worktrees cost a detour and is
   now a briefing rule.
 
-- **2026-09-06 — Six tracks landed on `main` (fast-forwards to
-  `f1f10f6`).** Built in parallel by agents in worktrees from the
-  user's FEATURES.md, rebased onto the moving `main` one by one, gates
-  run after each rebase: `.gds` import (read-only boundary, GD Stash's
-  duplicate rule, both user exports import with 0 unknown records);
-  attribute and mastery respecs under rules read from
-  `playerlevels.dbr` and `malepc01.dbr` (block 2's health / energy
-  proved to be derived pools; `masteries_allowed` is the level gate
-  and is kept); blueprints and illusions per campaign, adds only,
-  `formulas.gst` / `transmutes.gst` now writable with JSON interchange
-  between campaigns; item facets (monster infrequent, double rare,
-  ascended / upgradeable) from the record database with the game's
-  eleven tile symbols read by entry out of `UI.arc`, plus a first
-  store search; the item stat engine (53,775 lines over 4,114 real
-  items, 0 unknown attributes) in the tooltip; and the badge-size fix
-  after the user saw no badges — they were 10 px. 417 tests. Why: the
-  user asked for the queue to be executed in parallel. Risk: every
-  write path is still unverified in-game (acceptance run pending);
-  the respec, facet, and stat rules rest on record evidence, not on
-  in-game comparison; and the six worktrees still hold build caches.
-
 
 ## Blocked / waiting
 
@@ -611,10 +623,12 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   storage — nine records in the real store; folding across the
   modifier is a one-line change to `StackKey::of` if the user says
   those are one item; (8) *resolved by the user the same hour:* the blueprint sync records knowledge (the store's `blueprints` list),
-  never items; rehydration into the game is next-up 1c; (9) *new 2026-09-08:* whether to land `fix/icons-outside-items-arc`
-  (rebase onto `main` first), whether to delete the landed
-  `feat/reference-cards` and `feat/equipment-tiles`, and whether to
-  remove the agent worktree that holds the latter; (10) *new
+  never items; rehydration into the game is next-up 1c; (9) *narrowed 2026-09-08 evening:* the icon fix is landed; still
+  open are whether to delete the landed `feat/reference-cards`,
+  `feat/equipment-tiles`, `fix/linked-conflicts` and
+  `fix/icons-outside-items-arc` (and the `docs/state-post-*`
+  branches), and whether to remove the agent worktree that holds
+  `feat/equipment-tiles`; (10) *new
   2026-09-08:* a two-hander taken off leaves the game's ghost of it in
   the off-hand slot (base name blank, other fields as the weapon
   left them) — the game reads emptiness from the base name alone, so
