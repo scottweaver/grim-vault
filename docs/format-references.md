@@ -490,7 +490,29 @@ below was read from the real database.
   textures still report `UnsupportedFormat`; IAGD `DDSImageReader`
   and dreeg `gd-db` (`image_dds`) are the references beyond headers.
 - `bitmap` record values carry an `items/` prefix naming the archive;
-  Items.arc entry names omit it.
+  Items.arc entry names omit it. **The first segment names the
+  archive in general** (2026-09-07, from a survey of every item
+  record across the four shipped databases and two mods — 10,007
+  records with a bitmap, all in the `Armor*`, `Weapon*`, `Item*`,
+  `OneShot_*`, and `QuestItem` tables): 26 bitmaps lie outside
+  `Items.arc`. The 20 `gdx2` potion formulas (`OneShot_SkillUnlock`,
+  `records/items/crafting/blueprints/potions/potions_modifier_a3*.dbr`)
+  point at `ui/cauldron/*.tex` in `UI.arc`; **Lokarr's set** is
+  hidden as `records/storyelements/signs/sign{f,h,s,t}.dbr` (boots,
+  head, shoulders, chest — the letters are the slots; `signa`–`signe`
+  and `signg` do not exist) with its icons at
+  `level art/buildings/signs/sign_?01a_dif.tex` in **`gdx1`'s**
+  `Level Art.arc` (64 × 64 for three, 64 × 96 for the coat: 2 × 2
+  and 2 × 3); the Endless Dungeon test item `z001_test.dbr` and Iron
+  Bits (`moneyobject01.dbr`) name `system/textures/*.tex` in
+  `System.arc`. `Level Art.arc` is 0.85 GB in the base game and
+  1.6 GB in `gdx3`, so the shell reads these by entry like the tile
+  symbols (`GameData::foreign_bitmaps` names them, the loader fetches
+  them from the archive each path names in every layer, mods first,
+  and hands the bytes to `GameData::with_bitmaps`). Before this an
+  item whose bitmap was elsewhere had no footprint, and a stash tab
+  holding one refused every placement ("item 22 … has no known
+  footprint" on the user's LootAscension stash, 2026-09-07).
 
 ## GD Stash (eyes-only) findings — 2026-09-06
 

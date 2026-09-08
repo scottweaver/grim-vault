@@ -40,6 +40,7 @@ fn load(game_dir: &Path) -> GameData {
         text,
         items,
         ui: _,
+        resources: _,
     } in shipped_layers()
     {
         if let Ok(bytes) = fs::read(game_dir.join(database)) {

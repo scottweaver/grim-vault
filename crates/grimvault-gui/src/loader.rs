@@ -22,7 +22,7 @@
 //! directory ([`ArcIndex`]) and read as byte ranges
 //! ([`univault_io::read_ranges`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -34,7 +34,7 @@ use std::time::{Duration, Instant, SystemTime};
 use grimvault_core::campaign::Campaign;
 use grimvault_core::facets::Symbol;
 use grimvault_core::gamedata::{
-    GameData, LayerFiles, LayerSet, ModListing, mod_layers, shipped_layers,
+    ArchiveName, BitmapPath, GameData, LayerFiles, LayerSet, ModListing, mod_layers, shipped_layers,
 };
 use grimvault_core::reference::AffixTable;
 use grimvault_core::settings::Settings;
@@ -72,6 +72,7 @@ pub enum LoadStep {
     ItemArchive(PathBuf),
     Localization,
     UiArchive(PathBuf),
+    IconArchive(PathBuf),
     Reference,
     Stash,
     Reagents,
@@ -97,6 +98,9 @@ impl fmt::Display for LoadStep {
             Self::UiArchive(relative) => {
                 write!(f, "reading tile symbols from {}", relative.display())
             }
+            Self::IconArchive(relative) => {
+                write!(f, "reading item icons from {}", relative.display())
+            }
             Self::Reference => f.write_str("building the affix reference"),
             Self::Stash => f.write_str("opening transfer.gst"),
             Self::Reagents => f.write_str("opening reagents.gst"),
@@ -109,8 +113,9 @@ impl fmt::Display for LoadStep {
 }
 
 /// What the game-data half of the load found: the shipped layers by
-/// kind, how many mods contributed a database, and how many of the
-/// tile symbols have their texture.
+/// kind, how many mods contributed a database, how many of the tile
+/// symbols have their texture, and how many item icons outside
+/// `Items.arc` were found of those the records name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoadReport {
     pub databases: usize,
@@ -118,7 +123,21 @@ pub struct LoadReport {
     pub item_archives: usize,
     pub mods: usize,
     pub symbols: usize,
+    pub foreign_icons: Found,
     pub elapsed: Duration,
+}
+
+/// How many of a wanted set turned up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Found {
+    pub found: usize,
+    pub wanted: usize,
+}
+
+impl fmt::Display for Found {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} of {}", self.found, self.wanted)
+    }
 }
 
 /// Everything the Ready phase needs.
@@ -341,6 +360,13 @@ pub fn load_world(
         &game,
         progress,
     );
+    let (game, foreign_icons, icon_warnings) = load_foreign_bitmaps(
+        game_dir,
+        mod_files.iter().chain(&shipped_files),
+        game,
+        progress,
+    );
+    warnings.extend(icon_warnings);
     progress(LoadStep::Reference);
     let affixes = AffixTable::build(&game);
     let report = LoadReport {
@@ -349,6 +375,7 @@ pub fn load_world(
         item_archives: counts.2,
         mods: counts.3,
         symbols: symbols.found(),
+        foreign_icons,
         elapsed: started.elapsed(),
     };
 
@@ -442,6 +469,75 @@ fn load_symbols<'l>(
         }
     }
     (textures, warnings)
+}
+
+/// The item icons whose records name an archive other than
+/// `Items.arc` ([`GameData::foreign_bitmaps`]: Lokarr's set in
+/// `Level Art.arc`, the potion formulas in `UI.arc`), read by entry
+/// out of that archive in each layer that has it — mods first as
+/// fill layers, so a later layer's copy wins — and handed to the game
+/// data. An archive that cannot be opened is a warning; an icon no
+/// layer holds stays unknown, as it was.
+fn load_foreign_bitmaps<'l>(
+    game_dir: &Path,
+    layers: impl Iterator<Item = &'l LayerFiles>,
+    game: GameData,
+    progress: &mut dyn FnMut(LoadStep),
+) -> (GameData, Found, Vec<String>) {
+    let wanted = game.foreign_bitmaps();
+    let mut by_archive: HashMap<ArchiveName, Vec<(BitmapPath, String)>> = HashMap::new();
+    for bitmap in wanted {
+        if let Some((archive, entry)) = bitmap.archive() {
+            let entry = entry.to_string();
+            by_archive.entry(archive).or_default().push((bitmap, entry));
+        }
+    }
+    let mut archives: Vec<(ArchiveName, Vec<(BitmapPath, String)>)> =
+        by_archive.into_iter().collect();
+    archives.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+    let wanted = archives.iter().map(|(_, bitmaps)| bitmaps.len()).sum();
+    let mut found: HashMap<BitmapPath, Vec<u8>> = HashMap::new();
+    let mut warnings = Vec::new();
+    for layer in layers {
+        for (archive, bitmaps) in &archives {
+            let Some(path) = find_archive(game_dir, &layer.resources, archive) else {
+                continue;
+            };
+            progress(LoadStep::IconArchive(path.clone()));
+            let index = match open_arc_index(&game_dir.join(&path)) {
+                Ok(index) => index,
+                Err(failure) => {
+                    warnings.push(format!("item icons: {failure}"));
+                    continue;
+                }
+            };
+            for (bitmap, entry) in bitmaps {
+                if let Some(located) = index.locate(entry) {
+                    match read_arc_entry(&game_dir.join(&path), &index, &located) {
+                        Ok(bytes) => {
+                            found.insert(bitmap.clone(), bytes);
+                        }
+                        Err(failure) => warnings.push(format!("item icons: {failure}")),
+                    }
+                }
+            }
+        }
+    }
+    let count = Found {
+        found: found.len(),
+        wanted,
+    };
+    (game.with_bitmaps(found), count, warnings)
+}
+
+/// The file of `archive` in a layer's resources folder, relative to
+/// the game directory, matched case-insensitively so a Linux mount
+/// finds `Level Art.arc` however the install spells it.
+fn find_archive(game_dir: &Path, resources: &Path, archive: &ArchiveName) -> Option<PathBuf> {
+    file_names(&game_dir.join(resources))
+        .into_iter()
+        .find(|name| archive.names_file(name))
+        .map(|name| resources.join(name))
 }
 
 /// The directory of an archive, from its header and table region

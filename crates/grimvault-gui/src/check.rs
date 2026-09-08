@@ -63,11 +63,12 @@ fn check(game: &Path, save: &Path, settings: Option<&Settings>) -> Result<usize,
     let mut facts = FactsCache::default();
     println!(
         "game data: {} database layers, {} text archives, {} item archives, {} mod layers, \
-         loaded in {:.1?}",
+         {} icons outside Items.arc, loaded in {:.1?}",
         world.report.databases,
         world.report.text_archives,
         world.report.item_archives,
         world.report.mods,
+        world.report.foreign_icons,
         world.report.elapsed
     );
 

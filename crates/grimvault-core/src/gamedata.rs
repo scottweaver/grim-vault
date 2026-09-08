@@ -147,6 +147,67 @@ impl BitmapPath {
     fn archive_entry(&self) -> &str {
         archive_entry_of(&self.0, "items/")
     }
+
+    /// The archive the path's first segment names — `items/…` is in
+    /// `Items.arc`, `ui/…` in `UI.arc`, `level art/…` in
+    /// `Level Art.arc` — and the entry name inside it. `None` for a
+    /// bare entry name with no segment to name one.
+    #[must_use]
+    pub fn archive(&self) -> Option<(ArchiveName, &str)> {
+        let (archive, entry) = self.0.split_once('/')?;
+        (!archive.is_empty() && !entry.is_empty())
+            .then(|| (ArchiveName(archive.to_ascii_lowercase()), entry))
+    }
+
+    /// Whether no `Items.arc` can hold the bitmap: its path names
+    /// another archive. The four Lokarr set pieces hide their icons in
+    /// `gdx1`'s `Level Art.arc`, the potion formulas theirs in
+    /// `UI.arc` (`docs/format-references.md`).
+    #[must_use]
+    pub fn is_foreign(&self) -> bool {
+        self.archive()
+            .is_some_and(|(archive, _)| !archive.is_items())
+    }
+}
+
+/// A resource archive as a bitmap path names it: the first path
+/// segment, lower-cased (`items`, `ui`, `level art`). The file on
+/// disk is `<Name>.arc` in a layer's `resources/` folder, spelled in
+/// whatever case the game or mod chose.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ArchiveName(String);
+
+impl ArchiveName {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The archive every item bitmap is expected in, and the one
+    /// [`GameData`] reads whole.
+    #[must_use]
+    pub fn is_items(&self) -> bool {
+        self.0 == "items"
+    }
+
+    /// Whether `file_name` is this archive's file: `<name>.arc`,
+    /// case-insensitively.
+    #[must_use]
+    pub fn names_file(&self, file_name: &str) -> bool {
+        Path::new(file_name)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("arc"))
+            && Path::new(file_name)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem.eq_ignore_ascii_case(&self.0))
+    }
+}
+
+impl fmt::Display for ArchiveName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// Path of a user-interface bitmap inside the `UI.arc` archives, as a
@@ -195,6 +256,20 @@ pub const BITMAP_VARIABLES: [&str; 5] = [
     "artifactFormulaBitmapName",
     "emptyBitmap",
 ];
+
+/// The table classes whose records are items a character can hold,
+/// by the prefixes the game's templates give them; every record with
+/// an item bitmap in the shipped databases is one of these (survey of
+/// 2026-09-07, `docs/format-references.md`).
+const ITEM_CLASS_PREFIXES: [&str; 5] = ["Armor", "Weapon", "Item", "OneShot", "QuestItem"];
+
+/// Whether a record's table class is an item table.
+#[must_use]
+pub fn is_item_class(record_type: &str) -> bool {
+    ITEM_CLASS_PREFIXES
+        .iter()
+        .any(|prefix| record_type.starts_with(prefix))
+}
 
 /// Grid footprint of an item in inventory cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -245,12 +320,16 @@ pub enum GameDataError {
 /// The files of one game-data layer, relative to the game directory.
 /// Any may be absent on disk (an expansion not installed, a mod
 /// without text or icons); a loader skips what is not there.
+/// `resources` is the folder the archives live in, for the few
+/// bitmaps that name an archive other than `Items.arc`
+/// ([`GameData::foreign_bitmaps`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayerFiles {
     pub database: PathBuf,
     pub text: PathBuf,
     pub items: PathBuf,
     pub ui: PathBuf,
+    pub resources: PathBuf,
 }
 
 /// The shipped layers in overlay order: the base game, then each
@@ -262,6 +341,7 @@ pub fn shipped_layers() -> Vec<LayerFiles> {
         text: PathBuf::from("resources/Text_EN.arc"),
         items: PathBuf::from("resources/Items.arc"),
         ui: PathBuf::from("resources/UI.arc"),
+        resources: PathBuf::from("resources"),
     };
     let expansions = ["gdx1", "gdx2", "gdx3"].into_iter().map(|root| LayerFiles {
         database: Path::new(root)
@@ -270,6 +350,7 @@ pub fn shipped_layers() -> Vec<LayerFiles> {
         text: Path::new(root).join("resources/Text_EN.arc"),
         items: Path::new(root).join("resources/Items.arc"),
         ui: Path::new(root).join("resources/UI.arc"),
+        resources: Path::new(root).join("resources"),
     });
     std::iter::once(base).chain(expansions).collect()
 }
@@ -316,6 +397,7 @@ fn mod_layer(listing: &ModListing) -> Option<LayerFiles> {
         text: resource("Text_EN.arc"),
         items: resource("Items.arc"),
         ui: resource("UI.arc"),
+        resources: root.join("resources"),
     })
 }
 
@@ -341,6 +423,10 @@ pub struct GameData {
     databases: Vec<ArzFile>,
     text: TextDb,
     item_archives: Vec<ArcFile>,
+    /// The bytes of the bitmaps outside `Items.arc`, keyed by
+    /// normalized path, handed in by a shell that read them by entry
+    /// ([`Self::with_bitmaps`]).
+    loose_bitmaps: HashMap<String, Vec<u8>>,
     stats: StatCache,
 }
 
@@ -351,8 +437,44 @@ impl GameData {
             databases,
             text,
             item_archives,
+            loose_bitmaps: HashMap::new(),
             stats: StatCache::default(),
         }
+    }
+
+    /// Adds the bytes of bitmaps no item archive holds — the ones
+    /// [`Self::foreign_bitmaps`] names, read from the archives their
+    /// paths name — so [`Self::bitmap`] and [`Self::footprint`] answer
+    /// for them too. A path given twice keeps the last bytes.
+    #[must_use]
+    pub fn with_bitmaps(
+        mut self,
+        bitmaps: impl IntoIterator<Item = (BitmapPath, Vec<u8>)>,
+    ) -> Self {
+        self.loose_bitmaps.extend(
+            bitmaps
+                .into_iter()
+                .map(|(path, bytes)| (normalize(path.as_str()), bytes)),
+        );
+        self
+    }
+
+    /// Every distinct bitmap of an item record that names an archive
+    /// other than `Items.arc` ([`BitmapPath::is_foreign`]), in path
+    /// order. Only the item tables are inflated
+    /// ([`is_item_class`]): the other 80,000 records carry no item
+    /// bitmap.
+    #[must_use]
+    pub fn foreign_bitmaps(&self) -> Vec<BitmapPath> {
+        let mut found: Vec<BitmapPath> = self
+            .record_types()
+            .filter(|(_, record_type)| is_item_class(record_type))
+            .filter_map(|(id, _)| self.item_info(id)?.ok()?.bitmap)
+            .filter(BitmapPath::is_foreign)
+            .collect();
+        found.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        found.dedup();
+        found
     }
 
     /// The stat lines of a record at `level` under `scale`, rendered
@@ -548,6 +670,11 @@ impl GameData {
             .rev()
             .find_map(|archive| archive.file(entry))
             .map(|bytes| bytes.map_err(GameDataError::from))
+            .or_else(|| {
+                self.loose_bitmaps
+                    .get(&normalize(bitmap.as_str()))
+                    .map(|bytes| Ok(bytes.clone()))
+            })
     }
 
     /// Footprint of a bitmap from its pixel size, from the topmost
@@ -679,6 +806,7 @@ mod tests {
         assert_eq!(layers[0].text, Path::new("resources/Text_EN.arc"));
         assert_eq!(layers[2].items, Path::new("gdx2/resources/Items.arc"));
         assert_eq!(layers[3].ui, Path::new("gdx3/resources/UI.arc"));
+        assert_eq!(layers[1].resources, Path::new("gdx1/resources"));
     }
 
     #[test]
@@ -709,12 +837,14 @@ mod tests {
                     text: PathBuf::from("mods/LootAscension/resources/Text_EN.arc"),
                     items: PathBuf::from("mods/LootAscension/resources/Items.arc"),
                     ui: PathBuf::from("mods/LootAscension/resources/UI.arc"),
+                    resources: PathBuf::from("mods/LootAscension/resources"),
                 },
                 LayerFiles {
                     database: PathBuf::from("mods/survivalmode/database/SurvivalMode.arz"),
                     text: PathBuf::from("mods/survivalmode/resources/text_en.arc"),
                     items: PathBuf::from("mods/survivalmode/resources/Items.arc"),
                     ui: PathBuf::from("mods/survivalmode/resources/ui.arc"),
+                    resources: PathBuf::from("mods/survivalmode/resources"),
                 },
             ]
         );
@@ -813,6 +943,138 @@ mod tests {
                 height: 3
             }
         );
+    }
+
+    #[test]
+    fn bitmap_paths_name_their_archive_by_first_segment() {
+        let archive = |path: &str| {
+            BitmapPath(path.into())
+                .archive()
+                .map(|(archive, entry)| (archive.as_str().to_string(), entry.to_string()))
+        };
+        assert_eq!(
+            archive("items/gearhead/x.tex"),
+            Some(("items".into(), "gearhead/x.tex".into()))
+        );
+        assert_eq!(
+            archive("Level Art/buildings/signs/sign_h01a_dif.tex"),
+            Some((
+                "level art".into(),
+                "buildings/signs/sign_h01a_dif.tex".into()
+            ))
+        );
+        assert_eq!(archive("bare.tex"), None);
+        assert_eq!(archive("/x.tex"), None);
+        assert!(!BitmapPath("items/gearhead/x.tex".into()).is_foreign());
+        assert!(!BitmapPath("bare.tex".into()).is_foreign());
+        assert!(BitmapPath("ui/cauldron/x.tex".into()).is_foreign());
+        assert!(BitmapPath("level art/x.tex".into()).is_foreign());
+    }
+
+    #[test]
+    fn archive_names_match_their_file_case_insensitively() {
+        let (level_art, _) = BitmapPath("level art/x.tex".into()).archive().unwrap();
+        assert!(level_art.names_file("Level Art.arc"));
+        assert!(level_art.names_file("level art.ARC"));
+        assert!(!level_art.names_file("Level Art.txt"));
+        assert!(!level_art.names_file("Items.arc"));
+        assert!(!level_art.is_items());
+        let (items, _) = BitmapPath("Items/x.tex".into()).archive().unwrap();
+        assert!(items.is_items());
+    }
+
+    #[test]
+    fn item_classes_are_the_armor_weapon_item_oneshot_and_quest_tables() {
+        for class in [
+            "ArmorProtective_Head",
+            "WeaponMelee_Axe2h",
+            "ItemArtifactFormula",
+            "OneShot_SkillUnlock",
+            "QuestItem",
+        ] {
+            assert!(is_item_class(class), "{class}");
+        }
+        for class in [
+            "Sign",
+            "Monster",
+            "Skill_AttackRadius",
+            "LootItemTable_DynWeighted",
+        ] {
+            assert!(!is_item_class(class), "{class}");
+        }
+    }
+
+    #[test]
+    fn foreign_bitmaps_are_the_item_records_icons_outside_items_arc() {
+        use univault_engine::arc::fixture::ArcBuilder;
+        use univault_engine::arz::ArzDialect;
+        use univault_engine::arz::fixture::{ArzBuilder, Values};
+        use univault_engine::codec::Codec;
+        use univault_engine::tex::fixture::tex;
+
+        const LOKARR: &str = "level art/buildings/signs/sign_h01a_dif.tex";
+        let mut builder = ArzBuilder::new(ArzDialect::grim_dawn());
+        builder.record(
+            "records/items/gearhead/plain.dbr",
+            "ArmorProtective_Head",
+            &[("bitmap", Values::Strings(&["items/gearhead/plain.tex"]))],
+        );
+        builder.record(
+            "records/storyelements/signs/signh.dbr",
+            "ArmorProtective_Head",
+            &[("bitmap", Values::Strings(&[LOKARR]))],
+        );
+        builder.record(
+            "records/storyelements/signs/signh2.dbr",
+            "ArmorProtective_Chest",
+            &[(
+                "bitmap",
+                Values::Strings(&["Level Art/buildings/signs/SIGN_H01A_DIF.tex"]),
+            )],
+        );
+        builder.record(
+            "records/levelart/signs/post.dbr",
+            "Sign",
+            &[(
+                "bitmap",
+                Values::Strings(&["level art/buildings/signs/post.tex"]),
+            )],
+        );
+        let database = ArzFile::parse(builder.build(), ArzDialect::grim_dawn()).unwrap();
+        let mut items = ArcBuilder::new(Codec::Lz4Block);
+        items.stored("gearhead/plain.tex", &tex(32, 32));
+        let items = ArcFile::parse(items.build(), Codec::Lz4Block).unwrap();
+        let game = GameData::from_parts(vec![database], TextDb::new(), vec![items]);
+
+        let foreign: Vec<String> = game
+            .foreign_bitmaps()
+            .iter()
+            .map(|path| path.as_str().to_string())
+            .collect();
+        assert_eq!(
+            foreign,
+            ["Level Art/buildings/signs/SIGN_H01A_DIF.tex", LOKARR]
+        );
+
+        let lokarr = BitmapPath(LOKARR.into());
+        assert!(game.bitmap(&lokarr).is_none());
+        assert!(game.footprint(&lokarr).is_none());
+        let game = game.with_bitmaps([(lokarr.clone(), tex(64, 96))]);
+        assert_eq!(game.bitmap(&lokarr).unwrap().unwrap(), tex(64, 96));
+        assert_eq!(
+            game.footprint(&lokarr).unwrap().unwrap(),
+            Footprint {
+                width: 2,
+                height: 3
+            }
+        );
+        let spelled_otherwise = BitmapPath("Level Art/buildings/signs/SIGN_H01A_DIF.tex".into());
+        assert_eq!(
+            game.bitmap(&spelled_otherwise).unwrap().unwrap(),
+            tex(64, 96)
+        );
+        let plain = BitmapPath("items/gearhead/plain.tex".into());
+        assert_eq!(game.bitmap(&plain).unwrap().unwrap(), tex(32, 32));
     }
 
     #[test]
