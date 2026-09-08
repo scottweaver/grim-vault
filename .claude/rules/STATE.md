@@ -16,7 +16,7 @@ item through 33 (there is no item 17), the lost-component fix and
 the foreign-icon fix below — 534 tests, clippy pedantic clean, fmt
 clean, headless `--check` clean from the release build on the real
 install with a scratch copy of the saves. **Landed 2026-09-08
-evening (`183dc22`, `fix/icons-outside-items-arc`):** the user hit
+evening (`183dc22`, `fix/icons-outside-items-arc`, branch deleted by the wrap-up):** the user hit
 "item 21 (records/storyelements/signs/signh.dbr) has no known
 footprint" a second time, copying a relic from the vault into
 LootAscension transfer tab 0 — item 21 there is Lokarr's Gaze, whose
@@ -275,7 +275,6 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
 | `feat/reference-cards` | FEATURES.md 32, the affix card | landed by fast-forward 2026-09-08; deletable (`git branch -d`) — the user confirms deletions |
 | `feat/equipment-tiles` | FEATURES.md 33, the gear tab as tiles with unequip-by-drag | landed by fast-forward 2026-09-08; still checked out in the agent worktree `.claude/worktrees/agent-aaed563a4259e1782` — remove the worktree, then `git branch -d`, on the user's word |
 | `fix/linked-conflicts` | the lost-component fix: linked documents share one external-change decision | landed by fast-forward 2026-09-08 (`42291a0`); deletable on the user's word |
-| `fix/icons-outside-items-arc` | read item icons from the archive their path names | rebased and landed by fast-forward 2026-09-08 evening (`183dc22`) after the user's second footprint report; deletable on the user's word |
 
 ## Next up
 
@@ -623,10 +622,10 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   storage — nine records in the real store; folding across the
   modifier is a one-line change to `StackKey::of` if the user says
   those are one item; (8) *resolved by the user the same hour:* the blueprint sync records knowledge (the store's `blueprints` list),
-  never items; rehydration into the game is next-up 1c; (9) *narrowed 2026-09-08 evening:* the icon fix is landed; still
-  open are whether to delete the landed `feat/reference-cards`,
-  `feat/equipment-tiles`, `fix/linked-conflicts` and
-  `fix/icons-outside-items-arc` (and the `docs/state-post-*`
+  never items; rehydration into the game is next-up 1c; (9) *narrowed 2026-09-08 evening:* the icon fix is landed and its
+  branch deleted by the wrap-up; still open are whether to delete
+  the landed `feat/reference-cards`, `feat/equipment-tiles` and
+  `fix/linked-conflicts` (and the three older `docs/state-post-*`
   branches), and whether to remove the agent worktree that holds
   `feat/equipment-tiles`; (10) *new
   2026-09-08:* a two-hander taken off leaves the game's ghost of it in
