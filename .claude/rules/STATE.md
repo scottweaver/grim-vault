@@ -5,94 +5,65 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-07 (wrap-up after FEATURES.md 25–31 landed
-through the evening — 31 reworked at `35301b0` so the
-learned-blueprint sync records knowledge in the store's `blueprints`
-list instead of making items; 506 tests; every landing fast-forwarded
-and pushed; the ten merged branches deleted by `/wrap-up`, `main`
-the only branch anywhere)
+Last updated: 2026-09-08 (after FEATURES.md 32, the affix reference
+card, landed on `main` at `cd4ed5b` and was pushed; 520 tests; item 33,
+the gear tab, in flight on `feat/equipment-tiles` by a fork agent in a
+worktree; `fix/icons-outside-items-arc` found unlanded)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
-**Resume here:** `main` at the `docs/state-post-blueprint-knowledge`
-fast-forward (feature tip `35301b0`) holds everything landed — every
-FEATURES.md item through 31 (there is no item 17) — 506 tests, clippy
-pedantic clean, fmt clean, headless `--check` clean from the release
-build on a scratch copy of the saves. **Why 25–31:** the user asked
-in chat whether the vault is portable so a Linux binary on Bazzite
-can use the Mac's vault; it is (no path or platform fact in it), and
-they asked for the shared-location route to be first-class, plus
-export / import and a settings modal (25–27), then corrected what
-they saw in the window — crafting materials filed under Quest Items,
-stackables held as several stacks (28–29), group tabs that did not
-say what they held (30) — and asked for learned blueprints to sync
-into the vault (31), then narrowed that to "just detect and store"
-with rehydration (as an item, or bulk into a campaign's learned file)
-kept for later — all recorded in FEATURES.md by the agent, not the
-user, so the queue stays the one record. **The first launch of
-`35301b0` on the real files records 337 learned blueprints** from
-LootAscension's `formulas.gst` (a switch to main adds the 23 it alone
-knows; the union is 360) and folds the 85 split stacks from 28–29 —
-both expected, both autosaved backup-first; the item count does not
-change for the blueprints. **Nine
-components stay in two stacks after the fold** (Aether Soul,
-Whetstone, Bloody Whetstone, Aether Shard …): one stack came out of
-the reagent storage bare, the other out of a GD Stash export carrying
-a completion-bonus `modifierName` (`lootaffixes/crafting/…`), and the
-stack key is the whole item less seed and count, so they are
-different items to the fold. Whether to fold across the modifier is
-the user's call (Blocked / waiting 7). **The first launch of `f400222` on the real store folds it:**
-the user's real store (3,450 entries at 16:05) holds 85 split stacks
-that the window will fold into 70 on load and autosave, backup-first
-— expected, not a fault; the CLI dry run preserved every record's
-unit total. **The user's next step is the Linux build:**
-`target/release/grimvault-gui` is built from `f400222`; on Bazzite,
-`~/.config/grim-vault/settings.json` with `storeFile` naming the NAS
-vault under the Linux mount point is the whole setup, and the ⚙ modal
-writes it. The settings modal has only been exercised by unit tests
-and the CLI twins — nobody has clicked the gear yet — so the first
-thing to confirm in the window is that the modal opens, Apply on a
-store change swaps the pane, and Export / Import toast sensibly.
-**The remote exists now:** the user created
-`github.com/scottweaver/grim-vault` (public, Issues enabled) on
-2026-09-07 at 14:54 local and pushed; `origin/main` is in sync at
-`0e3f39d`, so next-up item 7 is done — push after every landing from
-now on (`git push`, never force). PROJECT.md still binds
-`tracker: none` and the skills still run their local equivalents;
-switching to `tracker: github` (`/bootstrap-project` edit mode, the
-commented block is pre-filled) and to PR-based landing per
-METHODOLOGIES is the user's call (Blocked / waiting). No track is in
-flight, and `main` is the only branch, locally and on the remote:
-the evening's five feature branches and their five `docs/state-post-*`
-branches were deleted by the user's `/wrap-up` on 2026-09-07 once
-everything was fast-forwarded, as the three earlier track branches
-and their worktrees had been. **The acceptance run is under way, results unknown
-here:** the user relaunched the `f6bd3d0` build at 14:49 (pid 26200
-at checkpoint) and at 14:50 nominated LootAscension stash tabs 2 and
-3 for *purge* as well as auto-move under `bulkDuplicates: skip`; the
-real store (2.8 MB) was rewritten at 14:50 with a backup beside it,
-so the standing orders of the new build have already run on the real
-files. Ask the user what the game did with them before assuming any
-write path works or fails.
+**Resume here:** `main` at `cd4ed5b` (pushed, `origin/main` in sync)
+holds everything landed — every FEATURES.md item through 32 (there is
+no item 17) — 520 tests, clippy pedantic clean, fmt clean, headless
+`--check` clean from the release build on the real install with a
+scratch copy of the saves. **Two things are in flight (2026-09-08):**
+(1) FEATURES.md 33, the gear tab, is being built by a fork agent on
+`feat/equipment-tiles` in its own worktree from the user's decision
+"gear tiles, first in the strip, unequip by drag" — every slot as an
+item tile with tooltip and inspector, gear dragged or right-clicked
+*off* the character into the vault, a sack or a stash tab through the
+one `drag::Move` path, the slot left as the game's own empty slot;
+equipping by drop deferred (needs the `ItemSlots` rule). The agent
+commits on its branch and never lands: the integrator asks it to
+rebase onto `main`, runs the gates, fast-forwards, pushes, tags
+FEATURES.md 33. (2) `fix/icons-outside-items-arc` (`04e9914`, one
+commit: read item icons from the archive their path names) was found
+checked out and unlanded at the start of 2026-09-08 — absent from this
+file before — one commit ahead of the 2026-09-07 `main`; it needs a
+rebase and the user's call to land. **Why 32–33:** the user asked in
+chat for reference cards (first: a searchable list of the "proper"
+affix names with what each grants — design dialog: floating card
+windows, one row per name with value ranges, expandable to the
+records) and, mid-session, for a tab showing a character's equipped
+gear — the Equipped tab existed since M3 as a text list between the
+sacks and the stash tabs, easy to scroll out of view, hence the
+redesign; both recorded in FEATURES.md by the agent. **Still open
+from 2026-09-07:** the user's acceptance run on the real install
+(nothing the app writes has been read by the game yet — ask what the
+game did before assuming any write path works); the Linux build for
+Bazzite sharing the NAS vault via `storeFile`; the first launch of a
+post-`35301b0` build records 337 learned blueprints and folds 85 split
+stacks, both expected and backup-first; nine components stay in two
+stacks (a completion-bonus `modifierName` on the GD Stash export's
+copy) pending the user's call (Blocked / waiting 7); PROJECT.md still
+binds `tracker: none` and the local fast-forward flow plus `git push`
+is what lands work. The user's own `grimvault-gui` was running during
+the 2026-09-08 session (its `vault-store.json` was written at 14:34) —
+never kill an instance you did not start.
 Parallel tracks are integrated by rebasing each onto the moving
 `main` — ask the agent to do it, it knows its own conflicts — and
-fast-forwarding; today's conflicts sat in `bulk.rs`, `settings.rs`,
+fast-forwarding; past conflicts sat in `bulk.rs`, `settings.rs`,
 `panes/mod.rs`, the tab-header rows of `panes/stash.rs` and
 `panes/character.rs`, `check.rs`, `app.rs`, and the ARCHITECTURE
-standing-orders paragraph, all resolved by the last agent to rebase.
-**Worktree agents share one `git stash` list** — brief them never to
-bare-stash. The **user's acceptance run** (next-up item 1) is still
-open: nothing the app writes has been read by the game yet. The user
-runs `target/release/grimvault-gui` and rebuilds with `cargo run
---release -p grimvault-gui`; `target/release/grimvault-gui` and
-`examples/vault_cli` are built from `f6bd3d0`. The user's own
-instance (pid 14872 at the last checkpoint) was **not running** by
-the end of this session — no agent killed it (each quit only the
-instance it launched) — so the next launch is the new build, and its
-first load runs the component sync (default on) plus the standing
-orders in `settings.json` — the real file already nominates
-LootAscension stash tabs 2 and 3 for auto-move, now under the
-default `bulkDuplicates: skip`.
+standing-orders paragraph. **Worktree agents share one `git stash`
+list** — brief them never to bare-stash. The user runs
+`target/release/grimvault-gui` and rebuilds with `cargo run --release
+-p grimvault-gui`; `target/release/grimvault-gui` and the
+`grimvault-core` examples are built from `cd4ed5b` (2026-09-08). The
+real `settings.json` nominates LootAscension stash tabs 1–6 for both
+auto-move and purge under `bulkDuplicates: skip`, with the reagent
+and blueprint syncs on — every launch on the real files runs all
+four standing orders.
 
 - **GD Stash is an eyes-only reference (user, 2026-09-06):** the
   user's copy at `/Volumes/scott-games/GDStash_v190a` decompiles
@@ -105,11 +76,11 @@ default `bulkDuplicates: skip`.
   far is in `docs/format-references.md` "GD Stash (eyes-only)
   findings".
 - **The user's feature queue is `FEATURES.md`** in the repo root
-  (untracked, user-authored, growing): items 1–31 are landed on
+  (untracked, user-authored, growing): items 1–32 are landed on
   `main` (there is no item 17) and each line carries a
   `[landed <date>: <rule>]` tag (20–24 tagged 2026-09-07 following
-  the pass the user agreed to for 1–19; 25–31 were *written* by the
-  agent from chat requests the same day, marked "asked in chat").
+  the pass the user agreed to for 1–19; 25–33 were *written* by the
+  agent from chat requests, marked "asked in chat"); 33 is in flight.
   They announce additions with "new items in FEATURES.md" / "new
   features are ready for review", and nothing is read until then.
   Items are executed on the fly, in parallel where independent — one
@@ -133,7 +104,12 @@ default `bulkDuplicates: skip`.
   so never chain it with `&&`. The harness refuses
   a fake `HOME` for worktree agents; the config dir variable is
   enough. No synthetic input; look at what renders — modals and
-  hover-scrolling are covered by unit tests only. The user's own
+  hover-scrolling are covered by unit tests only. A `ui-state.json`
+  seeded beside the scratch `settings.json` opens what a click would
+  (`{"reference":{"affixes":{"open":true,"query":{"text":"cleric"}}}}`
+  put the affix card up at launch on 2026-09-08). egui's default
+  fonts lack the small triangles ▸ ▾ (they draw as boxes); the media
+  symbols ⏵ ⏷ render. The user's own
   instance is usually running — never kill a `grimvault-gui` you did
   not start.
 - **Gap found 2026-09-06:** the shared files come in an
@@ -174,15 +150,19 @@ default `bulkDuplicates: skip`.
   targets the last-touched game grid; the search view has no
   expansion-origin filter; `vault_cli` prints refusals in Debug form;
   `a1670af` carries an early uncompiled copy of `gui/src/automove.rs`
-  superseded by the next commit.
+  superseded by the next commit; the affix card lists an entry's
+  partial grants in first-seen order rather than grouped by item form
+  (Thunderstruck's armor, shield and weapon lines interleave — the
+  unfolded records tell them apart).
 - **Unverified in the window:** drag-and-drop, autosave, the copy
   modifier, the iron-bits field, the Reload/Keep-mine modal, the
   realm-labelled picker, the campaign switch, right-click moves, the
   item inspector, the standing-order toggles' effects, the search
   table's gestures, and — new today — the Delete-all confirmation
   modal, a Move all / Copy all click, the store's duplicates
-  checkbox, and hover-scrolling or wheel-scrolling the tab strip are
-  covered by unit tests, headless CLI / `--check` runs, and (for the
+  checkbox, and hover-scrolling or wheel-scrolling the tab strip, and — new
+  2026-09-08 — the affix card's row click, position toggles and
+  rarity combo are covered by unit tests, headless CLI / `--check` runs, and (for the
   purge) one live debug-GUI run against scratch files only; the new
   tab order, the right chevron with a clipped tab behind it, the
   header buttons, and the checkbox were seen rendering in captures.
@@ -231,21 +211,26 @@ modal behind ⚙, a Crafting Materials bucket, one consolidated stack
 per stackable record kept by the window, the store's seven groups —
 Weapons, Armor, Accessories with Relics, Item Upgrades, Crafting,
 Consumables, Other — and the learned-blueprint sync as a fourth
-standing order, recording knowledge in the store's `blueprints` list)
-— 506 tests, clippy pedantic clean. Verified on
+standing order, recording knowledge in the store's `blueprints` list;
+and — landed 2026-09-08 — the affix reference card behind a Reference
+menu in the status bar, `grimvault-core::reference` building one
+entry per named prefix and suffix with value ranges across its tiers)
+— 520 tests, clippy pedantic clean. Verified on
 scratch copies of the user's install and saves. **Not yet verified:
 the game reading any file this app wrote** — the next step is the
 user's acceptance run on the real install with the game closed, and
 now the Linux build on Bazzite sharing the NAS vault. The user's
-`FEATURES.md` is landed through item 31. grim-vault is the Grim Dawn
+`FEATURES.md` is landed through item 32. grim-vault is the Grim Dawn
 sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
 
 ## Branches in flight
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at the `docs/state-post-wrap-up-2026-09-07` fast-forward — every FEATURES.md item through 31; 506 tests green; pushed, `origin/main` in sync |
-| *(none)* | — | the five feature branches of 2026-09-07 evening (25–27, 28–29, 30, 31 twice) and their five `docs/state-post-*` branches were deleted by `/wrap-up` on 2026-09-07 after fast-forwarding; no worktrees, nothing on the remote but `main` |
+| `main` | trunk | at `cd4ed5b` (FEATURES.md 32) plus this refresh — every item through 32; 520 tests green; pushed, `origin/main` in sync |
+| `feat/reference-cards` | FEATURES.md 32, the affix card | landed by fast-forward 2026-09-08; deletable (`git branch -d`) — the user confirms deletions |
+| `feat/equipment-tiles` | FEATURES.md 33, the gear tab as tiles with unequip-by-drag | in flight 2026-09-08 — a fork agent in its own worktree, branched from `main` at `6e1f48d` or later; commits, never lands |
+| `fix/icons-outside-items-arc` | read item icons from the archive their path names (`04e9914`) | unlanded, found 2026-09-08; one commit on the 2026-09-07 `main`; needs a rebase and the user's call |
 
 ## Next up
 
@@ -294,7 +279,14 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    (`Formulas::add` with `FormulaRead::Unread`, database-vouched).
    Both need a UI on the list (a "Blueprints known" view in the store
    pane is the natural home) — design dialog first.
-2. **FEATURES.md 32 onward** as the user announces them — one fork
+1d. **More reference cards** on `grimvault-core::reference` and
+   `gui/src/reference.rs` (a `ReferenceView` field and a menu line per
+   card): components and augments by the slots they fit, item sets,
+   …; and an affix name in a tooltip or the inspector opening the
+   affix card on that name. The partial grants of a multi-form affix
+   could group by form once a witness for the form exists (the loot
+   tables, not the file name).
+2. **FEATURES.md 33 (in flight) and 34 onward** as the user announces them — one fork
    agent per independent item in its own worktree, branch from
    `main`, decisions fixed in the brief, the eyes-only GD Stash rule,
    no bare `git stash`, no STATE.md edits by agents; the integrator
@@ -328,6 +320,31 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    Stash does not read it either).
 
 ## Most recent meaningful progress
+
+- **2026-09-08 — FEATURES.md 32 landed on `main` (fast-forward to
+  `cd4ed5b`, one track in the main checkout).** The user asked in chat
+  for reference cards, the first a searchable list of proper affix
+  names with what each grants; the design dialog settled floating
+  card windows, one row per name with value ranges, expandable to the
+  records, branched from `main`. Core: `reference::AffixTable` —
+  every named `LootRandomizer` under `lootaffixes/{prefix,suffix}/`
+  (the ascendant, completion, unique and crafting folders are
+  nameless), one `AffixEntry` per name, position and rarity, its
+  records as `Tier`s, collapsed into `Grant`s by stat shape with each
+  varying number written as its range ("10–36% Pierce Resistance",
+  "1-15 to 15-45 Lightning Damage"), a `Coverage` mark when only some
+  records carry a line, and the per-skill variants of a mastery
+  prefix folded into "+2 to one of 28 skills"; `AffixQuery` over
+  name, grants and tier lines; `search::number_spans` made public;
+  `reference_cli affixes`. GUI: a "Reference" menu in the status bar,
+  the "Affix names" window with bar, filters and a four-column table
+  whose rows unfold; built in the loader (`LoadStep::Reference`,
+  ~0.9 s); `ui-state.json` gains `reference`; `--check` prints the
+  size. Real install: 386 names over 6,191 records. 520 tests. Why:
+  the user looks affixes up while sorting loot. Risk: nominal values
+  only (the roll jitter is not public); the multi-form entries
+  interleave their partial lines; the card was seen rendering once,
+  its gestures are unit-tested only.
 
 - **2026-09-07 (latest) — FEATURES.md 31 landed on `main` twice:
   items at `6d51441`, then knowledge at `35301b0`.** The user asked
@@ -525,25 +542,6 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   acceptance run (next-up item 1) is the gate before trusting it on
   real saves beyond the automatic backups.
 
-- **2026-09-06 — Campaign selector (branch `feat/mod-characters`, not
-  merged).** Core: `campaign::{Campaign, ModName}` — `Main` or
-  `Mod(name)`, folder `save/` or `save/<Mod>/`, wire name `""` or the
-  name, serialized `"main"` / the name — carried by
-  `ItemOrigin::{TransferStash, ReagentStorage}` (default main for
-  older origins) and taken by `vault_from_stash` /
-  `vault_from_reagents`. GUI: `SaveDir::campaigns()` lists the main
-  campaign plus every folder with a `transfer.gst`; the loader opens
-  the campaign whose stash was written last and cross-checks each
-  file's `mod_name` against its folder (a mismatch is a toast, not a
-  refusal); a ComboBox beside the stash heading switches — unsaved
-  edits flushed first, the guard re-pointed, backup re-armed. CLI:
-  `--mod NAME`. 305 tests. Why: the user plays LootAscension, whose
-  stash and component storage the app never showed; the character
-  file cannot name its mod, so a selector with a newest-file default
-  is the honest design. Risk: the switch path itself is shell glue
-  without a test; the newest-stash rule follows the game's last
-  write, which is right after play but wrong if the user edits the
-  other campaign's files by hand in between.
 
 ## Blocked / waiting
 
@@ -565,9 +563,11 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   Stash export) stays a separate stack from the bare one out of the
   storage — nine records in the real store; folding across the
   modifier is a one-line change to `StackKey::of` if the user says
-  those are one item; (8) *resolved by the user the same hour:* the
-  blueprint sync records knowledge (the store's `blueprints` list),
-  never items; rehydration into the game is next-up 1c.
+  those are one item; (8) *resolved by the user the same hour:* the blueprint sync records knowledge (the store's `blueprints` list),
+  never items; rehydration into the game is next-up 1c; (9) *new
+  2026-09-08:* whether to land `fix/icons-outside-items-arc` (rebase
+  onto `main` first) and whether to delete the landed
+  `feat/reference-cards`.
 - **Waiting on the user — the acceptance run** (next-up item 1) is
   under way in the relaunched build as of this checkpoint; its
   results are what make `main` trustworthy on real saves, and this
