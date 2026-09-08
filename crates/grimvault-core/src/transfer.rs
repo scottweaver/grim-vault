@@ -38,7 +38,7 @@ use univault_engine::ids::{GridPos, RecordId};
 use crate::block::StashTab;
 use crate::campaign::Campaign;
 use crate::gamedata::{Footprint, GameData};
-use crate::gdc::{PlayerFile, Realm, Sack};
+use crate::gdc::{EquipSlot, EquippedItem, InventoryContents, PlayerFile, Realm, Sack};
 use crate::gst::{ReagentEntry, ReagentStorage, TransferStash};
 use crate::item::{Item, SackItem, StashItem};
 use crate::reagents::ReagentKinds;
@@ -253,6 +253,12 @@ pub enum TransferError {
     /// cannot be reached.
     #[error("the character's inventory is not typed")]
     NoInventory,
+    /// The character has never entered the game, so it has no sacks
+    /// and wears nothing.
+    #[error("the character has never entered the game")]
+    NeverEntered,
+    #[error("nothing is equipped in the {0} slot")]
+    EmptySlot(EquipSlot),
     #[error("the inventory has no sack {0}")]
     NoSuchSack(SackIndex),
     #[error("sack {sack} has no item {index}")]
@@ -587,6 +593,31 @@ pub fn vault_from_sack(
     Ok(store.add(placed.item, ItemOrigin::Character { realm, name, sack }, at))
 }
 
+/// Takes the item worn in `slot` off `player` and stores it with
+/// [`ItemOrigin::Equipped`]; the slot is left as the game leaves one
+/// it never filled ([`EquippedItem::empty`]). Nothing is equipped in
+/// return — the game's slot rules are its own.
+///
+/// # Errors
+/// [`TransferError::NoInventory`], [`TransferError::NeverEntered`] or
+/// [`TransferError::EmptySlot`]; the store and player are unchanged
+/// on error.
+pub fn vault_from_equipment(
+    player: &mut PlayerFile,
+    realm: Realm,
+    slot: EquipSlot,
+    store: &mut VaultStore,
+    at: Timestamp,
+) -> Result<StoredItemId, TransferError> {
+    let name = player.character_name().to_owned();
+    let worn = contents_mut(player)?.slot_mut(slot);
+    if worn.item.is_empty() {
+        return Err(TransferError::EmptySlot(slot));
+    }
+    let taken = std::mem::replace(worn, EquippedItem::empty());
+    Ok(store.add(taken.item, ItemOrigin::Equipped { realm, name, slot }, at))
+}
+
 /// Moves stored item `id` into the first free spot of sack `sack`,
 /// returning where it landed.
 ///
@@ -849,6 +880,14 @@ pub(crate) fn sack_ref(player: &PlayerFile, sack: SackIndex) -> Result<&Sack, Tr
     sack.slot()
         .and_then(|slot| sacks.get(slot))
         .ok_or(TransferError::NoSuchSack(sack))
+}
+
+fn contents_mut(player: &mut PlayerFile) -> Result<&mut InventoryContents, TransferError> {
+    player
+        .inventory_mut()
+        .ok_or(TransferError::NoInventory)?
+        .contents_mut()
+        .ok_or(TransferError::NeverEntered)
 }
 
 fn sack_mut(player: &mut PlayerFile, sack: SackIndex) -> Result<&mut Sack, TransferError> {
@@ -1837,6 +1876,71 @@ mod tests {
                 place_in_sack(&mut store, id, &mut player, MAIN, &footprints),
                 Ok(at(0, 0))
             );
+        }
+
+        fn wearing(slot: EquipSlot, base_name: &str) -> PlayerFile {
+            let mut player = player(vec![sack(vec![])]);
+            let contents = player.inventory_mut().unwrap().contents_mut().unwrap();
+            *contents.slot_mut(slot) = EquippedItem {
+                item: item(base_name),
+                attached: 1,
+            };
+            player
+        }
+
+        #[test]
+        fn vaulting_worn_gear_empties_the_slot_the_way_the_game_does() {
+            let mut player = wearing(EquipSlot::OffHand2, LEGS);
+            let mut store = VaultStore::new();
+            let id = vault_from_equipment(
+                &mut player,
+                Realm::Custom,
+                EquipSlot::OffHand2,
+                &mut store,
+                NOW,
+            )
+            .unwrap();
+            let stored = store.get(id).unwrap();
+            assert_eq!(stored.item(), &item(LEGS));
+            assert_eq!(
+                stored.origin(),
+                &ItemOrigin::Equipped {
+                    realm: Realm::Custom,
+                    name: "Sif".into(),
+                    slot: EquipSlot::OffHand2,
+                }
+            );
+            let contents = player.inventory().unwrap().contents().unwrap();
+            assert_eq!(contents.slot(EquipSlot::OffHand2), &EquippedItem::empty());
+            assert_eq!(contents.equipped().count(), 0);
+            assert_eq!(
+                vault_from_equipment(
+                    &mut player,
+                    Realm::Custom,
+                    EquipSlot::OffHand2,
+                    &mut store,
+                    NOW
+                ),
+                Err(TransferError::EmptySlot(EquipSlot::OffHand2))
+            );
+            assert_eq!(store.len(), 1);
+        }
+
+        #[test]
+        fn vaulting_gear_needs_a_character_that_entered_the_game() {
+            let mut store = VaultStore::new();
+            let mut never = player(vec![]);
+            never.inventory_mut().unwrap().state = InventoryState::NeverEntered;
+            assert_eq!(
+                vault_from_equipment(&mut never, Realm::Main, EquipSlot::Head, &mut store, NOW),
+                Err(TransferError::NeverEntered)
+            );
+            let mut untyped = PlayerFile::from_parts(7, never.header().clone(), vec![]);
+            assert_eq!(
+                vault_from_equipment(&mut untyped, Realm::Main, EquipSlot::Head, &mut store, NOW),
+                Err(TransferError::NoInventory)
+            );
+            assert!(store.is_empty());
         }
 
         #[test]

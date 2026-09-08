@@ -510,7 +510,10 @@ pub fn grid_surface(
                     Mode::Move,
                 ) if from == container => Some(index),
                 (
-                    DragSource::Grid { .. } | DragSource::Store(_) | DragSource::Reagent { .. },
+                    DragSource::Grid { .. }
+                    | DragSource::Store(_)
+                    | DragSource::Reagent { .. }
+                    | DragSource::Equipped { .. },
                     Mode::Move | Mode::Copy,
                 ) => None,
             };

@@ -23,7 +23,7 @@ use super::{DragFrame, DropCandidate, PaneCtx, TileLook, item_tooltip, paint_til
 use crate::badges::Badge;
 use crate::documents::StoreDoc;
 use crate::drag::{self, DragSource, DragState, DropTarget, Fit};
-use crate::grid::{CELL_PX, footprint_or_unit};
+use crate::grid::{CELL_PX, cells, footprint_or_unit};
 use crate::search::{self, SearchCache, SearchView};
 use crate::theme::FITS;
 
@@ -472,14 +472,6 @@ fn icon_box(tile: Rect, width: i32, height: i32) -> Rect {
 /// the footprint fills the box.
 fn icon_cell(width: i32, height: i32) -> f32 {
     ICON_BOX / cells(width.max(height).max(1))
-}
-
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "footprints are a handful of cells"
-)]
-fn cells(n: i32) -> f32 {
-    n as f32
 }
 
 #[cfg(test)]

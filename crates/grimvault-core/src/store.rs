@@ -51,7 +51,7 @@ use thiserror::Error;
 use univault_engine::ids::normalize;
 
 use crate::campaign::Campaign;
-use crate::gdc::Realm;
+use crate::gdc::{EquipSlot, Realm};
 use crate::gds::GameMode;
 use crate::item::Item;
 use crate::transfer::{SackIndex, TabIndex};
@@ -133,6 +133,13 @@ pub enum ItemOrigin {
         name: String,
         tab: TabIndex,
     },
+    /// A slot of a character's worn gear or weapon sets (`player.gdc`
+    /// block 3), taken off in this app.
+    Equipped {
+        realm: Realm,
+        name: String,
+        slot: EquipSlot,
+    },
     /// A campaign's component / crafting-material storage,
     /// `reagents.gst`.
     ReagentStorage {
@@ -163,6 +170,9 @@ impl fmt::Display for ItemOrigin {
             }
             Self::CharacterStash { realm, name, tab } => {
                 write!(f, "character {}/{name} stash tab {tab}", realm.dir_name())
+            }
+            Self::Equipped { realm, name, slot } => {
+                write!(f, "character {}/{name} equipped {slot}", realm.dir_name())
             }
             Self::ReagentStorage { campaign } => {
                 write!(f, "{campaign} component / crafting-material storage")
@@ -1143,6 +1153,18 @@ mod tests {
             serde_json::to_value(&stash).unwrap(),
             json!({ "kind": "characterStash", "realm": "custom", "name": "Sif", "tab": 1 })
         );
+        let equipped = ItemOrigin::Equipped {
+            realm: Realm::Main,
+            name: "Sif".into(),
+            slot: EquipSlot::OffHand2,
+        };
+        let json =
+            json!({ "kind": "equipped", "realm": "main", "name": "Sif", "slot": "offHand2" });
+        assert_eq!(serde_json::to_value(&equipped).unwrap(), json);
+        assert_eq!(
+            serde_json::from_value::<ItemOrigin>(json).unwrap(),
+            equipped
+        );
         assert_eq!(
             serde_json::to_value(ItemOrigin::Unknown).unwrap(),
             json!({ "kind": "unknown" })
@@ -1219,6 +1241,24 @@ mod tests {
             }
             .to_string(),
             "character user/Zark sack 1"
+        );
+        assert_eq!(
+            ItemOrigin::Equipped {
+                realm: Realm::Main,
+                name: "Sif".into(),
+                slot: EquipSlot::MainHand2,
+            }
+            .to_string(),
+            "character main/Sif equipped Main hand (weapon set 2)"
+        );
+        assert_eq!(
+            ItemOrigin::Equipped {
+                realm: Realm::Main,
+                name: "Sif".into(),
+                slot: EquipSlot::Ring1,
+            }
+            .to_string(),
+            "character main/Sif equipped Ring 1"
         );
         assert_eq!(
             ItemOrigin::GdStashExport {

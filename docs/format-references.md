@@ -588,7 +588,17 @@ so the next reader can find the spot; nothing below is a transcription.
     twelve, then `alternate1` byte + main hand / off hand, then
     `alternate2` byte + the second pair. Item field `unknown (i32,
     gdlc asserts 0)` between `augmentName` and `augmentSeed` is its
-    `enchantmentLevel` — the **augment level**.
+    `enchantmentLevel` — the **augment level**. **Empty slot shape
+    (verified 2026-09-08** on the gdlc fixture and five real
+    characters, v4 and v11): `attached` 0, `baseName` empty,
+    `stackCount` 1 — never 0 — and the other fields are whatever the
+    slot last held: a slot the game emptied keeps its last occupant's
+    seed, affixes, component and augment (a two-hander's off-hand slot
+    is a full ghost of the weapon with only `baseName` blanked; a
+    never-used slot has seed 0 and every string empty). The game reads
+    emptiness from `baseName` alone. This app writes the never-used
+    form (`EquippedItem::empty`) when it takes gear off; `useAlternate`
+    was 0 and `alternate2` 1 on every file read.
   - Slot rule for equipping: `ItemSlots` is 25 booleans per record
     class (axe / mace / sword / dagger / scepter / spear / staff /
     ranged, one- and two-handed; shield, off-hand; amulet, belt,

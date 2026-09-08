@@ -30,7 +30,7 @@ use univault_ui::sort::SortDirection;
 
 use crate::documents::StoreDoc;
 use crate::drag::{DragSource, DragState};
-use crate::grid::{CELL_PX, footprint_or_unit};
+use crate::grid::{CELL_PX, cells, footprint_or_unit};
 use crate::panes::store::{Reveal, stored_tooltip};
 use crate::panes::{DragFrame, PaneCtx, paint_item};
 use crate::theme::{UNKNOWN_RARITY, rarity_color};
@@ -869,14 +869,6 @@ fn stat_column(ui: &mut Ui, details: &ItemDetails, cx: &PaneCtx<'_>) {
             ui.label(crate::stat_lines::stat_text(cx.palette, line).size(TEXT_SIZE));
         }
     }
-}
-
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "footprints are a handful of cells"
-)]
-fn cells(n: i32) -> f32 {
-    n as f32
 }
 
 #[cfg(test)]

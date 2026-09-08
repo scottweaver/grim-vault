@@ -18,7 +18,6 @@ use grimvault_core::blueprint::check_blueprint;
 use grimvault_core::bulk::{self, Identities};
 use grimvault_core::formulas::FormulaRead;
 use grimvault_core::gamedata::GameData;
-use grimvault_core::gdc::InventoryState;
 use grimvault_core::illusion::{IllusionCategory, audit};
 use grimvault_core::item::Item;
 use grimvault_core::reagents::ReagentKind;
@@ -31,7 +30,6 @@ use crate::crafting::{Blueprints, IllusionCollection};
 use crate::documents::{CharacterDoc, CharacterEntry, Optional, Reagents, StoreDoc, Writable};
 use crate::facts::FactsCache;
 use crate::loader::{LoadStep, LoadedWorld, WorldPaths, load_world};
-use crate::panes::character::{EQUIPMENT_SLOTS, WEAPON_SLOTS};
 use crate::settings::ConfigDir;
 use crate::setup::{GameDir, SaveDir};
 use grimvault_core::gdc::Realm;
@@ -521,27 +519,15 @@ fn print_character(doc: &CharacterDoc, facts: &mut FactsCache, game: &GameData) 
                     rows.max(height)
                 );
             }
-            if let InventoryState::Entered(contents) = &inventory.state {
-                for (label, slot) in EQUIPMENT_SLOTS.iter().zip(&contents.equipment) {
-                    if !slot.item.is_empty() {
-                        let class = facts.base(game, &slot.item).class.clone();
+            if let Some(contents) = inventory.contents() {
+                for (slot, worn) in contents.slots() {
+                    if !worn.item.is_empty() {
+                        let class = facts.base(game, &worn.item).class.clone();
                         println!(
-                            "    equipped {label}: {} — {}",
+                            "    equipped {slot}: {} — {}",
                             class.map_or_else(|| "?".to_string(), |class| class.to_string()),
-                            describe(facts, game, &slot.item)
+                            describe(facts, game, &worn.item)
                         );
-                    }
-                }
-                for (set, slots) in [(1, &contents.weapon_set_1), (2, &contents.weapon_set_2)] {
-                    for (label, slot) in WEAPON_SLOTS.iter().zip(slots) {
-                        if !slot.item.is_empty() {
-                            let class = facts.base(game, &slot.item).class.clone();
-                            println!(
-                                "    weapon set {set} {label}: {} — {}",
-                                class.map_or_else(|| "?".to_string(), |class| class.to_string()),
-                                describe(facts, game, &slot.item)
-                            );
-                        }
                     }
                 }
             }

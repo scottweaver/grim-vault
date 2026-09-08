@@ -13,7 +13,7 @@ use egui::Vec2;
 use grimvault_core::block::StashTab;
 use grimvault_core::campaign::Campaign;
 use grimvault_core::gamedata::Footprint;
-use grimvault_core::gdc::{PlayerFile, Realm};
+use grimvault_core::gdc::{EquipSlot, Inventory, PlayerFile, Realm};
 use grimvault_core::gst::{ReagentStorage, TransferStash};
 use grimvault_core::item::Item;
 use grimvault_core::reagents::{ReagentKind, ReagentKinds};
@@ -73,6 +73,13 @@ pub enum DragSource {
         index: ReagentIndex,
         count: u32,
     },
+    /// A slot of a character's worn gear or weapon sets. A source
+    /// only: nothing is equipped from this app, so no [`DropTarget`]
+    /// names a slot.
+    Equipped {
+        character: CharacterSlot,
+        slot: EquipSlot,
+    },
 }
 
 impl DragSource {
@@ -83,6 +90,7 @@ impl DragSource {
             Self::Grid { container, .. } => container.doc(),
             Self::Store(_) => Doc::Store,
             Self::Reagent { .. } => Doc::Reagents,
+            Self::Equipped { character, .. } => Doc::Character(character),
         }
     }
 }
@@ -163,7 +171,10 @@ impl Move {
                 container == target
             }
             (
-                DragSource::Grid { .. } | DragSource::Store(_) | DragSource::Reagent { .. },
+                DragSource::Grid { .. }
+                | DragSource::Store(_)
+                | DragSource::Reagent { .. }
+                | DragSource::Equipped { .. },
                 DropTarget::Cell { .. }
                 | DropTarget::Container(_)
                 | DropTarget::Store
@@ -186,7 +197,10 @@ pub fn quick_move(
     storage: Option<ReagentKind>,
 ) -> Move {
     let target = match (source, storage) {
-        (DragSource::Grid { .. } | DragSource::Reagent { .. }, Some(_) | None) => DropTarget::Store,
+        (
+            DragSource::Grid { .. } | DragSource::Reagent { .. } | DragSource::Equipped { .. },
+            Some(_) | None,
+        ) => DropTarget::Store,
         (DragSource::Store(_), Some(kind)) => DropTarget::Reagents(kind),
         (DragSource::Store(_), None) => DropTarget::Container(home),
     };
@@ -215,7 +229,7 @@ impl LastActive {
     pub fn touch_source(&mut self, source: DragSource) {
         match source {
             DragSource::Grid { container, .. } => self.touch(container),
-            DragSource::Store(_) | DragSource::Reagent { .. } => {}
+            DragSource::Store(_) | DragSource::Reagent { .. } | DragSource::Equipped { .. } => {}
         }
     }
 
@@ -279,7 +293,7 @@ pub fn fit_at(
 #[must_use]
 pub fn fit_in_reagents(source: DragSource, kind: Option<ReagentKind>) -> Fit {
     match source {
-        DragSource::Grid { .. } | DragSource::Store(_) => {
+        DragSource::Grid { .. } | DragSource::Store(_) | DragSource::Equipped { .. } => {
             if kind.is_some() {
                 Fit::Fits
             } else {
@@ -298,9 +312,10 @@ pub fn fit_in_store(source: DragSource, mode: Mode) -> Fit {
     match (source, mode) {
         (DragSource::Store(_), Mode::Move) => Fit::Blocked,
         (DragSource::Store(_), Mode::Copy)
-        | (DragSource::Grid { .. } | DragSource::Reagent { .. }, Mode::Move | Mode::Copy) => {
-            Fit::Fits
-        }
+        | (
+            DragSource::Grid { .. } | DragSource::Reagent { .. } | DragSource::Equipped { .. },
+            Mode::Move | Mode::Copy,
+        ) => Fit::Fits,
     }
 }
 
@@ -567,6 +582,23 @@ pub fn peek(ends: &impl Ends, source: DragSource) -> Result<(Item, ItemOrigin), 
                     )
                 })
         }
+        DragSource::Equipped { character, slot } => {
+            let (realm, file) = ends.open_character(character)?;
+            file.inventory()
+                .and_then(Inventory::contents)
+                .map(|contents| &contents.slot(slot).item)
+                .filter(|item| !item.is_empty())
+                .map(|item| {
+                    (
+                        item.clone(),
+                        ItemOrigin::Equipped {
+                            realm,
+                            name: file.character_name().to_owned(),
+                            slot,
+                        },
+                    )
+                })
+        }
         DragSource::Store(id) => ends
             .store()
             .get(id)
@@ -627,6 +659,13 @@ pub(crate) fn item_mut<'c>(
             .file
             .stash_mut()
             .and_then(|stash| grid_item_mut(&mut stash.tabs, tab, index)),
+        DragSource::Equipped { character, slot } => containers
+            .character(character)?
+            .file
+            .inventory_mut()
+            .and_then(Inventory::contents_mut)
+            .map(|contents| &mut contents.slot_mut(slot).item)
+            .filter(|item| !item.is_empty()),
         DragSource::Store(id) => containers.store.item_mut(id),
         DragSource::Reagent { .. } => return Err(ApplyError::NotAnItemContainer(Doc::Reagents)),
     };
@@ -681,6 +720,10 @@ fn lift(
         } => {
             let open = containers.character(character)?;
             transfer::vault_from_player_stash(open.file, open.realm, tab, index, into, now)?
+        }
+        DragSource::Equipped { character, slot } => {
+            let open = containers.character(character)?;
+            transfer::vault_from_equipment(open.file, open.realm, slot, into, now)?
         }
         DragSource::Store(id) => {
             let (item, origin) = containers
@@ -818,8 +861,8 @@ mod tests {
 
     use grimvault_core::block::{StashTab, TabDecoration};
     use grimvault_core::gdc::{
-        Block, CharacterInfo, Inventory, InventoryContents, InventoryState, PlayerHeader,
-        PlayerStash, Sack, Sex,
+        Block, CharacterInfo, EquippedItem, Inventory, InventoryContents, InventoryState,
+        PlayerHeader, PlayerStash, Sack, Sex,
     };
     use grimvault_core::gst::{ReagentEntry, ReagentStorageVersion};
     use grimvault_core::item::{ContainerVersion, SackItem, StashItem};
@@ -1114,6 +1157,141 @@ mod tests {
             Landing::Stored(id) => id,
             other => panic!("expected a store landing, got {other:?}"),
         }
+    }
+
+    const WORN: DragSource = DragSource::Equipped {
+        character: SIF,
+        slot: EquipSlot::Head,
+    };
+
+    fn wearing(world: &mut World, slot: EquipSlot, base_name: &str) {
+        let contents = world
+            .player
+            .as_mut()
+            .unwrap()
+            .inventory_mut()
+            .unwrap()
+            .contents_mut()
+            .unwrap();
+        *contents.slot_mut(slot) = EquippedItem {
+            item: item(base_name),
+            attached: 1,
+        };
+    }
+
+    fn slot_of(world: &World, slot: EquipSlot) -> EquippedItem {
+        world
+            .player()
+            .inventory()
+            .unwrap()
+            .contents()
+            .unwrap()
+            .slot(slot)
+            .clone()
+    }
+
+    #[test]
+    fn worn_gear_is_taken_off_into_the_store_and_the_slot_left_empty() {
+        let mut world = world();
+        wearing(&mut world, EquipSlot::Head, MYSTERY);
+        let applied = world.apply(mv(WORN, DropTarget::Store)).unwrap();
+        assert_eq!(
+            changed(applied),
+            (
+                Mode::Move,
+                Doc::Character(SIF),
+                Doc::Store,
+                Landing::Stored(stored_id(applied))
+            )
+        );
+        let stored = world.store.get(stored_id(applied)).unwrap();
+        assert_eq!(stored.item(), &item(MYSTERY));
+        assert_eq!(
+            stored.origin(),
+            &ItemOrigin::Equipped {
+                realm: Realm::Main,
+                name: "Sif".into(),
+                slot: EquipSlot::Head,
+            }
+        );
+        assert_eq!(slot_of(&world, EquipSlot::Head), EquippedItem::empty());
+        assert_eq!(
+            world.apply(mv(WORN, DropTarget::Store)),
+            Err(ApplyError::Transfer(TransferError::EmptySlot(
+                EquipSlot::Head
+            ))),
+            "an empty slot has nothing to lift"
+        );
+    }
+
+    #[test]
+    fn worn_gear_goes_into_a_sack_or_a_stash_tab_by_first_fit() {
+        let mut world = world();
+        wearing(&mut world, EquipSlot::MainHand2, LEGS);
+        let source = DragSource::Equipped {
+            character: SIF,
+            slot: EquipSlot::MainHand2,
+        };
+        let applied = world
+            .apply(mv(source, DropTarget::Container(STASH0)))
+            .unwrap();
+        assert!(matches!(changed(applied).3, Landing::Cell(_)));
+        assert_eq!(world.stash.tabs[0].items.len(), 2);
+        assert_eq!(slot_of(&world, EquipSlot::MainHand2), EquippedItem::empty());
+        assert!(world.store.is_empty(), "the scratch store is not the vault");
+    }
+
+    #[test]
+    fn copying_worn_gear_leaves_it_on_the_character() {
+        let mut world = world();
+        wearing(&mut world, EquipSlot::Head, MYSTERY);
+        let before = world.snapshot();
+        let applied = world.apply(copy(WORN, DropTarget::Store)).unwrap();
+        assert_eq!(changed(applied).0, Mode::Copy);
+        assert_eq!(world.player(), before.3.as_ref().unwrap());
+        assert_eq!(world.store.len(), 1);
+    }
+
+    #[test]
+    fn a_refused_placement_puts_worn_gear_back() {
+        let mut world = world();
+        wearing(&mut world, EquipSlot::Head, MYSTERY);
+        let before = world.snapshot();
+        assert!(
+            world
+                .apply(mv(WORN, DropTarget::Reagents(ReagentKind::Component)))
+                .is_err(),
+            "a mystery record is not storable"
+        );
+        assert_eq!(world.snapshot(), before);
+    }
+
+    #[test]
+    fn worn_gear_is_a_source_and_never_a_stay() {
+        assert_eq!(
+            quick_move(WORN, Mode::Move, STASH1, None),
+            mv(WORN, DropTarget::Store)
+        );
+        assert!(!mv(WORN, DropTarget::Container(MAIN_BAG)).is_stay());
+        assert_eq!(fit_in_store(WORN, Mode::Move), Fit::Fits);
+        assert_eq!(fit_in_reagents(WORN, None), Fit::Blocked);
+        assert_eq!(WORN.doc(), Doc::Character(SIF));
+        let mut last = LastActive::default();
+        last.touch_source(WORN);
+        assert_eq!(
+            last,
+            LastActive::default(),
+            "a slot is never a right-click home"
+        );
+        let world = world();
+        let views = Views {
+            campaign: &Campaign::Main,
+            stash: &world.stash,
+            store: &world.store,
+            reagents: world.reagents.as_ref(),
+            characters: vec![world.player.as_ref().map(|file| (Realm::Main, file))],
+        };
+        assert_eq!(peek(&views, WORN), Err(ApplyError::SourceGone));
     }
 
     #[test]

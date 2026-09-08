@@ -17,7 +17,9 @@ use grimvault_core::blocks::skills::SkillsVersion;
 use grimvault_core::blocks::stats::StatsVersion;
 use grimvault_core::blocks::ui::UiVersion;
 use grimvault_core::crypto::{BlockId, Decoder, EncodeError, Encoder, KeyTable};
-use grimvault_core::gdc::{InventoryState, PlayerFile, Realm, Sex};
+use grimvault_core::gdc::{
+    EquipSlot, EquippedItem, Inventory, InventoryState, PlayerFile, Realm, Sex,
+};
 use grimvault_core::gst::GstFile;
 use grimvault_core::item::StashItem;
 
@@ -112,13 +114,28 @@ fn fixture_later_blocks_carry_their_contents() {
 /// nothing to edit.
 type Edit = fn(&mut PlayerFile) -> bool;
 
-const EDITS: [(&str, Edit); 5] = [
+const EDITS: [(&str, Edit); 6] = [
     ("change the iron bits", set_money),
     ("remove one sack item", remove_sack_item),
     ("add one sack item", add_sack_item),
     ("move one sack item to stash tab 0", move_sack_item_to_stash),
     ("duplicate one own-stash item", duplicate_stash_item),
+    ("take off one worn item", unequip_one_item),
 ];
+
+fn unequip_one_item(file: &mut PlayerFile) -> bool {
+    let Some(contents) = file.inventory_mut().and_then(Inventory::contents_mut) else {
+        return false;
+    };
+    let Some(worn) = EquipSlot::ALL
+        .into_iter()
+        .find(|slot| !contents.slot(*slot).item.is_empty())
+    else {
+        return false;
+    };
+    *contents.slot_mut(worn) = EquippedItem::empty();
+    true
+}
 
 fn set_money(file: &mut PlayerFile) -> bool {
     file.character_info_mut()

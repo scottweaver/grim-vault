@@ -1,15 +1,23 @@
 //! The character section: a picker over `main/*/player.gdc`, and the
-//! chosen character's sacks, equipped items, and personal stash. A
+//! chosen character's worn gear, sacks, and personal stash. A
 //! character whose every block is typed is editable — its sacks and
-//! stash tabs are drag sources and drop targets, its iron bits can be
+//! stash tabs are drag sources and drop targets, its worn gear can be
+//! taken off into the vault, a sack, or a stash tab (never equipped
+//! from here: the game's slot rules are its own), its iron bits can be
 //! set, and its attributes or masteries can be reset behind a
 //! confirmation — while one with an opaque block is shown read-only,
 //! since an edit before that block could never be re-keyed
-//! (ARCHITECTURE.md "Data flow"). Equipped items are shown but never
-//! moved.
+//! (ARCHITECTURE.md "Data flow").
 
-use egui::{Id, RichText, Ui, Vec2};
-use grimvault_core::gdc::{EquippedItem, InventoryState, PlayerFile};
+use egui::{
+    Align2, CornerRadius, FontId, Id, Rect, Response, RichText, Sense, Stroke, StrokeKind, Ui,
+    Vec2, pos2, vec2,
+};
+use grimvault_core::gamedata::Footprint;
+use grimvault_core::gdc::{
+    EquipSlot, EquippedItem, Inventory, InventoryContents, PlayerFile, WeaponSet,
+};
+use grimvault_core::item::Item;
 use grimvault_core::respec::Reset;
 use grimvault_core::settings::AutoMoveTab;
 use grimvault_core::transfer::{SackIndex, TabIndex};
@@ -19,11 +27,12 @@ use univault_ui::theme::Theme;
 use super::{
     Confirmation, DragFrame, GridEntry, GridSpec, Interaction, PaneCtx, PendingClear,
     READ_ONLY_WHY, bulk_buttons, clear_button, confirm_clear, container_tab, extent, grid_surface,
-    item_tooltip, order_toggles, sack_entries, stash_entries,
+    item_tooltip, order_toggles, paint_item, sack_entries, stash_entries,
 };
 use crate::documents::{Backup, CharacterDoc, CharacterEntry, CharacterSlot, Edits, Writable};
-use crate::drag::Container;
-use crate::theme::{FITS, UNKNOWN_RARITY, rarity_color};
+use crate::drag::{Container, DragSource, DragState};
+use crate::grid::{CELL_PX, cells, footprint_or_unit};
+use crate::theme::FITS;
 use grimvault_core::gdc::Realm;
 
 /// Which of the character's containers is showing.
@@ -77,24 +86,30 @@ impl CharacterView {
     }
 }
 
-/// Equipment slots in file order — GD Stash's order, checked against
-/// the classes of the items the user's characters wear.
-pub const EQUIPMENT_SLOTS: [&str; 12] = [
-    "Head",
-    "Amulet",
-    "Chest",
-    "Legs",
-    "Feet",
-    "Hands",
-    "Ring 1",
-    "Ring 2",
-    "Belt",
-    "Shoulders",
-    "Medal",
-    "Relic",
+/// The worn slots as the character sheet lays them out: armour across
+/// the top with the first weapon set at its end, accessories below
+/// with the second — two rows that fit the pane at its default height.
+const ARMOR_ROW: [EquipSlot; 6] = [
+    EquipSlot::Head,
+    EquipSlot::Shoulders,
+    EquipSlot::Chest,
+    EquipSlot::Hands,
+    EquipSlot::Legs,
+    EquipSlot::Feet,
 ];
-/// The two slots of each weapon set.
-pub const WEAPON_SLOTS: [&str; 2] = ["Main hand", "Off hand"];
+const ACCESSORY_ROW: [EquipSlot; 6] = [
+    EquipSlot::Amulet,
+    EquipSlot::Ring1,
+    EquipSlot::Ring2,
+    EquipSlot::Belt,
+    EquipSlot::Medal,
+    EquipSlot::Relic,
+];
+
+/// A gear slot's box: two cells wide and two and a half tall, the
+/// larger worn footprints scaled down to fit; the label sits under it.
+const SLOT_BOX: Vec2 = vec2(2.0 * CELL_PX, 2.5 * CELL_PX);
+const SLOT_LABEL: f32 = 16.0;
 
 /// The rendered size of a sack: the game's fixed size for that bag,
 /// grown to its contents rather than clipped.
@@ -230,6 +245,18 @@ fn body(
         .map_or(&[][..], |inventory| inventory.sacks());
     let stash_tabs = file.stash().map_or(&[][..], |stash| &stash.tabs[..]);
     ScrollStrip::new("character-tabs", StripInk::from_palette(cx.palette)).show(ui, |ui| {
+        let worn = file
+            .inventory()
+            .map_or(0, |inventory| inventory.equipped().count());
+        container_or_plain_tab(
+            ui,
+            view,
+            CharacterTab::Equipped,
+            format!("Equipped ({worn})"),
+            None,
+            cx,
+            frame,
+        );
         for (index, sack) in sacks.iter().enumerate() {
             let label = format!("Sack {} ({})", index + 1, sack.items.len());
             let container =
@@ -249,17 +276,6 @@ fn body(
                 cx,
                 frame,
             );
-        }
-        let worn = file
-            .inventory()
-            .map_or(0, |inventory| inventory.equipped().count());
-        let equipped = view.tab == CharacterTab::Equipped;
-        let response = ui.selectable_label(equipped, format!("Equipped ({worn})"));
-        if equipped {
-            scroll_strip::reveal_selected(ui, view.selection(), &response);
-        }
-        if response.clicked() {
-            view.tab = CharacterTab::Equipped;
         }
         for (index, stash_tab) in stash_tabs.iter().enumerate() {
             let label = format!("Stash {} ({})", index + 1, stash_tab.items.len());
@@ -332,7 +348,7 @@ fn show_container(
                     ui.weak("This character has never entered the game, so it has no inventory yet.");
                 }
             },
-            CharacterTab::Equipped => equipped(ui, file, cx),
+            CharacterTab::Equipped => gear(ui, slot, file, editable, cx, frame),
             CharacterTab::Stash(index) => match (stash_tabs.get(index), tab_index(index)) {
                 (Some(stash_tab), Some(tab_index)) => {
                     let container = editable.then_some(Container::CharacterStash {
@@ -562,51 +578,206 @@ fn header_line(file: &PlayerFile, cx: &PaneCtx<'_>) -> String {
     format!("{} · level {}{class}{hardcore}", header.name, header.level)
 }
 
-fn equipped(ui: &mut Ui, file: &PlayerFile, cx: &mut PaneCtx<'_>) {
-    let Some(inventory) = file.inventory() else {
-        ui.weak("No inventory block.");
+/// The worn gear as slot boxes: armour and the first weapon set on one
+/// row, accessories and the second on the next, the set in hand
+/// marked. Each occupied slot is a tile with the item's tooltip and, on
+/// an editable character, a drag source for taking the item off; no
+/// slot takes a drop.
+fn gear(
+    ui: &mut Ui,
+    character: CharacterSlot,
+    file: &PlayerFile,
+    editable: bool,
+    cx: &mut PaneCtx<'_>,
+    frame: &mut DragFrame,
+) {
+    let Some(contents) = file.inventory().and_then(Inventory::contents) else {
+        ui.weak("This character has never entered the game, so it wears nothing yet.");
         return;
     };
-    let InventoryState::Entered(contents) = &inventory.state else {
-        ui.weak("This character has never entered the game.");
-        return;
-    };
-    ui.weak("Equipped items are shown only; unequip in-game to move them.");
-    egui::Grid::new("equipped")
-        .num_columns(3)
-        .spacing([12.0, 4.0])
-        .show(ui, |ui| {
-            for (label, slot) in EQUIPMENT_SLOTS.iter().zip(&contents.equipment) {
-                equipped_row(ui, label, slot, cx);
+    if editable {
+        ui.weak(
+            "Drag or right-click worn gear to take it off into the vault, a sack, or a stash tab; \
+             equip in-game.",
+        );
+    } else {
+        ui.weak("Worn gear is shown only: this character is read-only.");
+    }
+    for (row, set) in [
+        (ARMOR_ROW, WeaponSet::First),
+        (ACCESSORY_ROW, WeaponSet::Second),
+    ] {
+        ui.horizontal_top(|ui| {
+            for slot in row {
+                slot_box(
+                    ui,
+                    character,
+                    slot,
+                    contents.slot(slot),
+                    editable,
+                    cx,
+                    frame,
+                );
             }
-            for (set, slots) in [(1, &contents.weapon_set_1), (2, &contents.weapon_set_2)] {
-                for (label, slot) in WEAPON_SLOTS.iter().zip(slots) {
-                    equipped_row(ui, &format!("Weapon set {set}: {label}"), slot, cx);
-                }
-            }
+            ui.add_space(SLOT_BOX.x / 2.0);
+            weapon_set(ui, character, set, contents, editable, cx, frame);
         });
+    }
 }
 
-fn equipped_row(ui: &mut Ui, label: &str, slot: &EquippedItem, cx: &mut PaneCtx<'_>) {
-    ui.label(RichText::new(label).color(cx.palette.text_weak));
-    if slot.item.is_empty() {
-        ui.weak("—");
-        ui.label("");
-    } else {
-        let facts = cx.facts.facts(cx.game, &slot.item);
-        let colour = facts.base.rarity.map_or(UNKNOWN_RARITY, rarity_color);
-        let name = facts.display_name();
-        let class = facts
-            .base
-            .class
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_default();
-        ui.label(RichText::new(name).color(colour))
-            .on_hover_ui(|ui| item_tooltip(ui, cx, &slot.item));
-        ui.label(RichText::new(class).small().color(cx.palette.text_weak));
+/// A weapon set's two hands with the set named under them.
+fn weapon_set(
+    ui: &mut Ui,
+    character: CharacterSlot,
+    set: WeaponSet,
+    contents: &InventoryContents,
+    editable: bool,
+    cx: &mut PaneCtx<'_>,
+    frame: &mut DragFrame,
+) {
+    ui.vertical(|ui| {
+        ui.horizontal(|ui| {
+            for slot in EquipSlot::hands(set) {
+                slot_box(
+                    ui,
+                    character,
+                    slot,
+                    contents.slot(slot),
+                    editable,
+                    cx,
+                    frame,
+                );
+            }
+        });
+        let caption = if contents.active_weapon_set() == set {
+            RichText::new(format!("Weapon set {} · in hand", set.number()))
+                .small()
+                .color(cx.palette.heading)
+        } else {
+            RichText::new(format!("Weapon set {}", set.number()))
+                .small()
+                .color(cx.palette.text_weak)
+        };
+        ui.label(caption);
+    });
+}
+
+/// One slot: its box and label, and — when something is worn there —
+/// the item's tile scaled to fit, its tooltip, and the gestures of a
+/// grid item when the character is editable.
+fn slot_box(
+    ui: &mut Ui,
+    character: CharacterSlot,
+    slot: EquipSlot,
+    worn: &EquippedItem,
+    editable: bool,
+    cx: &mut PaneCtx<'_>,
+    frame: &mut DragFrame,
+) {
+    let source =
+        (editable && !worn.item.is_empty()).then_some(DragSource::Equipped { character, slot });
+    let sense = match source {
+        Some(_) => Sense::click_and_drag(),
+        None => Sense::hover(),
+    };
+    let (rect, response) = ui.allocate_exact_size(SLOT_BOX + vec2(0.0, SLOT_LABEL), sense);
+    if !ui.is_rect_visible(rect) {
+        return;
     }
-    ui.end_row();
+    let box_rect = Rect::from_min_size(rect.min, SLOT_BOX);
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(box_rect, CornerRadius::same(2), cx.palette.grid_bg);
+    painter.rect_stroke(
+        box_rect,
+        CornerRadius::same(2),
+        Stroke::new(0.5, cx.palette.grid_line),
+        StrokeKind::Inside,
+    );
+    painter.text(
+        pos2(box_rect.center().x, box_rect.max.y + 2.0),
+        Align2::CENTER_TOP,
+        slot.label(),
+        FontId::proportional(11.0),
+        cx.palette.text_weak,
+    );
+    if worn.item.is_empty() {
+        return;
+    }
+    let (footprint, footprint_source) =
+        footprint_or_unit(cx.facts.base(cx.game, &worn.item).footprint);
+    let cell = (SLOT_BOX.x / cells(footprint.width.max(1)))
+        .min(SLOT_BOX.y / cells(footprint.height.max(1)))
+        .min(CELL_PX);
+    let size = vec2(
+        cells(footprint.width.max(1)),
+        cells(footprint.height.max(1)),
+    ) * cell;
+    let tile = Rect::from_center_size(box_rect.center(), size).shrink(1.0);
+    let dragging = cx.drag.is_some();
+    let lifted = source.is_some_and(|source| cx.drag.is_some_and(|drag| drag.source == source));
+    paint_item(
+        ui.ctx(),
+        &painter,
+        tile,
+        &worn.item,
+        footprint_source,
+        cell,
+        response.hovered() && !dragging,
+        lifted,
+        cx,
+    );
+    if !dragging {
+        egui::Tooltip::for_enabled(&response)
+            .at_pointer()
+            .show(|ui| item_tooltip(ui, cx, &worn.item));
+    }
+    if let Some(source) = source {
+        report_slot_gestures(
+            ui, &response, source, &worn.item, footprint, tile, cx, frame,
+        );
+    }
+}
+
+/// The gestures a grid item has, on a worn one: a drag lifts it, a
+/// double-click or right-click asks for the quick move, a click
+/// selects it for the inspector.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call surface inside the slot renderer; the arguments are the frame's borrows"
+)]
+fn report_slot_gestures(
+    ui: &Ui,
+    response: &Response,
+    source: DragSource,
+    item: &Item,
+    footprint: Footprint,
+    tile: Rect,
+    cx: &PaneCtx<'_>,
+    frame: &mut DragFrame,
+) {
+    if cx.drag.is_some() {
+        return;
+    }
+    if response.drag_started()
+        && frame.begin.is_none()
+        && let Some(origin) = ui.input(|input| input.pointer.press_origin())
+    {
+        frame.begin = Some(DragState {
+            source,
+            item: item.clone(),
+            footprint,
+            grab: origin - tile.min,
+        });
+    }
+    if response.double_clicked() {
+        frame.double_click = Some(source);
+    }
+    if response.secondary_clicked() {
+        frame.right_click = Some(source);
+    }
+    if response.clicked() {
+        frame.select = Some(source);
+    }
 }
 
 #[cfg(test)]

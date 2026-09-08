@@ -140,6 +140,7 @@ impl GdsEntry {
             ItemOrigin::TransferStash { .. }
             | ItemOrigin::Character { .. }
             | ItemOrigin::CharacterStash { .. }
+            | ItemOrigin::Equipped { .. }
             | ItemOrigin::ReagentStorage { .. }
             | ItemOrigin::Unknown => None,
         }

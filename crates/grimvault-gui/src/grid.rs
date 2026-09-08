@@ -162,6 +162,16 @@ pub enum FootprintSource {
     Assumed,
 }
 
+/// A cell count as a length, for sizing a footprint in points.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "footprints are a handful of cells"
+)]
+#[must_use]
+pub fn cells(n: i32) -> f32 {
+    n as f32
+}
+
 /// The footprint to paint with: the record's, or 1×1 when unknown so
 /// the item is still visible (and marked).
 #[must_use]

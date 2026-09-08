@@ -263,6 +263,22 @@ pub struct EquippedItem {
 }
 
 impl EquippedItem {
+    /// An empty slot as the game writes one it never filled: no item,
+    /// not attached, and a stack count of 1 — the shape of every empty
+    /// slot in the gdlc fixture and in five real characters
+    /// (2026-09-08). A slot the game itself emptied keeps stale fields
+    /// of its last occupant besides; this app writes the clean form.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            item: Item {
+                stack_count: 1,
+                ..Item::default()
+            },
+            attached: 0,
+        }
+    }
+
     fn read(dec: &mut Decoder<'_>, version: ContainerVersion) -> Result<Self, DecodeError> {
         let item = Item::read(dec, version)?;
         let attached = dec.read_u8()?;
@@ -273,6 +289,174 @@ impl EquippedItem {
         self.item.write(enc, version)?;
         enc.write_u8(self.attached);
         Ok(())
+    }
+}
+
+/// A character's two weapon sets; block 3's `useAlternate` byte says
+/// which is in hand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WeaponSet {
+    First,
+    Second,
+}
+
+impl WeaponSet {
+    /// Both sets, in file order.
+    pub const ALL: [Self; 2] = [Self::First, Self::Second];
+
+    /// The set's number as the game shows it.
+    #[must_use]
+    pub const fn number(self) -> u8 {
+        match self {
+            Self::First => 1,
+            Self::Second => 2,
+        }
+    }
+}
+
+impl fmt::Display for WeaponSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "weapon set {}", self.number())
+    }
+}
+
+/// One of a character's equipment slots: the twelve worn slots in
+/// block 3's order (GD Stash's order, checked against the classes of
+/// the items the user's characters wear), then each weapon set's two
+/// hands. Serializes by name, so a store origin naming a slot never
+/// depends on this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EquipSlot {
+    Head,
+    Amulet,
+    Chest,
+    Legs,
+    Feet,
+    Hands,
+    Ring1,
+    Ring2,
+    Belt,
+    Shoulders,
+    Medal,
+    Relic,
+    MainHand1,
+    OffHand1,
+    MainHand2,
+    OffHand2,
+}
+
+/// Where a slot sits in [`InventoryContents`].
+enum SlotPlace {
+    Worn(usize),
+    Hand(WeaponSet, usize),
+}
+
+impl EquipSlot {
+    /// Every slot, in file order.
+    pub const ALL: [Self; 16] = [
+        Self::Head,
+        Self::Amulet,
+        Self::Chest,
+        Self::Legs,
+        Self::Feet,
+        Self::Hands,
+        Self::Ring1,
+        Self::Ring2,
+        Self::Belt,
+        Self::Shoulders,
+        Self::Medal,
+        Self::Relic,
+        Self::MainHand1,
+        Self::OffHand1,
+        Self::MainHand2,
+        Self::OffHand2,
+    ];
+
+    /// The twelve worn slots, in file order.
+    pub const WORN: [Self; 12] = [
+        Self::Head,
+        Self::Amulet,
+        Self::Chest,
+        Self::Legs,
+        Self::Feet,
+        Self::Hands,
+        Self::Ring1,
+        Self::Ring2,
+        Self::Belt,
+        Self::Shoulders,
+        Self::Medal,
+        Self::Relic,
+    ];
+
+    /// A weapon set's main and off hand.
+    #[must_use]
+    pub const fn hands(set: WeaponSet) -> [Self; 2] {
+        match set {
+            WeaponSet::First => [Self::MainHand1, Self::OffHand1],
+            WeaponSet::Second => [Self::MainHand2, Self::OffHand2],
+        }
+    }
+
+    /// The slot's name as the game's character sheet labels it.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Head => "Head",
+            Self::Amulet => "Amulet",
+            Self::Chest => "Chest",
+            Self::Legs => "Legs",
+            Self::Feet => "Feet",
+            Self::Hands => "Hands",
+            Self::Ring1 => "Ring 1",
+            Self::Ring2 => "Ring 2",
+            Self::Belt => "Belt",
+            Self::Shoulders => "Shoulders",
+            Self::Medal => "Medal",
+            Self::Relic => "Relic",
+            Self::MainHand1 | Self::MainHand2 => "Main hand",
+            Self::OffHand1 | Self::OffHand2 => "Off hand",
+        }
+    }
+
+    /// The weapon set a hand slot belongs to; `None` for a worn slot.
+    #[must_use]
+    pub const fn weapon_set(self) -> Option<WeaponSet> {
+        match self.place() {
+            SlotPlace::Worn(_) => None,
+            SlotPlace::Hand(set, _) => Some(set),
+        }
+    }
+
+    const fn place(self) -> SlotPlace {
+        match self {
+            Self::Head => SlotPlace::Worn(0),
+            Self::Amulet => SlotPlace::Worn(1),
+            Self::Chest => SlotPlace::Worn(2),
+            Self::Legs => SlotPlace::Worn(3),
+            Self::Feet => SlotPlace::Worn(4),
+            Self::Hands => SlotPlace::Worn(5),
+            Self::Ring1 => SlotPlace::Worn(6),
+            Self::Ring2 => SlotPlace::Worn(7),
+            Self::Belt => SlotPlace::Worn(8),
+            Self::Shoulders => SlotPlace::Worn(9),
+            Self::Medal => SlotPlace::Worn(10),
+            Self::Relic => SlotPlace::Worn(11),
+            Self::MainHand1 => SlotPlace::Hand(WeaponSet::First, 0),
+            Self::OffHand1 => SlotPlace::Hand(WeaponSet::First, 1),
+            Self::MainHand2 => SlotPlace::Hand(WeaponSet::Second, 0),
+            Self::OffHand2 => SlotPlace::Hand(WeaponSet::Second, 1),
+        }
+    }
+}
+
+impl fmt::Display for EquipSlot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.weapon_set() {
+            None => f.write_str(self.label()),
+            Some(set) => write!(f, "{} ({set})", self.label()),
+        }
     }
 }
 
@@ -377,11 +561,47 @@ impl InventoryContents {
 
     /// Every occupied slot across equipment and both weapon sets.
     pub fn equipped(&self) -> impl Iterator<Item = &EquippedItem> {
-        self.equipment
-            .iter()
-            .chain(&self.weapon_set_1)
-            .chain(&self.weapon_set_2)
-            .filter(|slot| !slot.item.is_empty())
+        self.slots()
+            .map(|(_, worn)| worn)
+            .filter(|worn| !worn.item.is_empty())
+    }
+
+    /// Every slot with what it holds, in file order.
+    pub fn slots(&self) -> impl Iterator<Item = (EquipSlot, &EquippedItem)> {
+        EquipSlot::ALL
+            .into_iter()
+            .map(|slot| (slot, self.slot(slot)))
+    }
+
+    /// What `slot` holds — an empty slot for nothing.
+    #[must_use]
+    pub fn slot(&self, slot: EquipSlot) -> &EquippedItem {
+        match slot.place() {
+            SlotPlace::Worn(index) => &self.equipment[index],
+            SlotPlace::Hand(WeaponSet::First, index) => &self.weapon_set_1[index],
+            SlotPlace::Hand(WeaponSet::Second, index) => &self.weapon_set_2[index],
+        }
+    }
+
+    /// What `slot` holds, for editing.
+    pub fn slot_mut(&mut self, slot: EquipSlot) -> &mut EquippedItem {
+        match slot.place() {
+            SlotPlace::Worn(index) => &mut self.equipment[index],
+            SlotPlace::Hand(WeaponSet::First, index) => &mut self.weapon_set_1[index],
+            SlotPlace::Hand(WeaponSet::Second, index) => &mut self.weapon_set_2[index],
+        }
+    }
+
+    /// The weapon set in the character's hands: `useAlternate` zero is
+    /// the first set (every real file read so far), anything else the
+    /// second.
+    #[must_use]
+    pub const fn active_weapon_set(&self) -> WeaponSet {
+        if self.use_alternate == 0 {
+            WeaponSet::First
+        } else {
+            WeaponSet::Second
+        }
     }
 }
 
@@ -460,12 +680,27 @@ impl Inventory {
 
     /// Every occupied equipment slot.
     pub fn equipped(&self) -> impl Iterator<Item = &EquippedItem> {
+        self.contents()
+            .into_iter()
+            .flat_map(InventoryContents::equipped)
+    }
+
+    /// The sacks and equipment; `None` for a character that never
+    /// entered the game and so has neither.
+    #[must_use]
+    pub fn contents(&self) -> Option<&InventoryContents> {
         match &self.state {
             InventoryState::NeverEntered => None,
-            InventoryState::Entered(contents) => Some(contents.equipped()),
+            InventoryState::Entered(contents) => Some(contents),
         }
-        .into_iter()
-        .flatten()
+    }
+
+    /// The sacks and equipment, for editing; `None` as [`Self::contents`].
+    pub fn contents_mut(&mut self) -> Option<&mut InventoryContents> {
+        match &mut self.state {
+            InventoryState::NeverEntered => None,
+            InventoryState::Entered(contents) => Some(contents),
+        }
     }
 }
 
@@ -1003,6 +1238,81 @@ mod tests {
         assert_eq!(parsed.inventory().unwrap().equipped().count(), 1);
         assert_eq!(parsed.stash().unwrap().tabs.len(), 1);
         assert_eq!(parsed.character_info().unwrap().money, 1234);
+    }
+
+    #[test]
+    fn every_slot_names_one_place_in_the_inventory() {
+        let mut file = sample();
+        let contents = file.inventory_mut().unwrap().contents_mut().unwrap();
+        for (index, slot) in EquipSlot::ALL.into_iter().enumerate() {
+            contents.slot_mut(slot).item = item(&format!("records/items/{index}.dbr"));
+        }
+        assert_eq!(
+            contents
+                .equipment
+                .iter()
+                .map(|worn| worn.item.base_name.as_str())
+                .collect::<Vec<_>>(),
+            (0..12)
+                .map(|index| format!("records/items/{index}.dbr"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            contents.weapon_set_1[0].item.base_name,
+            "records/items/12.dbr"
+        );
+        assert_eq!(
+            contents.weapon_set_1[1].item.base_name,
+            "records/items/13.dbr"
+        );
+        assert_eq!(
+            contents.weapon_set_2[0].item.base_name,
+            "records/items/14.dbr"
+        );
+        assert_eq!(
+            contents.weapon_set_2[1].item.base_name,
+            "records/items/15.dbr"
+        );
+        assert_eq!(contents.equipped().count(), 16);
+        assert_eq!(
+            contents.slots().map(|(slot, _)| slot).collect::<Vec<_>>(),
+            EquipSlot::ALL
+        );
+        assert_eq!(
+            EquipSlot::hands(WeaponSet::Second),
+            [EquipSlot::MainHand2, EquipSlot::OffHand2]
+        );
+        assert_eq!(EquipSlot::Belt.weapon_set(), None);
+        assert_eq!(EquipSlot::OffHand1.weapon_set(), Some(WeaponSet::First));
+        assert_eq!(EquipSlot::OffHand1.to_string(), "Off hand (weapon set 1)");
+        assert_eq!(EquipSlot::Ring2.to_string(), "Ring 2");
+        assert_eq!(contents.active_weapon_set(), WeaponSet::First);
+        contents.use_alternate = 1;
+        assert_eq!(contents.active_weapon_set(), WeaponSet::Second);
+    }
+
+    #[test]
+    fn an_emptied_slot_round_trips_as_the_games_empty_slot() {
+        let mut file = sample();
+        let contents = file.inventory_mut().unwrap().contents_mut().unwrap();
+        assert!(!contents.slot(EquipSlot::Head).item.is_empty());
+        *contents.slot_mut(EquipSlot::Head) = EquippedItem::empty();
+        assert!(contents.slot(EquipSlot::Head).item.is_empty());
+        assert_eq!(contents.slot(EquipSlot::Head).item.stack_count, 1);
+        assert_eq!(contents.slot(EquipSlot::Head).attached, 0);
+        assert_eq!(contents.equipped().count(), 0);
+        let bytes = file.encode().unwrap();
+        let parsed = PlayerFile::parse(&bytes).unwrap();
+        assert_eq!(parsed, file);
+        assert_eq!(
+            parsed
+                .inventory()
+                .unwrap()
+                .contents()
+                .unwrap()
+                .slot(EquipSlot::Head),
+            &EquippedItem::empty()
+        );
     }
 
     #[test]

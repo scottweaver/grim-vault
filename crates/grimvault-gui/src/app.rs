@@ -1465,6 +1465,10 @@ impl World {
                 |stored| format!("vault store, stored item {id} — from {}", stored.origin()),
             ),
             DragSource::Reagent { .. } => Doc::Reagents.to_string(),
+            DragSource::Equipped { character, slot } => format!(
+                "{}, equipped: {slot}",
+                self.doc_label(Doc::Character(character))
+            ),
         }
     }
 
@@ -1686,7 +1690,9 @@ impl World {
                     ),
                     (DropTarget::Reagents(_), Fit::Blocked | Fit::Unresolvable) => {
                         match state.source {
-                            DragSource::Grid { .. } | DragSource::Store(_) => toasts.info(
+                            DragSource::Grid { .. }
+                            | DragSource::Store(_)
+                            | DragSource::Equipped { .. } => toasts.info(
                                 "only components and crafting materials go in the storage; snapped back",
                             ),
                             DragSource::Reagent { .. } => {}
@@ -1904,7 +1910,9 @@ impl World {
                 let item = self.store.store().get(id)?.item();
                 self.facts.base(&self.game, item).reagent
             }
-            DragSource::Grid { .. } | DragSource::Reagent { .. } => None,
+            DragSource::Grid { .. } | DragSource::Reagent { .. } | DragSource::Equipped { .. } => {
+                None
+            }
         }
     }
 
