@@ -5,32 +5,38 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-08 (after FEATURES.md 32, the affix reference
-card, landed on `main` at `cd4ed5b` and was pushed; 520 tests; item 33,
-the gear tab, in flight on `feat/equipment-tiles` by a fork agent in a
-worktree; `fix/icons-outside-items-arc` found unlanded)
+Last updated: 2026-09-08 (after FEATURES.md 32 and 33 landed on `main` —
+the affix reference card at `cd4ed5b`, the gear tiles at `9802232` — both
+pushed; 529 tests; `fix/icons-outside-items-arc` still unlanded)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
-**Resume here:** `main` at `cd4ed5b` (pushed, `origin/main` in sync)
-holds everything landed — every FEATURES.md item through 32 (there is
-no item 17) — 520 tests, clippy pedantic clean, fmt clean, headless
+**Resume here:** `main` at `9802232` plus this refresh (pushed,
+`origin/main` in sync) holds everything landed — every FEATURES.md
+item through 33 (there is no item 17) — 529 tests, clippy pedantic clean, fmt clean, headless
 `--check` clean from the release build on the real install with a
-scratch copy of the saves. **Two things are in flight (2026-09-08):**
-(1) FEATURES.md 33, the gear tab, is being built by a fork agent on
-`feat/equipment-tiles` in its own worktree from the user's decision
-"gear tiles, first in the strip, unequip by drag" — every slot as an
-item tile with tooltip and inspector, gear dragged or right-clicked
+scratch copy of the saves. **Landed 2026-09-08, both tracks:** the affix card (32, built in the
+main checkout) and the gear tab (33, `feat/equipment-tiles`, built by
+a fork agent in its own worktree from the user's decision "gear tiles,
+first in the strip, unequip by drag": every slot an item tile with
+tooltip and inspector, gear dragged, right-clicked or double-clicked
 *off* the character into the vault, a sack or a stash tab through the
-one `drag::Move` path, the slot left as the game's own empty slot;
-equipping by drop deferred (needs the `ItemSlots` rule). The agent
-commits on its branch and never lands: the integrator asks it to
-rebase onto `main`, runs the gates, fast-forwards, pushes, tags
-FEATURES.md 33. (2) `fix/icons-outside-items-arc` (`04e9914`, one
-commit: read item icons from the archive their path names) was found
-checked out and unlanded at the start of 2026-09-08 — absent from this
-file before — one commit ahead of the 2026-09-07 `main`; it needs a
-rebase and the user's call to land. **Why 32–33:** the user asked in
+one `drag::Move` path — `DragSource::Equipped` is a source only, no
+`DropTarget` can name a slot, so equipping stays unrepresentable —
+the slot left as the game leaves a never-used one: `attached 0`,
+empty base name, `stackCount 1`, everything else blank, probed on all
+five real characters; `ItemOrigin::Equipped { realm, name, slot }`;
+`vault_from_equipment`; the agent rebased onto the moved `main`
+itself and the integrator re-ran the gates in its worktree before the
+fast-forward). **One thing is open:** `fix/icons-outside-items-arc`
+(`04e9914`, one commit: read item icons from the archive their path
+names) was found checked out and unlanded at the start of 2026-09-08
+— absent from this file before — one commit on the 2026-09-07 `main`;
+it needs a rebase and the user's call to land (Lokarr's set items on
+Zark still show initials, its territory). The agent worktree
+`.claude/worktrees/agent-aaed563a4259e1782` still has
+`feat/equipment-tiles` checked out with its build cache; removing it
+and the two landed feature branches is the user's call. **Why 32–33:** the user asked in
 chat for reference cards (first: a searchable list of the "proper"
 affix names with what each grants — design dialog: floating card
 windows, one row per name with value ranges, expandable to the
@@ -76,11 +82,11 @@ four standing orders.
   far is in `docs/format-references.md` "GD Stash (eyes-only)
   findings".
 - **The user's feature queue is `FEATURES.md`** in the repo root
-  (untracked, user-authored, growing): items 1–32 are landed on
+  (untracked, user-authored, growing): items 1–33 are landed on
   `main` (there is no item 17) and each line carries a
   `[landed <date>: <rule>]` tag (20–24 tagged 2026-09-07 following
   the pass the user agreed to for 1–19; 25–33 were *written* by the
-  agent from chat requests, marked "asked in chat"); 33 is in flight.
+  agent from chat requests, marked "asked in chat").
   They announce additions with "new items in FEATURES.md" / "new
   features are ready for review", and nothing is read until then.
   Items are executed on the fly, in parallel where independent — one
@@ -144,8 +150,9 @@ four standing orders.
   `BulkDuplicates::Skip` rather than reading the setting; a
   hand-edited settings file listing one tab twice runs its order
   twice (the UI dedups); the scroll strip is not in the `dev`
-  preview harness; single-mastery characters show the raw class tag;
-  equipped items are display-only; a copy keeps the original's seed;
+  preview harness; single-mastery characters show the raw class tag; worn gear comes
+  off but nothing can be equipped from the app (no slot rule yet); a
+  copy keeps the original's seed;
   double-click still targets the stash tab showing while right-click
   targets the last-touched game grid; the search view has no
   expansion-origin filter; `vault_cli` prints refusals in Debug form;
@@ -161,8 +168,10 @@ four standing orders.
   table's gestures, and — new today — the Delete-all confirmation
   modal, a Move all / Copy all click, the store's duplicates
   checkbox, and hover-scrolling or wheel-scrolling the tab strip, and — new
-  2026-09-08 — the affix card's row click, position toggles and
-  rarity combo are covered by unit tests, headless CLI / `--check` runs, and (for the
+  2026-09-08 — the affix card's row click, position toggles and rarity combo, and
+  the gear tiles' drag, right-click and double-click are covered by
+  unit tests (the tiles, both weapon sets and the "in hand" caption
+  were seen rendering in the agent's captures), headless CLI / `--check` runs, and (for the
   purge) one live debug-GUI run against scratch files only; the new
   tab order, the right chevron with a clipped tab behind it, the
   header buttons, and the checkbox were seen rendering in captures.
@@ -214,22 +223,24 @@ Consumables, Other — and the learned-blueprint sync as a fourth
 standing order, recording knowledge in the store's `blueprints` list;
 and — landed 2026-09-08 — the affix reference card behind a Reference
 menu in the status bar, `grimvault-core::reference` building one
-entry per named prefix and suffix with value ranges across its tiers)
-— 520 tests, clippy pedantic clean. Verified on
+entry per named prefix and suffix with value ranges across its tiers,
+and the gear tab as tiles first in the character strip with worn gear
+taken off by drag, right-click or double-click) — 529 tests, clippy
+pedantic clean. Verified on
 scratch copies of the user's install and saves. **Not yet verified:
 the game reading any file this app wrote** — the next step is the
 user's acceptance run on the real install with the game closed, and
 now the Linux build on Bazzite sharing the NAS vault. The user's
-`FEATURES.md` is landed through item 32. grim-vault is the Grim Dawn
+`FEATURES.md` is landed through item 33. grim-vault is the Grim Dawn
 sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
 
 ## Branches in flight
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at `cd4ed5b` (FEATURES.md 32) plus this refresh — every item through 32; 520 tests green; pushed, `origin/main` in sync |
+| `main` | trunk | at `9802232` (FEATURES.md 33) plus this refresh — every item through 33; 529 tests green; pushed, `origin/main` in sync |
 | `feat/reference-cards` | FEATURES.md 32, the affix card | landed by fast-forward 2026-09-08; deletable (`git branch -d`) — the user confirms deletions |
-| `feat/equipment-tiles` | FEATURES.md 33, the gear tab as tiles with unequip-by-drag | in flight 2026-09-08 — a fork agent in its own worktree, branched from `main` at `6e1f48d` or later; commits, never lands |
+| `feat/equipment-tiles` | FEATURES.md 33, the gear tab as tiles with unequip-by-drag | landed by fast-forward 2026-09-08; still checked out in the agent worktree `.claude/worktrees/agent-aaed563a4259e1782` — remove the worktree, then `git branch -d`, on the user's word |
 | `fix/icons-outside-items-arc` | read item icons from the archive their path names (`04e9914`) | unlanded, found 2026-09-08; one commit on the 2026-09-07 `main`; needs a rebase and the user's call |
 
 ## Next up
@@ -286,7 +297,7 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    affix card on that name. The partial grants of a multi-form affix
    could group by form once a witness for the form exists (the loot
    tables, not the file name).
-2. **FEATURES.md 33 (in flight) and 34 onward** as the user announces them — one fork
+2. **FEATURES.md 34 onward** as the user announces them — one fork
    agent per independent item in its own worktree, branch from
    `main`, decisions fixed in the brief, the eyes-only GD Stash rule,
    no bare `git stash`, no STATE.md edits by agents; the integrator
@@ -296,7 +307,9 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    2026-09-07 to keep three parallel tracks from colliding).
 4. **Stash file family:** decide how the `.dst` / `.gsh` twins are
    shown (further campaigns? a mode selector?) — design dialog first.
-5. **Follow-ups:** equipment slots as drag ends; level / XP edits need
+5. **Follow-ups:** equipping by drop onto a gear tile (the `ItemSlots`
+   rule per record class in `docs/format-references.md`, two-handers
+   clearing the off hand, the active-set rule); level / XP edits need
    an evaluator for `experienceLevelEquation` (its text is in
    `docs/format-references.md`); a fresh seed on copy; drop-to-socket
    through `drag::Move`; unify the double-click and right-click
@@ -320,6 +333,30 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    Stash does not read it either).
 
 ## Most recent meaningful progress
+
+- **2026-09-08 (later) — FEATURES.md 33 landed on `main` (fast-forward
+  to `9802232`, a fork agent in its own worktree).** The user said the
+  app was missing a tab with the gear a character has equipped; the
+  Equipped tab existed since M3 as a text list between the sacks and
+  the stash tabs, and the dialog settled "gear tiles, first in the
+  strip, unequip by drag". Core: `gdc::EquipSlot` (the twelve worn
+  slots in block 3's order plus both weapon sets' hands, serde by
+  name), `InventoryContents::{slot, slot_mut, slots,
+  active_weapon_set}`, `EquippedItem::empty()` in the game's own
+  never-used shape, `transfer::vault_from_equipment`,
+  `ItemOrigin::Equipped { realm, name, slot }`. GUI:
+  `DragSource::Equipped` as a source only through the one `drag::Move`
+  path (autosave, backup-first and the guard unchanged), the tab first
+  in the strip drawing two rows — armour + weapon set 1, accessories +
+  weapon set 2, the set in hand captioned — each slot a tile with
+  tooltip, inspector (socket edits on worn gear work) and the grid
+  gestures; `check.rs` names slots. 529 tests; the take-off edit is in
+  the lossless round-trip gate and ran over the five real characters.
+  Why: a vault manager that cannot reach worn gear misses half the
+  loot. Risk: whether the game accepts a slot emptied in the clean
+  form is unverified in-game (it is the shape of every never-used
+  slot in real files); a two-hander's ghost off hand is left as is;
+  equipping by drop is not built.
 
 - **2026-09-08 — FEATURES.md 32 landed on `main` (fast-forward to
   `cd4ed5b`, one track in the main checkout).** The user asked in chat
@@ -531,17 +568,6 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   keeps the codebase clean, and every fact still needs its real-file
   check before code depends on it.
 
-- **2026-09-06 — Landed on `main` (local fast-forward to `a224d9c`).**
-  `feat/character-editing` (M4) and `feat/mod-characters` (M5 mod
-  characters, mod + gdx3 game-data layers, campaign selector) merged
-  linearly and were deleted; no PR, no remote, `tracker: none`. Why:
-  the user chose to land before the in-game acceptance run so the
-  parallel tracks in Next up share one base. Risk: `main` now writes
-  `player.gdc` in both realms and `transfer.gst` / `reagents.gst` in
-  any campaign folder, none of which the game has read yet — the
-  acceptance run (next-up item 1) is the gate before trusting it on
-  real saves beyond the automatic backups.
-
 
 ## Blocked / waiting
 
@@ -564,10 +590,15 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   storage — nine records in the real store; folding across the
   modifier is a one-line change to `StackKey::of` if the user says
   those are one item; (8) *resolved by the user the same hour:* the blueprint sync records knowledge (the store's `blueprints` list),
-  never items; rehydration into the game is next-up 1c; (9) *new
-  2026-09-08:* whether to land `fix/icons-outside-items-arc` (rebase
-  onto `main` first) and whether to delete the landed
-  `feat/reference-cards`.
+  never items; rehydration into the game is next-up 1c; (9) *new 2026-09-08:* whether to land `fix/icons-outside-items-arc`
+  (rebase onto `main` first), whether to delete the landed
+  `feat/reference-cards` and `feat/equipment-tiles`, and whether to
+  remove the agent worktree that holds the latter; (10) *new
+  2026-09-08:* a two-hander taken off leaves the game's ghost of it in
+  the off-hand slot (base name blank, other fields as the weapon
+  left them) — the game reads emptiness from the base name alone, so
+  it was left as the game leaves it; clearing it fully is a one-line
+  change if the user prefers.
 - **Waiting on the user — the acceptance run** (next-up item 1) is
   under way in the relaunched build as of this checkpoint; its
   results are what make `main` trustworthy on real saves, and this
