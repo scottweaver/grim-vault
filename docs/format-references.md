@@ -495,7 +495,26 @@ below was read from the real database.
   record across the four shipped databases and two mods — 10,007
   records with a bitmap, all in the `Armor*`, `Weapon*`, `Item*`,
   `OneShot_*`, and `QuestItem` tables): 26 bitmaps lie outside
-  `Items.arc`. The 20 `gdx2` potion formulas (`OneShot_SkillUnlock`,
+  `Items.arc`. **Two more icon variables** (2026-09-09, the survey
+  re-run over 10,644 item-class records after "stored item …
+  (`records/storyelements/questitems/cultistdirections.dbr`) has no
+  known footprint"): `ItemNote` (317 records — quest notes such as
+  Direni's Directions, and the lore objects) carries only
+  `noteBitmap`, which `itemnote.tpl` describes as the bitmap "to
+  show in the UI" and which is the 32 × 32 inventory icon
+  (`items/misc/parchment01.tex`, one cell; the note's reading pane
+  is `noteWidth` pixels wide and drawn from elsewhere); and
+  `ItemTransmuterSet` (28 — the loyalist-pack and Crucible illusion
+  sets) carries only `fullBitmap` (64 × 64, 2 × 2). `ItemTransmuter`
+  (85) has both `emptyBitmap` (the empty scroll) and `fullBitmap`
+  (the item's own art), the same size. GD Stash's icon lookup
+  (eyes-only) reads exactly `bitmap`, `artifactBitmap`,
+  `artifactFormulaBitmapName`, `noteBitmap`, `relicBitmap`,
+  `emptyBitmap`, `fullBitmap`; GD Item Assistant (MIT) the same set
+  plus `shardBitmap`, which only `ItemRelic` records carry beside
+  their `relicBitmap`. The remaining item-class records without any
+  of the seven are enemy and NPC gear, weapon FX, and the blacksmith's
+  ascension / reroll / set formulas — none a character can hold. The 20 `gdx2` potion formulas (`OneShot_SkillUnlock`,
   `records/items/crafting/blueprints/potions/potions_modifier_a3*.dbr`)
   point at `ui/cauldron/*.tex` in `UI.arc`; **Lokarr's set** is
   hidden as `records/storyelements/signs/sign{f,h,s,t}.dbr` (boots,

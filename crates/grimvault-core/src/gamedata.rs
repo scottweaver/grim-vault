@@ -20,7 +20,8 @@
 //! (`ItemRelic`, whose `shardBitmap` is the partial piece older game
 //! versions dropped), `artifactBitmap` for relics,
 //! `artifactFormulaBitmapName` for blueprints, `emptyBitmap` for
-//! transmuters (see [`BITMAP_VARIABLES`]). `soulbound` marks gear the
+//! transmuters, `noteBitmap` for notes, `fullBitmap` for illusion
+//! sets (see [`BITMAP_VARIABLES`]). `soulbound` marks gear the
 //! game binds to its owner (faction-vendor items), and
 //! `records/game/gameiteminfo.dbr` names the inventory-tile symbols
 //! ([`GameData::symbol_bitmaps`]) that live in `UI.arc` — an archive
@@ -248,13 +249,21 @@ const GAME_ITEM_INFO: &str = "records/game/gameiteminfo.dbr";
 /// order: gear and crafting materials use `bitmap`, components
 /// (`ItemRelic`) `relicBitmap`, relics (`ItemArtifact`)
 /// `artifactBitmap`, blueprints (`ItemArtifactFormula`)
-/// `artifactFormulaBitmapName`, transmuters `emptyBitmap`.
-pub const BITMAP_VARIABLES: [&str; 5] = [
+/// `artifactFormulaBitmapName`, transmuters (`ItemTransmuter`)
+/// `emptyBitmap`, notes (`ItemNote`: quest notes and lore objects)
+/// `noteBitmap` — the template calls it the bitmap "to show in the
+/// UI", and it is the 32 × 32 inventory icon, not the parchment
+/// the note is read on — and illusion sets (`ItemTransmuterSet`,
+/// which carry no `emptyBitmap`) `fullBitmap`. GD Stash and GD Item
+/// Assistant read the same seven (`docs/format-references.md`).
+pub const BITMAP_VARIABLES: [&str; 7] = [
     "bitmap",
     "relicBitmap",
     "artifactBitmap",
     "artifactFormulaBitmapName",
     "emptyBitmap",
+    "noteBitmap",
+    "fullBitmap",
 ];
 
 /// The table classes whose records are items a character can hold,
@@ -1141,10 +1150,109 @@ mod tests {
     }
 
     #[test]
-    fn bitmap_lookup_order_starts_with_gear_and_ends_with_transmuters() {
+    fn bitmap_lookup_order_starts_with_gear_and_ends_with_illusion_sets() {
         assert_eq!(BITMAP_VARIABLES.first(), Some(&"bitmap"));
         assert!(BITMAP_VARIABLES.contains(&"relicBitmap"));
-        assert_eq!(BITMAP_VARIABLES.last(), Some(&"emptyBitmap"));
+        let empty = BITMAP_VARIABLES
+            .iter()
+            .position(|variable| *variable == "emptyBitmap");
+        let full = BITMAP_VARIABLES
+            .iter()
+            .position(|variable| *variable == "fullBitmap");
+        assert!(empty < full, "a transmuter keeps its empty scroll");
+        assert_eq!(BITMAP_VARIABLES.last(), Some(&"fullBitmap"));
+    }
+
+    #[test]
+    fn notes_and_illusion_sets_have_icons_and_footprints() {
+        use univault_engine::arc::fixture::ArcBuilder;
+        use univault_engine::arz::ArzDialect;
+        use univault_engine::arz::fixture::{ArzBuilder, Values};
+        use univault_engine::codec::Codec;
+        use univault_engine::tex::fixture::tex;
+
+        let mut builder = ArzBuilder::new(ArzDialect::grim_dawn());
+        builder.record(
+            "records/storyelements/questitems/cultistdirections.dbr",
+            "ItemNote",
+            &[
+                (
+                    "noteBitmap",
+                    Values::Strings(&["items/misc/parchment01.tex"]),
+                ),
+                ("noteWidth", Values::Ints(&[400])),
+            ],
+        );
+        builder.record(
+            "records/items/transmutes/transmute_powderedwig.dbr",
+            "ItemTransmuterSet",
+            &[(
+                "fullBitmap",
+                Values::Strings(&["items/transmutes/transmute_powderedwig.tex"]),
+            )],
+        );
+        builder.record(
+            "records/items/transmutes/knight/transmute_silverknight_shoulders.dbr",
+            "ItemTransmuter",
+            &[
+                (
+                    "emptyBitmap",
+                    Values::Strings(&["items/transmutes/transmute_empty02.tex"]),
+                ),
+                (
+                    "fullBitmap",
+                    Values::Strings(&[
+                        "items/transmutes/knight/transmute_silverknight_shoulders.tex",
+                    ]),
+                ),
+            ],
+        );
+        let database = ArzFile::parse(builder.build(), ArzDialect::grim_dawn()).unwrap();
+        let mut items = ArcBuilder::new(Codec::Lz4Block);
+        items.stored("misc/parchment01.tex", &tex(32, 32));
+        items.stored("transmutes/transmute_powderedwig.tex", &tex(64, 64));
+        items.stored("transmutes/transmute_empty02.tex", &tex(64, 64));
+        items.stored(
+            "transmutes/knight/transmute_silverknight_shoulders.tex",
+            &tex(64, 64),
+        );
+        let items = ArcFile::parse(items.build(), Codec::Lz4Block).unwrap();
+        let game = GameData::from_parts(vec![database], TextDb::new(), vec![items]);
+        let icon = |id: &str| {
+            let info = game
+                .item_info(&RecordId::parse(id.to_string()).unwrap())
+                .unwrap()
+                .unwrap();
+            let bitmap = info.bitmap.expect("an icon");
+            let footprint = game.footprint(&bitmap).unwrap().unwrap();
+            (bitmap.as_str().to_string(), footprint)
+        };
+
+        assert_eq!(
+            icon("records/storyelements/questitems/cultistdirections.dbr"),
+            (
+                "items/misc/parchment01.tex".to_string(),
+                Footprint {
+                    width: 1,
+                    height: 1
+                }
+            )
+        );
+        assert_eq!(
+            icon("records/items/transmutes/transmute_powderedwig.dbr"),
+            (
+                "items/transmutes/transmute_powderedwig.tex".to_string(),
+                Footprint {
+                    width: 2,
+                    height: 2
+                }
+            )
+        );
+        assert_eq!(
+            icon("records/items/transmutes/knight/transmute_silverknight_shoulders.dbr").0,
+            "items/transmutes/transmute_empty02.tex"
+        );
+        assert!(game.foreign_bitmaps().is_empty());
     }
 
     #[test]
