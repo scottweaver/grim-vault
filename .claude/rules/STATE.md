@@ -5,17 +5,32 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-08 evening (after the foreign-icon fix landed on
-`main` at `183dc22` — nothing left unlanded; all pushed; 534 tests)
+Last updated: 2026-09-09 evening (after the note-icon fix landed on
+`main` at `cdaee15` — nothing left unlanded; all pushed; 537 tests)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
-**Resume here:** `main` at `183dc22` plus this refresh (pushed,
+**Resume here:** `main` at `cdaee15` plus this refresh (pushed,
 `origin/main` in sync) holds everything landed — every FEATURES.md
-item through 33 (there is no item 17), the lost-component fix and
-the foreign-icon fix below — 534 tests, clippy pedantic clean, fmt
-clean, headless `--check` clean from the release build on the real
-install with a scratch copy of the saves. **Landed 2026-09-08
+item through 33 (there is no item 17), the lost-component fix, the
+foreign-icon fix and the note-icon fix below — 537 tests, clippy
+pedantic clean, fmt clean, headless `--check` clean from the release
+build on the real install with a scratch copy of the saves and store.
+**Landed 2026-09-09 evening (`cdaee15`, `fix/note-icons`, branch
+kept for the user to delete):** the user hit "stored item #1
+(`records/storyelements/questitems/cultistdirections.dbr`) has no
+known footprint" placing Direni's Directions from the vault. An
+`ItemNote` carries no `bitmap`, only `noteBitmap` — the template's
+"bitmap to show in the UI", which is the 32 × 32 inventory icon —
+and an `ItemTransmuterSet` (the illusion sets) only `fullBitmap`;
+neither was in `BITMAP_VARIABLES`, so 345 holdable records had no
+footprint (Syf's sack 0 holds the note at (0,2); the store's lore
+note "Excerpt from the Annals of Arkovia" is another). Both
+variables added after `emptyBitmap`, survey and the two references'
+lists recorded in `docs/format-references.md`; `--check` on the real
+install shows the lore note at 1x1 and no item without a footprint.
+`target/release/grimvault-gui` is built from `cdaee15` (2026-09-09
+18:56); the user has to relaunch it. **Landed 2026-09-08
 evening (`183dc22`, `fix/icons-outside-items-arc`, branch deleted by the wrap-up):** the user hit
 "item 21 (records/storyelements/signs/signh.dbr) has no known
 footprint" a second time, copying a relic from the vault into
@@ -29,8 +44,7 @@ user's binary. Rebased onto `main` (one conflict in
 `gui/src/loader.rs`, both sides kept — the icon step runs before the
 affix build), 534 tests, clippy and fmt clean, `--check` on the real
 install: 26 of 26 icons outside `Items.arc` found, Lokarr's Gaze
-listed at 2x2 in tab 0, no problems. `target/release/grimvault-gui`
-is built from `183dc22` (18:28); the user has to relaunch it.
+listed at 2x2 in tab 0, no problems.
 **Bug fixed 2026-09-08 (`42291a0`, `fix/linked-conflicts`, reported by
 the user in chat):** a Black Tallow applied from the vault to a worn
 medal was lost — the game file changed on disk, "Reload from disk"
@@ -94,8 +108,8 @@ standing-orders paragraph. **Worktree agents share one `git stash`
 list** — brief them never to bare-stash. The user runs
 `target/release/grimvault-gui` and rebuilds with `cargo run --release
 -p grimvault-gui`; `target/release/grimvault-gui` is built from
-`183dc22` (2026-09-08 18:28), the release `grimvault-core` examples
-still from `cd4ed5b`. The
+`cdaee15` (2026-09-09 18:56), the release `grimvault-core` examples
+from `cdaee15`'s tree too (the smoke run). The
 real `settings.json` nominates LootAscension stash tabs 1–6 for both
 auto-move and purge under `bulkDuplicates: skip`, with the reagent
 and blueprint syncs on — every launch on the real files runs all
@@ -190,7 +204,12 @@ four standing orders.
   superseded by the next commit; the affix card lists an entry's
   partial grants in first-seen order rather than grouped by item form
   (Thunderstruck's armor, shield and weapon lines interleave — the
-  unfolded records tell them apart).
+  unfolded records tell them apart); an `ItemTransmuter` (single
+  illusion) is drawn with its `emptyBitmap` scroll where GD Stash
+  shows the item's own `fullBitmap` art (same 2x2 size — a lookup
+  order swap if the user prefers the art); a record dump / icon
+  survey CLI would have paid for itself three times now (Lokarr's
+  set twice, the notes) — none is checked in.
 - **Unverified in the window:** drag-and-drop, autosave, the copy
   modifier, the iron-bits field, the Reload/Keep-mine modal, the
   realm-labelled picker, the campaign switch, right-click moves, the
@@ -258,8 +277,10 @@ and the gear tab as tiles first in the character strip with worn gear
 taken off by drag, right-click or double-click; and — landed
 2026-09-08 evening — item icons read by entry from the archive their
 bitmap path names, so Lokarr's set, the `gdx2` potion formulas and
-Iron Bits have footprints and a tab holding one accepts placements)
-— 534 tests, clippy pedantic clean. Verified on
+Iron Bits have footprints and a tab holding one accepts placements;
+and — landed 2026-09-09 — notes and illusion sets have icons and
+footprints through `noteBitmap` and `fullBitmap`)
+— 537 tests, clippy pedantic clean. Verified on
 scratch copies of the user's install and saves. **Not yet verified:
 the game reading any file this app wrote** — the next step is the
 user's acceptance run on the real install with the game closed, and
@@ -271,10 +292,11 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at `183dc22` (the foreign-icon fix) plus this refresh — every FEATURES.md item through 33, both 2026-09-08 fixes; 534 tests green; pushed, `origin/main` in sync |
+| `main` | trunk | at `cdaee15` (the note-icon fix) plus this refresh — every FEATURES.md item through 33, both 2026-09-08 fixes and the 2026-09-09 fix; 537 tests green; pushed, `origin/main` in sync |
 | `feat/reference-cards` | FEATURES.md 32, the affix card | landed by fast-forward 2026-09-08; deletable (`git branch -d`) — the user confirms deletions |
 | `feat/equipment-tiles` | FEATURES.md 33, the gear tab as tiles with unequip-by-drag | landed by fast-forward 2026-09-08; still checked out in the agent worktree `.claude/worktrees/agent-aaed563a4259e1782` — remove the worktree, then `git branch -d`, on the user's word |
 | `fix/linked-conflicts` | the lost-component fix: linked documents share one external-change decision | landed by fast-forward 2026-09-08 (`42291a0`); deletable on the user's word |
+| `fix/note-icons` | the note-icon fix: `noteBitmap` and `fullBitmap` join the icon lookup | landed by fast-forward 2026-09-09 (`cdaee15`); deletable on the user's word |
 
 ## Next up
 
@@ -370,6 +392,25 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    Stash does not read it either).
 
 ## Most recent meaningful progress
+
+- **2026-09-09 (evening) — note-icon fix landed on `main`
+  (fast-forward to `cdaee15`).** The user hit "stored item #1
+  (`records/storyelements/questitems/cultistdirections.dbr`) has no
+  known footprint" placing Direni's Directions from the vault. The
+  record is an `ItemNote`: no `bitmap`, only `noteBitmap`, which
+  `itemnote.tpl` calls the bitmap "to show in the UI" and which is
+  the 32 × 32 inventory icon; the illusion sets
+  (`ItemTransmuterSet`) carry only `fullBitmap`. `BITMAP_VARIABLES`
+  gains both after `emptyBitmap` (a transmuter keeps its empty
+  scroll); a survey of the 10,644 item-class records shows every
+  remaining icon-less record is enemy or NPC gear, weapon FX or a
+  blacksmith formula, and GD Stash (eyes-only) and GD Item Assistant
+  read the same seven variables — all in `docs/format-references.md`.
+  `--check` on the real install: the store's lore note at 1x1, no
+  item without a footprint. 537 tests. Why: 345 holdable records
+  could not be placed from the vault, and a tab holding one refused
+  every placement. Risk: none to data (reads only); the note icon
+  is the parchment, which is what the game draws.
 
 - **2026-09-08 (evening) — foreign-icon fix landed on `main`
   (fast-forward to `183dc22`).** The user hit "item 21
@@ -573,33 +614,6 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   the purge has no confirmation beyond its checkbox; the duplicates
   rule now changes what auto-move leaves behind.
 
-- **2026-09-07 — Six more tracks landed on `main` (fast-forwards and
-  two cherry-picks to `666f592`).** Resumed after a usage-limit
-  cut-off: the search-view agent's ~2,900 uncommitted lines were
-  finished and landed (typed query model, three-way verdicts, one
-  sortable `egui_extras` table, `ui-state.json` for view state, a
-  `search_cli` example; parity with tq-univault except the
-  expansion-origin filter), then five fresh tracks from FEATURES.md
-  11–19 ran as fork agents in worktrees with the design decisions
-  fixed in the brief: startup on the remembered campaign
-  (`settings.json`) and the newest `player.gdc`; right-click moves
-  through the one `drag::Move` path with a `LastActive` grid;
-  parallel archive reads with `std::thread::scope`, assembled in
-  layer order, transcript byte-identical, NAS load ~12 s; sockets
-  (`core::socket`, allow flags from `itemrelic.tpl` /
-  `itemenchantment.tpl`, components complete at level 0, the game no
-  longer rolls a completion bonus) behind a left-click inspector,
-  CLI detach → attach byte-identical on a real save; and standing
-  orders — auto-move tabs and the additive component-storage sync —
-  under a seed-duplicate rule (`maxStackSize` from `itembase.tpl`),
-  recorded in ARCHITECTURE "Data flow" as a write the app makes on
-  its own initiative. 483 tests. Why: the user asked for the queue in
-  parallel; six agents at once with the integrator rebasing each onto
-  the moving `main` worked. Risk: nothing verified in-game still; the
-  sync is on by default and fills the store at first launch; a
-  shared-stash collision between two worktrees cost a detour and is
-  now a briefing rule.
-
 
 ## Blocked / waiting
 
@@ -624,8 +638,8 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   those are one item; (8) *resolved by the user the same hour:* the blueprint sync records knowledge (the store's `blueprints` list),
   never items; rehydration into the game is next-up 1c; (9) *narrowed 2026-09-08 evening:* the icon fix is landed and its
   branch deleted by the wrap-up; still open are whether to delete
-  the landed `feat/reference-cards`, `feat/equipment-tiles` and
-  `fix/linked-conflicts` (and the three older `docs/state-post-*`
+  the landed `feat/reference-cards`, `feat/equipment-tiles`,
+  `fix/linked-conflicts` and (2026-09-09) `fix/note-icons` (and the three older `docs/state-post-*`
   branches), and whether to remove the agent worktree that holds
   `feat/equipment-tiles`; (10) *new
   2026-09-08:* a two-hander taken off leaves the game's ghost of it in
