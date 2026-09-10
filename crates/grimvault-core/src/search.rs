@@ -769,6 +769,11 @@ impl Resolved {
     pub fn details(&self) -> &ItemDetails {
         &self.details
     }
+
+    #[must_use]
+    pub fn facets(&self) -> Facets {
+        self.facets
+    }
 }
 
 /// What a result list can be ordered by.

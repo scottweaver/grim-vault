@@ -163,6 +163,11 @@ impl MasteryTree {
     pub fn member_count(&self) -> usize {
         self.members.len()
     }
+
+    /// The tree's skill records, normalized, in path order.
+    pub fn members(&self) -> impl Iterator<Item = &str> {
+        self.members.iter().map(String::as_str)
+    }
 }
 
 /// The per-point and per-level rules of [`LEVELS_RECORD`].

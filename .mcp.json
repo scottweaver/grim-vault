@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "grimvault": {
+      "command": "target/release/grimvault-mcp"
+    }
+  }
+}

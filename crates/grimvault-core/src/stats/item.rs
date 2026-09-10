@@ -387,7 +387,11 @@ fn requirement_line(game: &GameData, requirement: Requirement, value: u32) -> St
     }
 }
 
-fn set_info(game: &GameData, set_id: &RecordId) -> Option<SetInfo> {
+/// The set a set record describes: its name, its members' names, and
+/// the bonuses each piece count adds; `None` when the record is
+/// missing or has no name the text tables know.
+#[must_use]
+pub fn set_info(game: &GameData, set_id: &RecordId) -> Option<SetInfo> {
     let set = game.record(set_id)?.ok()?;
     let name = set
         .string("setName")

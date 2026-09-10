@@ -532,6 +532,19 @@ impl GameData {
         self.databases.iter().rev().find_map(|db| db.record(id))
     }
 
+    /// The positions, topmost first, of every layer that defines the
+    /// record — in the order the layers were composed (mods, then the
+    /// shipped layers base-first), so a shell that knows what it
+    /// composed can name them. Empty when no layer has it.
+    pub fn defining_layers<'a>(&'a self, id: &'a RecordId) -> impl Iterator<Item = usize> + 'a {
+        self.databases
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(move |(_, db)| db.record(id).is_some())
+            .map(|(index, _)| index)
+    }
+
     /// Every record id across all layers, deduplicated by normalized
     /// path (an id shadowed by a later layer appears once).
     pub fn record_ids(&self) -> impl Iterator<Item = &RecordId> {

@@ -1168,6 +1168,47 @@ database and files.
   goes to the vault store under the host's origin. In-game the
   Inventor charges iron for the same removal; this app does not.
 
+## Devotion constellations and item sets — 2026-09-10
+
+Surveyed on the user's install for the MCP server's constellation and
+set tools (`grimvault-mcp::devotion`, `list_sets` / `get_set`); every
+fact below was read from the records themselves through `get_record`.
+
+- **Constellations** are the 110 records under
+  `records/ui/skills/devotion/constellations/constellationNN.dbr`
+  (no `Class`; template `database/templates/ingameui/
+  devotionconstellation.tpl`), the crossroads included as one-star
+  entries. Each names itself (`constellationDisplayTag`, e.g.
+  `tagDevotion_A01` → "Bat"; `constellationInfoTag` the flavor), the
+  affinity it needs (`affinityRequiredNameN` / `affinityRequiredN`)
+  and grants (`affinityGivenNameN` / `affinityGivenN` — Bat requires
+  1 Eldritch and grants 2 Chaos, 3 Eldritch), and its stars as
+  `devotionButtonN` → a button record `records/ui/skills/devotion/
+  tierT_NNx.dbr` (template `ingameui/skillbutton.tpl`) whose
+  `skillName` is the star's skill — `records/skills/devotion/
+  tier1_01a.dbr` for a passive star (`Skill_Passive`, `skillMaxLevel`
+  1, the bonuses as plain stat variables), `tier1_01e_skill.dbr` for
+  the proc (a normal skill class with per-level arrays; the
+  character's `devotion_level` / `experience` in block 8 grow it).
+  `devotionLinksN` is the number of the star that star hangs from
+  (Bat: 2←1, 3←2, 4←3, 5←4). Block 8 lists a taken star by its
+  skill record with `devotion_level` 1 and `level` 0; the custom-game
+  Zark's 87 devotion entries all map to a constellation this way (22
+  of them, every one complete). A proc without a `skillDisplayName`
+  of its own (`tier3_18f_skill.dbr`, "Rattosh - Mark of Rattosh" by
+  file description) carries the name on the buff it applies
+  (`buffSkillName`).
+- **Item sets** are the 209 records under `records/items/lootsets/
+  itemset_*.dbr` (no `Class`; template `database/templates/
+  itemset.tpl`): `setName` (tag), `setDescription`, `setMembers`
+  (the member item records), `itemLevel`, and the bonuses as
+  per-piece-count arrays of ordinary stat variables (index *n* − 1 is
+  the bonus at *n* pieces; `augmentSkillNameN` / `augmentSkillLevelN`
+  the "+N to skill" lines), which `stats::item::set_info` already
+  renders piece by piece. An item names its set by `itemSetName`.
+  The `SetPiece` / `SetPiecePart` / `SetPiecePool` classes are
+  monster equipment loadouts, not item sets.
+
 ## Rust prior art (2026-09-03)
 
 - crates.io: nothing for Grim Dawn or Titan Quest ARZ/ARC/save.

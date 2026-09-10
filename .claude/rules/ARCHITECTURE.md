@@ -177,23 +177,35 @@ Q&A). Items marked TBD are open questions, not decisions.
   (2026-09-03)
 - This repo is a Cargo workspace with `crates/univault-engine` (the
   vendored shared engine above), `crates/grimvault-core` (GD file
-  formats, store and vault logic, in-memory model — GUI-agnostic)
-  and `crates/grimvault-gui` (egui/eframe front-end).
-  `crates/grimvault-mcp` is added if and when the MCP surface is
-  built. (2026-09-03)
-- Dependencies flow shell → core → engine (`grimvault-gui` →
-  `grimvault-core` → `univault-engine`; `grimvault-mcp` →
-  `grimvault-core`; shells additionally use `univault-io` and
-  `univault-ui`), never the reverse, never shell → shell, and
-  `grimvault-core` never depends on `univault-io` or `univault-ui`.
-  Falsifiable check: `grimvault-core` compiles headless with no egui,
-  eframe, winit, rmcp, or tokio anywhere in its dependency tree, and
-  no `std::fs` use outside tests. (2026-09-03)
+  formats, store and vault logic, in-memory model — GUI-agnostic),
+  `crates/grimvault-io` (Grim Dawn's shell-side file discovery and
+  loading: the validated game and save directories and the files
+  under them, `settings.json`, the parallel layer reads, mod listing,
+  character-file discovery, archive-entry reads — one copy of what
+  every shell opens, over `univault-io`; added 2026-09-10 when the
+  MCP server became the second shell, moved out of the GUI), and the
+  shells `crates/grimvault-gui` (egui/eframe front-end) and
+  `crates/grimvault-mcp` (the read-only MCP server, built
+  2026-09-10). (2026-09-03, extended 2026-09-10)
+- Dependencies flow shell → io → core → engine (`grimvault-gui` and
+  `grimvault-mcp` → `grimvault-io` → `grimvault-core` →
+  `univault-engine`; `grimvault-io` also uses `univault-io`; the GUI
+  additionally uses `univault-ui`), never the reverse, never shell →
+  shell, and `grimvault-core` never depends on `univault-io`,
+  `grimvault-io`, or `univault-ui` (the core's examples dev-depend on
+  `grimvault-io` to load an install — a dev-dependency cycle Cargo
+  allows, and the examples are shells). Falsifiable checks:
+  `grimvault-core` compiles headless with no egui, eframe, winit,
+  rmcp, or tokio anywhere in its dependency tree and no `std::fs` use
+  outside tests; `grimvault-io` compiles with no egui, eframe, winit,
+  rmcp, or tokio in its tree and depends on no shell. (2026-09-03,
+  io crate added 2026-09-10)
 - The GUI framework is egui/eframe; the core/gui split exists
   precisely so this remains swappable without touching core.
   (2026-09-03)
-- Async is confined to shell crates; core and the engine crate stay
-  sync and pure. (2026-09-03)
+- Async is confined to shell crates; core, the engine crate, and
+  `grimvault-io` (threads for the parallel reads, no executor) stay
+  sync. (2026-09-03, io added 2026-09-10)
 
 ## Data flow
 
@@ -421,7 +433,27 @@ contract recorded here binds from the first commit.
   listening sockets, ever. Exposes characters, the stash, the store
   and its buckets, and the layered record database; never writes any
   file. Adding write tools or a network transport is structural.
-  (2026-09-03)
+  (2026-09-03) **Built 2026-09-10** (user request, design dialog:
+  the tq-univault MCP's shape with Grim Dawn's build vocabulary) on
+  `rmcp` 3.1 with a current-thread tokio runtime — the only async and
+  the only tokio in the workspace, in this one shell. Paths come from
+  the desktop shell's `settings.json` under the config directory
+  (`GRIMVAULT_CONFIG_DIR` overrides it) and nowhere else. The record
+  database and text (never the item bitmaps) load once per process;
+  every save, stash, and store read happens on the tool call,
+  through `univault-io`'s verified reads, so nothing held is
+  authoritative. Twenty-two tools (`docs/mcp.md`): the overview,
+  characters and their builds (skills grouped by the mastery trees
+  `respec::RespecRules` reads, devotions grouped by constellation),
+  stashes and component storage per campaign, the store by bucket,
+  the typed item search (`search::Query`) over every possession with
+  locations, item tooltips, masteries and skills rendered at levels,
+  constellations, item sets, the affix reference, blueprints known /
+  learned / unlearned, and the raw record database naming the layers
+  that define each record. Falsifiable: no `std::fs::write`, no
+  `univault_io::write_*`, and no `backup_first_write` anywhere in
+  `crates/grimvault-mcp`; the binary opens stdin and stdout and no
+  socket.
 - **Mod forge**: serializes this app's own record edits into new
   bundles under the game's `mods/` directory, optionally merged onto
   a base mod. Shipped databases and third-party mod files are never
@@ -453,8 +485,10 @@ cleanup:
   `formulas.gst` / `transmutes.gst` and the database gate on what
   they admit
 - `crates/grimvault-gui/src/main.rs` — entry point / framework choice
-- `crates/grimvault-mcp/src/*.rs` (when it exists) — read-only and
-  stdio-only
+- `crates/grimvault-io/src/*.rs` — the shell-side IO shared by every
+  shell: no shell dependency, no async, no egui
+- `crates/grimvault-mcp/src/*.rs` — read-only and stdio-only; paths
+  from `settings.json` only
 - `docs/format-references.md` — provenance and license records
 - `docs/engine-extraction.md` — the shared-crate boundary and phase
   plan
