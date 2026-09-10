@@ -5,18 +5,44 @@ first to learn where the project stands right now. It answers "where
 are we" — never "how does this work" (that's ARCHITECTURE.md and the
 code) and never "how should we work" (that's METHODOLOGIES.md).
 
-Last updated: 2026-09-09 evening (after the note-icon fix landed on
-`main` at `cdaee15` — nothing left unlanded; all pushed; 537 tests)
+Last updated: 2026-09-10 afternoon (after the MCP server and the
+`grimvault-io` extraction landed on `main` at `d611b6d` — nothing
+left unlanded; all pushed; 544 tests)
 
 ## Session handoff
 <!-- transient; owned by the checkpoint skill -->
-**Resume here:** `main` at `cdaee15` plus this refresh (pushed,
+**Resume here:** `main` at `d611b6d` plus this refresh (pushed,
 `origin/main` in sync) holds everything landed — every FEATURES.md
-item through 33 (there is no item 17), the lost-component fix, the
-foreign-icon fix and the note-icon fix below — 537 tests, clippy
-pedantic clean, fmt clean, headless `--check` clean from the release
-build on the real install with a scratch copy of the saves and store.
-**Landed 2026-09-09 evening (`cdaee15`, `fix/note-icons`, branch
+item through 34 (there is no item 17), the three fixes of 2026-09-08
+and 09-09, and — landed 2026-09-10 (`feat/mcp-server`, two commits,
+branch kept for the user to delete) — **the read-only MCP server**
+`crates/grimvault-mcp` (FEATURES.md 34, asked in chat: "an MCP like
+tq-univault's for general game information with a focus on builds I
+can accommodate with what is in the vault") and, under it, the new
+`crates/grimvault-io` holding the shell-side IO the GUI used to keep
+to itself (directories, settings.json, the parallel layer reads, mod
+listing, character discovery, archive-entry reads; the core examples
+use it too). 544 tests, clippy pedantic clean, fmt clean; `--check`
+from the release GUI on the real install reads the same world as
+before through the new crate. **The MCP:** 22 tools over stdio
+(`docs/mcp.md`), paths from `settings.json`, every tool exercised on
+the real install by a throwaway Python JSON-RPC driver — but **never
+yet called from Claude Code itself**: `.mcp.json` in the repo root
+registers `target/release/grimvault-mcp` (built 2026-09-10 13:30),
+so the next `claude` session in this directory should see the
+`grimvault` server; call `overview` first. The user's design
+decisions (dialog 2026-09-10): a `grimvault-io` crate rather than a
+private copy; typed search, masteries, devotions, affixes / sets /
+blueprints all in v1; the build grouped by mastery (and, as built,
+devotions grouped by constellation). Devotion and item-set record
+shapes are in `docs/format-references.md`. Known limits: a
+`get_character` with items is large (every sack and stash item);
+`search_items` over everything takes ~4 s (it renders every item's
+tooltip); a skill's rendered lines carry the `unrendered` variables
+the renderer does not know (`skillChargeDuration`); the constellation
+list is the game's folder (`records/ui/skills/devotion/
+constellations/`), so a mod's constellations elsewhere would be
+missed. **Landed 2026-09-09 evening (`cdaee15`, `fix/note-icons`, branch
 kept for the user to delete):** the user hit "stored item #1
 (`records/storyelements/questitems/cultistdirections.dbr`) has no
 known footprint" placing Direni's Directions from the vault. An
@@ -29,8 +55,9 @@ note "Excerpt from the Annals of Arkovia" is another). Both
 variables added after `emptyBitmap`, survey and the two references'
 lists recorded in `docs/format-references.md`; `--check` on the real
 install shows the lore note at 1x1 and no item without a footprint.
-`target/release/grimvault-gui` is built from `cdaee15` (2026-09-09
-18:56); the user has to relaunch it. **Landed 2026-09-08
+`target/release/grimvault-gui` is built from `d611b6d` (2026-09-10,
+this session's rebuild for the `--check`); the user has to relaunch
+it — it behaves as before, the IO merely moved crates. **Landed 2026-09-08
 evening (`183dc22`, `fix/icons-outside-items-arc`, branch deleted by the wrap-up):** the user hit
 "item 21 (records/storyelements/signs/signh.dbr) has no known
 footprint" a second time, copying a relic from the vault into
@@ -207,9 +234,14 @@ four standing orders.
   unfolded records tell them apart); an `ItemTransmuter` (single
   illusion) is drawn with its `emptyBitmap` scroll where GD Stash
   shows the item's own `fullBitmap` art (same 2x2 size — a lookup
-  order swap if the user prefers the art); a record dump / icon
-  survey CLI would have paid for itself three times now (Lokarr's
-  set twice, the notes) — none is checked in.
+  order swap if the user prefers the art); the record dump / survey
+  CLI that would have paid for itself three times is now the MCP's
+  `search_records` / `get_record` / `list_record_classes` (a
+  headless survey is one stdio JSON-RPC script away); the GUI's
+  `default_campaign` and `grimvault_io::SaveDir::
+  campaign_written_last` state the same newest-stash rule twice (the
+  GUI's over injected stamps for its tests) — fold when a third
+  caller appears.
 - **Unverified in the window:** drag-and-drop, autosave, the copy
   modifier, the iron-bits field, the Reload/Keep-mine modal, the
   realm-labelled picker, the campaign switch, right-click moves, the
@@ -241,10 +273,16 @@ separate-repo extraction of the shared engine is deferred,
 ARCHITECTURE.md "Crate layering"). On `main` (landed by local
 fast-forwards on 2026-09-03, 2026-09-06 and 2026-09-07; pushed to
 `origin/main` since 2026-09-07 evening)
-**M1–M5 are done and the app runs**: a five-crate workspace —
+**M1–M5 are done and the app runs**: a seven-crate workspace —
 `univault-engine` (tq-univault's parsers vendored, GD LZ4 dialect),
 `univault-io` (safe-io with post-write re-read), `univault-ui`
-(art-free egui kit, now with the chevron scroll strip), `grimvault-core`
+(art-free egui kit, now with the chevron scroll strip),
+`grimvault-io` (since 2026-09-10: the validated directories, settings
+file, parallel layer reads, mod listing and character discovery every
+shell shares), `grimvault-mcp` (since 2026-09-10: the read-only MCP
+server over stdio — characters and builds, stashes, the store, the
+typed search, tooltips, masteries and skills, constellations, sets,
+affixes, blueprints, the raw database), `grimvault-core`
 (rolling-XOR codec, every `player.gdc` block typed, `*.gst`, layered
 game-data facade, `vault-store.json`, buckets, stash *and* sack
 transfer ops, the `Loaded` lossless gate, the component storage
@@ -279,20 +317,22 @@ taken off by drag, right-click or double-click; and — landed
 bitmap path names, so Lokarr's set, the `gdx2` potion formulas and
 Iron Bits have footprints and a tab holding one accepts placements;
 and — landed 2026-09-09 — notes and illusion sets have icons and
-footprints through `noteBitmap` and `fullBitmap`)
-— 537 tests, clippy pedantic clean. Verified on
+footprints through `noteBitmap` and `fullBitmap`; and — landed
+2026-09-10 — the MCP server and the `grimvault-io` crate)
+— 544 tests, clippy pedantic clean. Verified on
 scratch copies of the user's install and saves. **Not yet verified:
 the game reading any file this app wrote** — the next step is the
 user's acceptance run on the real install with the game closed, and
 now the Linux build on Bazzite sharing the NAS vault. The user's
-`FEATURES.md` is landed through item 33. grim-vault is the Grim Dawn
+`FEATURES.md` is landed through item 34. grim-vault is the Grim Dawn
 sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
 
 ## Branches in flight
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `main` | trunk | at `cdaee15` (the note-icon fix) plus this refresh — every FEATURES.md item through 33, both 2026-09-08 fixes and the 2026-09-09 fix; 537 tests green; pushed, `origin/main` in sync |
+| `main` | trunk | at `d611b6d` (the MCP server) plus this refresh — every FEATURES.md item through 34, both 2026-09-08 fixes and the 2026-09-09 fix; 544 tests green; pushed, `origin/main` in sync |
+| `feat/mcp-server` | FEATURES.md 34, the MCP server, and the `grimvault-io` extraction beneath it | landed by fast-forward 2026-09-10 (`1f0ded3`, `d611b6d`); deletable on the user's word |
 | `feat/reference-cards` | FEATURES.md 32, the affix card | landed by fast-forward 2026-09-08; deletable (`git branch -d`) — the user confirms deletions |
 | `feat/equipment-tiles` | FEATURES.md 33, the gear tab as tiles with unequip-by-drag | landed by fast-forward 2026-09-08; still checked out in the agent worktree `.claude/worktrees/agent-aaed563a4259e1782` — remove the worktree, then `git branch -d`, on the user's word |
 | `fix/linked-conflicts` | the lost-component fix: linked documents share one external-change decision | landed by fast-forward 2026-09-08 (`42291a0`); deletable on the user's word |
@@ -345,6 +385,16 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    (`Formulas::add` with `FormulaRead::Unread`, database-vouched).
    Both need a UI on the list (a "Blueprints known" view in the store
    pane is the natural home) — design dialog first.
+1e. **Use the MCP from Claude Code** (never done yet): start `claude`
+   in the repo (`.mcp.json` names `target/release/grimvault-mcp`), or
+   register the binary by absolute path with `claude mcp add`
+   (`docs/mcp.md`), call `overview`, then ask for a build around the
+   vault — `search_items` with stat criteria, `get_character`,
+   `get_constellation`. What the model finds awkward in the tool
+   shapes is the next round of tool work. Candidates already seen:
+   a `compare_items` tool, a per-mastery "+skills gear I own" query,
+   pagination on `get_character` items, and the two-hander /
+   off-hand rule for equipment suggestions.
 1d. **More reference cards** on `grimvault-core::reference` and
    `gui/src/reference.rs` (a `ReferenceView` field and a menu line per
    card): components and augments by the slots they fit, item sets,
@@ -392,6 +442,36 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    Stash does not read it either).
 
 ## Most recent meaningful progress
+
+- **2026-09-10 — FEATURES.md 34, the MCP server, landed on `main`
+  (fast-forward to `d611b6d`; `feat/mcp-server`, two commits).** The
+  user asked in chat for tq-univault's MCP for Grim Dawn, "with a
+  focus on creating and refining builds, especially builds I could
+  accommodate with what items had been saved to the vault"; the
+  design dialog settled a shared `grimvault-io` crate over a private
+  copy, the full v1 scope, and a build grouped by mastery. First
+  commit: `crates/grimvault-io` — `GameDir` / `SaveDir` and the files
+  they name, settings load/save, the parallel layer reads (now taking
+  which archives to read, so a headless shell skips `Items.arc`), mod
+  listing, archive-entry reads, character discovery — moved out of
+  the GUI with their tests; the GUI re-exports, the core examples use
+  it. Second: `crates/grimvault-mcp` on `rmcp` 3.1 — 22 tools over
+  stdio, paths from `settings.json`, database and text loaded once
+  per process (~2 s), every save / stash / store read on the call;
+  builds grouped by the `respec` mastery trees and by constellation
+  (the constellation records surveyed: `records/ui/skills/devotion/
+  constellations/*.dbr` → buttons → star skills; item sets:
+  `records/items/lootsets/itemset_*.dbr`, template `itemset.tpl` —
+  both in `docs/format-references.md`); the typed `search::Query`
+  over every possession; skills rendered at levels by the item
+  renderer (`Scale::NONE` — `percent(100)` doubles, caught on Bat's
+  star). Core: `Resolved::facets`, `GameData::defining_layers`,
+  `MasteryTree::members`, `set_info` public. 544 tests. Why: the
+  vault is only useful for builds if a model can read it and the
+  game's rules together. Risk: none to data (the server writes
+  nothing; falsifiable by grep); never yet driven from Claude Code
+  itself, only by a stdio script; `search_items` over everything
+  renders every tooltip (~4 s).
 
 - **2026-09-09 (evening) — note-icon fix landed on `main`
   (fast-forward to `cdaee15`).** The user hit "stored item #1
@@ -585,35 +665,6 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   standing orders into the newly opened store, so switching to an
   empty file auto-moves nominated tabs into it at once.
 
-- **2026-09-07 (evening) — FEATURES.md 20–24 landed on `main` (three
-  fast-forwards to `f6bd3d0`).** The user announced the five items;
-  they were split into three independent tracks and built by fork
-  agents in worktrees with the decisions fixed in the brief, each
-  rebased onto the moving `main` by its own agent: (C) an art-free
-  `univault-ui::components::scroll_strip` — a hidden-bar horizontal
-  scroll area with pointer-position chevrons shared with the vendored
-  `tabbed_panel` through a new `chevron` module, so a drag scrolls it
-  — replacing both wrapping strips, with Components and Crafting
-  materials first; (B) `purgeDuplicates` in `settings.json` as a
-  second standing order under `StandingOrder { AutoMove,
-  PurgeDuplicates }`, `bulk::purge_duplicates` deleting only what the
-  store already holds by record and seed, run after every auto-move
-  at the same moments and gate, `--check` printing its plan, recorded
-  in ARCHITECTURE "Data flow" as the one order that destroys items;
-  (A) `bulkDuplicates: skip | allow` (default skip) governing every
-  bulk move or copy into the store including auto-move, `TabPlan`
-  generalized over any item iterator, `copy_tab` / `copy_player_tab`
-  / `vault_sack` / `copy_sack` / `clear_tab`, Move all / Copy all on
-  every tab and sack, Delete all… on transfer and own-stash tabs
-  behind a modal, the store's "Skip duplicates in bulk moves" box,
-  `BulkOp::Transfer(Mode) | Clear` so a clear can never reach the
-  copy path. 496 tests. Why: the user asked for the queue to keep
-  landing on the fly. Risk: two more writes the app makes that
-  destroy items (purge on the app's initiative, delete-all on a
-  click) rest on the once-per-load backup and are unverified in-game;
-  the purge has no confirmation beyond its checkbox; the duplicates
-  rule now changes what auto-move leaves behind.
-
 
 ## Blocked / waiting
 
@@ -639,7 +690,8 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
   never items; rehydration into the game is next-up 1c; (9) *narrowed 2026-09-08 evening:* the icon fix is landed and its
   branch deleted by the wrap-up; still open are whether to delete
   the landed `feat/reference-cards`, `feat/equipment-tiles`,
-  `fix/linked-conflicts` and (2026-09-09) `fix/note-icons` (and the three older `docs/state-post-*`
+  `fix/linked-conflicts`, (2026-09-09) `fix/note-icons` and
+  (2026-09-10) `feat/mcp-server` (and the `docs/state-post-*`
   branches), and whether to remove the agent worktree that holds
   `feat/equipment-tiles`; (10) *new
   2026-09-08:* a two-hander taken off leaves the game's ghost of it in
