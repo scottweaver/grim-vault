@@ -26,11 +26,16 @@ use it too). 544 tests, clippy pedantic clean, fmt clean; `--check`
 from the release GUI on the real install reads the same world as
 before through the new crate. **The MCP:** 22 tools over stdio
 (`docs/mcp.md`), paths from `settings.json`, every tool exercised on
-the real install by a throwaway Python JSON-RPC driver — but **never
-yet called from Claude Code itself**: `.mcp.json` in the repo root
-registers `target/release/grimvault-mcp` (built 2026-09-10 13:30),
-so the next `claude` session in this directory should see the
-`grimvault` server; call `overview` first. The user's design
+the real install by a throwaway Python JSON-RPC driver, and
+**installed 2026-09-10 at the user's request**: `cargo install --path
+crates/grimvault-mcp` put the binary at `~/.cargo/bin/grimvault-mcp`
+and `claude mcp add --scope user grimvault` registered it for every
+project (`claude mcp list` shows it Connected); the repo carries no
+`.mcp.json` (a same-name project entry shadows the user one). It has
+**never yet been called from a Claude Code conversation**: the next
+`claude` session anywhere should see the `grimvault` server; call
+`overview` first. After a change to the server, rerun the `cargo
+install`. The user's design
 decisions (dialog 2026-09-10): a `grimvault-io` crate rather than a
 private copy; typed search, masteries, devotions, affixes / sets /
 blueprints all in v1; the build grouped by mastery (and, as built,
@@ -385,11 +390,10 @@ sibling of tq-univault; PROJECT.md is bound with `tracker: none`.
    (`Formulas::add` with `FormulaRead::Unread`, database-vouched).
    Both need a UI on the list (a "Blueprints known" view in the store
    pane is the natural home) — design dialog first.
-1e. **Use the MCP from Claude Code** (never done yet): start `claude`
-   in the repo (`.mcp.json` names `target/release/grimvault-mcp`), or
-   register the binary by absolute path with `claude mcp add`
-   (`docs/mcp.md`), call `overview`, then ask for a build around the
-   vault — `search_items` with stat criteria, `get_character`,
+1e. **Use the MCP from Claude Code** (never done yet): it is
+   installed at user scope (`~/.cargo/bin/grimvault-mcp`,
+   `docs/mcp.md`); in any `claude` session call `overview`, then ask
+   for a build around the vault — `search_items` with stat criteria, `get_character`,
    `get_constellation`. What the model finds awkward in the tool
    shapes is the next round of tool work. Candidates already seen:
    a `compare_items` tool, a per-mastery "+skills gear I own" query,

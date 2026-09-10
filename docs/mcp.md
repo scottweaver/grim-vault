@@ -11,23 +11,24 @@ The contract is recorded in `.claude/rules/ARCHITECTURE.md` ("Planned
 surfaces"): JSON-RPC over **stdio only**, spawned as a child process
 by the client; no listening sockets; **nothing is ever written**.
 
-## Building and registering
+## Installing and registering
+
+Install the binary into Cargo's standard location, `~/.cargo/bin`,
+and register it with Claude Code at user scope so it is available in
+every project:
 
 ```sh
-cargo build --release -p grimvault-mcp
+cargo install --path crates/grimvault-mcp --locked
+claude mcp add --scope user grimvault -- "$HOME/.cargo/bin/grimvault-mcp"
+claude mcp list   # grimvault: … - ✔ Connected
 ```
 
-The repository's `.mcp.json` points Claude Code at
-`target/release/grimvault-mcp` whenever it is started in this
-directory. To use the server from anywhere, register the binary by
-absolute path, for example:
-
-```sh
-claude mcp add --scope user grimvault -- /Users/you/Projects/grim-vault/target/release/grimvault-mcp
-```
-
-Any other MCP client (Claude Desktop, an IDE) takes the same command
-and no arguments.
+Rerun the `cargo install` after pulling changes to the server; the
+registration keeps pointing at the same path. Any other MCP client
+(Claude Desktop, an IDE) takes the same command and no arguments. The
+repository deliberately carries no `.mcp.json`: a project-scope entry
+with the same name would shadow the user-scope one and prompt for
+approval in this directory.
 
 ## Where it reads from
 
