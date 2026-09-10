@@ -92,6 +92,20 @@ the destructive steps** if acting unprompted.
    CI gates them like everything else, and the diff is pure
    documentation carrying no runtime risk. Anything touching source,
    tests, workflows, or scripts goes through normal review.
+6. **Reinstall the MCP server when the merge changed it** (user
+   rule, 2026-09-10). The installed copy at `~/.cargo/bin/grimvault-mcp`
+   is what Claude Code runs in every session; it does not follow
+   `main` by itself. When anything the binary is built from changed —
+   `crates/grimvault-mcp`, `crates/grimvault-io`,
+   `crates/grimvault-core`, `crates/univault-engine`,
+   `crates/univault-io`, or `Cargo.lock` (`git diff --name-only
+   <before>..main -- <those paths>` is non-empty) — run
+   `cargo install --path crates/grimvault-mcp --locked` and confirm
+   `claude mcp list` shows `grimvault … ✔ Connected`. When nothing
+   under those paths changed, skip it and say so in the outcomes
+   table. A user-scope registration (`claude mcp add --scope user`)
+   exists on this machine; a new machine needs it once
+   (`docs/mcp.md`).
 
 A PR closed *without* merging has its own cleanup: ticket → Cancelled
 (or back to Backlog if work will resume), branch deleted if

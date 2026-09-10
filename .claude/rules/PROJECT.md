@@ -45,7 +45,7 @@ wrapup:
   docs_pr_branch_prefix: docs/state-post-
   docs_pr_commit_prefix: "docs(state):"
   auto_merge_carve_out_path: .claude/rules/
-  state_refresh_authority: null
+  state_refresh_authority: .claude/rules/METHODOLOGIES.md
   audit_doc: null
 ---
 
@@ -64,14 +64,17 @@ repo, remote, or state file existed.
   with Issues enabled, rerun `/bootstrap-project` (edit mode) and switch to
   `tracker: github` — the commented block above is pre-filled with the
   expected `scottweaver/grim-vault` values.
-- **State file**: `.claude/rules/STATE.md` is bound but does not exist yet;
-  it's expected to be created by `/bootstrap-agent-rules` (which also installs
-  the Rust idiom rules, METHODOLOGIES.md, and ARCHITECTURE.md). Until it
-  exists, stand-up falls back to prompting inline for T.
-- **Wrap-up**: bound with the standard defaults. `state_refresh_authority` is
-  `null` only because METHODOLOGIES.md doesn't exist yet — once
-  `/bootstrap-agent-rules` installs it, rebind to
-  `.claude/rules/METHODOLOGIES.md` via edit mode. The PR-based steps assume a
-  GitHub-hosted remote, which doesn't exist yet either — wrap-up is inert
-  until the repo is initialised and pushed.
+- **State file**: `.claude/rules/STATE.md`, the rehydration document every
+  session reads first (created by `/bootstrap-agent-rules` on 2026-09-03).
+- **Wrap-up**: bound with the standard defaults;
+  `.claude/rules/METHODOLOGIES.md` ("After a PR merges") is the authority
+  for the routine, and its step 6 is project-specific: **reinstall the MCP
+  server** (`cargo install --path crates/grimvault-mcp --locked`) whenever
+  the landed change touched anything the binary is built from — the copy
+  Claude Code runs lives at `~/.cargo/bin/grimvault-mcp` and does not follow
+  `main` by itself (user rule, 2026-09-10). Until the tracker is rebound to
+  `github` and the user opts into PRs, the PR steps run as their local
+  equivalents: feature branches fast-forwarded into `main`, the docs refresh
+  on a `docs/state-post-*` branch fast-forwarded the same way, then
+  `git push`.
 - No `agent_sync` block — the project has no rules-sync script.

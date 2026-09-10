@@ -269,7 +269,12 @@ four standing orders.
   into PRs, `/checkpoint` and `/wrap-up` keep running their local
   equivalents (a docs commit on a `docs/state-post-*` branch
   fast-forwarded into `main`, feature branches fast-forwarded instead
-  of merged) followed by `git push`.
+  of merged) followed by `git push`. **Since 2026-09-10 the routine
+  ends by reinstalling the MCP server** (`cargo install --path
+  crates/grimvault-mcp --locked`) whenever the landed change touched
+  what the binary is built from — METHODOLOGIES.md step 6, the
+  user's rule; PROJECT.md now binds METHODOLOGIES.md as the
+  wrap-up's authority.
 
 ## Active workstream
 
