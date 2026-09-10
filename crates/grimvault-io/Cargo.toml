@@ -1,0 +1,18 @@
+[package]
+name = "grimvault-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Grim Vault's shell-side file discovery and loading, shared by the desktop shell, the MCP server, and the command-line examples"
+
+[lints]
+workspace = true
+
+[dependencies]
+grimvault-core = { path = "../grimvault-core" }
+univault-engine = { path = "../univault-engine" }
+univault-io = { path = "../univault-io" }
+thiserror = "2"
+
+[dev-dependencies]
+univault-engine = { path = "../univault-engine", features = ["test-util"] }

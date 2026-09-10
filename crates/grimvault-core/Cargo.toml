@@ -19,4 +19,5 @@ thiserror = "2"
 # and may touch the filesystem, so the io crate is a dev-dependency only.
 [dev-dependencies]
 univault-io = { path = "../univault-io" }
+grimvault-io = { path = "../grimvault-io" }
 univault-engine = { path = "../univault-engine", features = ["test-util"] }

@@ -20,6 +20,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 grimvault-core = { path = "../grimvault-core" }
+grimvault-io = { path = "../grimvault-io" }
 univault-engine = { path = "../univault-engine" }
 univault-io = { path = "../univault-io" }
 univault-ui = { path = "../univault-ui", features = ["serde"] }

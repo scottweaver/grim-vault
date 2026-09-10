@@ -4,6 +4,7 @@ members = [
     "crates/univault-engine",
     "crates/grimvault-core",
     "crates/grimvault-gui",
+    "crates/grimvault-io",
     "crates/univault-io",
     "crates/univault-ui",
 ]

@@ -937,32 +937,9 @@ impl CharacterEntry {
 /// nothing.
 #[must_use]
 pub fn open_characters(save_dir: &SaveDir) -> Vec<CharacterEntry> {
-    Realm::ALL
+    grimvault_io::characters::discover(save_dir)
         .into_iter()
-        .flat_map(|realm| {
-            character_files(&save_dir.characters_dir(realm))
-                .into_iter()
-                .map(move |path| CharacterEntry::open(realm, path))
-        })
-        .collect()
-}
-
-/// The `player.gdc` of every character folder under `dir`, in folder
-/// order.
-fn character_files(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut folders: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
-    folders.sort();
-    folders
-        .into_iter()
-        .map(|folder| folder.join("player.gdc"))
-        .filter(|path| path.is_file())
+        .map(|(realm, path)| CharacterEntry::open(realm, path))
         .collect()
 }
 
